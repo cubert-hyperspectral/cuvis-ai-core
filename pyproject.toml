@@ -14,7 +14,7 @@ license = {text = "Proprietary"}
 requires-python = ">=3.10"
 
 dependencies = [
-    "cuvis",
+    "cuvis==3.4.5",
     # Core framework dependencies
     "torch>=2.0.0",
     "torchvision>=0.15.0",
