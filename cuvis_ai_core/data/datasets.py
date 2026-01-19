@@ -242,19 +242,19 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             raise RuntimeError(
                 "Train dataset is not initialized. Call setup('fit') first."
             )
-        return DataLoader(self.train_ds, shuffle=True, batch_size=self.batch_size)
+        return DataLoader(self.train_ds, shuffle=True, batch_size=self.batch_size, num_workers=0)
 
     def val_dataloader(self) -> DataLoader:
         if self.val_ds is None:
             raise RuntimeError("Validation dataset is not initialized.")
-        return DataLoader(self.val_ds, shuffle=False, batch_size=self.batch_size)
+        return DataLoader(self.val_ds, shuffle=False, batch_size=self.batch_size, num_workers=0)
 
     def test_dataloader(self) -> DataLoader:
         if self.test_ds is None:
             raise RuntimeError(
                 "Test dataset is not initialized. Call setup('test') first."
             )
-        return DataLoader(self.test_ds, shuffle=False, batch_size=self.batch_size)
+        return DataLoader(self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=0)
 
 def create_mask(
     annotations: Iterable[Annotation],

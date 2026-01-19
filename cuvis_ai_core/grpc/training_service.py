@@ -367,7 +367,7 @@ class TrainingService:
     ) -> SingleCu3sDataModule:
         """Create SingleCu3sDataModule from parsed DataConfig."""
         try:
-            from cuvis_ai.data.datasets import SingleCu3sDataModule
+            from cuvis_ai_core.data.datasets import SingleCu3sDataModule
 
         except ImportError as exc:  # pragma: no cover - environment dependency
             raise ValueError(
