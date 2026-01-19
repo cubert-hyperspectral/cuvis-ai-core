@@ -14,7 +14,7 @@ license = {text = "Proprietary"}
 requires-python = ">=3.10"
 
 dependencies = [
-    "cuvis==3.4.5",
+    "cuvis",
     # Core framework dependencies
     "torch>=2.0.0",
     "torchvision>=0.15.0",
@@ -40,6 +40,8 @@ dependencies = [
     "dataclass-wizard",
     "dotenv>=0.9.9",
     "ruff>=0.14.11",
+    "scikit-image>=0.25.2",
+    "pycocotools>=2.0.11",
 ]
 
 [project.optional-dependencies]
