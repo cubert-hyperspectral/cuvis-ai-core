@@ -157,7 +157,7 @@ class NodeRegistry:
 
     @classmethod
     def auto_register_package(
-        cls, package_name: str, base_class_path: str = "cuvis_ai.node.node.Node"
+        cls, package_name: str, base_class_path: str = "cuvis_ai_core.node.node.Node"
     ) -> int:
         """
         Auto-register all Node classes from a package.
@@ -205,12 +205,18 @@ class NodeRegistry:
                 module = importlib.import_module(module_name)
 
                 # Find all Node subclasses
-                for _, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, Node) and obj is not Node:
-                        # Only register if defined in this module
-                        if obj.__module__ == module_name:
-                            cls.register(obj)
-                            registered_count += 1
+                for name, obj in inspect.getmembers(module, inspect.isclass):
+                    try:
+                        # Check if this is a Node subclass
+                        if issubclass(obj, Node) and obj is not Node:
+                            # Only register if defined in this module
+                            if obj.__module__ == module_name:
+                                cls.register(obj)
+                                registered_count += 1
+                    except TypeError:
+                        # issubclass can fail for some special class-like objects
+                        # Skip these and continue
+                        continue
 
             except Exception as e:
                 # Log warning but continue
