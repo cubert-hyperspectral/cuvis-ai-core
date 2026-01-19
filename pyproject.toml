@@ -24,7 +24,7 @@ dependencies = [
     "omegaconf>=2.3.0",
     # gRPC and communication
     "grpcio>=1.56.0",
-    "protobuf>=4.23.0",
+    "protobuf>=6.33.4",
     "grpcio-health-checking>=1.56.0",
     # Utilities and logging
     "loguru>=0.7.0",

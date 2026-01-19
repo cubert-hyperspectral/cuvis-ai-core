@@ -198,3 +198,4 @@ experiments/
 *.pt
 /.venv-adaclip-test/
 .history/
+configs/

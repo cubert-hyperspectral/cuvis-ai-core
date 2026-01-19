@@ -15,7 +15,12 @@ from networkx.classes.reportviews import NodeView
 from torch import nn
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.ports import InputPort, OutputPort, PortCompatibilityError
+from cuvis_ai_core.pipeline.ports import (
+    InputPort,
+    OutputPort,
+    PortCompatibilityError,
+    PortSpec,
+)
 from cuvis_ai_core.utils.types import Context, ExecutionStage
 
 if TYPE_CHECKING:
