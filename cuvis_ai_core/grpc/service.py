@@ -9,6 +9,7 @@ from .discovery_service import DiscoveryService
 from .inference_service import InferenceService
 from .introspection_service import IntrospectionService
 from .pipeline_service import PipelineService
+from .plugin_service import PluginService
 from .session_manager import SessionManager
 from .session_service import SessionService
 from .training_service import TrainingService
@@ -31,6 +32,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
         self.trainrun_service = TrainRunService(self.session_manager)
         self.discovery_service = DiscoveryService()
         self.introspection_service = IntrospectionService(self.session_manager)
+        self.plugin_service = PluginService(self.session_manager)
 
     # ------------------------------------------------------------------
     # Session Management
@@ -143,6 +145,30 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
         self, request, context
     ) -> cuvis_ai_pb2.GetTrainingCapabilitiesResponse:
         return self.training_service.get_training_capabilities(request, context)
+
+    # ------------------------------------------------------------------
+    # Plugin Management
+    # ------------------------------------------------------------------
+    def LoadPlugins(self, request, context) -> cuvis_ai_pb2.LoadPluginsResponse:
+        return self.plugin_service.load_plugins(request, context)
+
+    def ListLoadedPlugins(
+        self, request, context
+    ) -> cuvis_ai_pb2.ListLoadedPluginsResponse:
+        return self.plugin_service.list_loaded_plugins(request, context)
+
+    def GetPluginInfo(self, request, context) -> cuvis_ai_pb2.GetPluginInfoResponse:
+        return self.plugin_service.get_plugin_info(request, context)
+
+    def ListAvailableNodes(
+        self, request, context
+    ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
+        return self.plugin_service.list_available_nodes(request, context)
+
+    def ClearPluginCache(
+        self, request, context
+    ) -> cuvis_ai_pb2.ClearPluginCacheResponse:
+        return self.plugin_service.clear_plugin_cache(request, context)
 
 
 __all__ = ["CuvisAIService"]

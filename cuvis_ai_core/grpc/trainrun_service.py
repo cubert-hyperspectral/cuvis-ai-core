@@ -225,7 +225,10 @@ class TrainRunService:
                 )
             else:
                 # Build pipeline from trainrun config (no weights)
-                builder = PipelineBuilder()
+                from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+                node_registry = NodeRegistry()
+                builder = PipelineBuilder(node_registry=node_registry)
                 pipeline_dict = trainrun_config.pipeline.to_dict()
                 pipeline = builder.build_from_config(pipeline_dict)
 

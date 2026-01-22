@@ -129,9 +129,9 @@ class PipelineService:
 
                 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 
-                pipeline = PipelineBuilder().build_from_config(
-                    trainrun_config.pipeline.model_dump()
-                )
+                pipeline = PipelineBuilder(
+                    node_registry=session.node_registry
+                ).build_from_config(trainrun_config.pipeline.model_dump())
                 # Move pipeline to GPU if available
                 if torch.cuda.is_available():
                     pipeline = pipeline.to("cuda")
@@ -252,7 +252,9 @@ class PipelineService:
             config_dict.pop("version", None)
             pipeline_config = PipelineConfig(**config_dict)
 
-            pipeline = PipelineBuilder().build_from_config(pipeline_config.model_dump())
+            pipeline = PipelineBuilder(
+                node_registry=session.node_registry
+            ).build_from_config(pipeline_config.model_dump())
             # Move pipeline to GPU if available
             if torch.cuda.is_available():
                 pipeline = pipeline.to("cuda")

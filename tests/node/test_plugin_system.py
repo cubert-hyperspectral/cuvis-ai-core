@@ -37,42 +37,6 @@ def _write_local_plugin(plugin_root: Path) -> Path:
     return plugin_root
 
 
-def _write_git_plugin(repo_root: Path) -> tuple[Path, str, str]:
-    repo_root.mkdir(parents=True, exist_ok=True)
-    (repo_root / "__init__.py").write_text("")
-    (repo_root / "node_impl.py").write_text(
-        "from cuvis_ai_core.node.node import Node\n"
-        "\n"
-        "class GitTestNode(Node):\n"
-        '    def __init__(self, name="GitTestNode"):\n'
-        "        super().__init__(name)\n"
-        "\n"
-        "    def forward(self, **inputs):\n"
-        '        return {"ok": True}\n'
-    )
-
-    repo = git.Repo.init(repo_root, initial_branch="main")
-    repo.index.add(["__init__.py", "node_impl.py"])
-    repo.index.commit("initial commit")
-    commit_1 = repo.head.commit.hexsha
-
-    (repo_root / "node_impl.py").write_text(
-        "from cuvis_ai_core.node.node import Node\n"
-        "\n"
-        "class GitTestNode(Node):\n"
-        '    def __init__(self, name="GitTestNode"):\n'
-        "        super().__init__(name)\n"
-        "\n"
-        "    def forward(self, **inputs):\n"
-        '        return {"ok": "v2"}\n'
-    )
-    repo.index.add(["node_impl.py"])
-    repo.index.commit("second commit")
-    commit_2 = repo.head.commit.hexsha
-
-    return repo_root, commit_1, commit_2
-
-
 def test_plugin_config_validation():
     git_config = GitPluginConfig(
         repo="git@gitlab.cubert.local:cubert/test-plugin.git",
@@ -137,22 +101,19 @@ def test_plugin_manifest_validation(tmp_path: Path):
 
 def test_local_plugin_loading(tmp_path: Path):
     plugin_root = _write_local_plugin(tmp_path / "simple_plugin")
-    NodeRegistry.clear_plugins()
+    registry = NodeRegistry()
 
-    try:
-        NodeRegistry.load_plugin(
-            "simple_test",
-            {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
-        )
+    registry.load_plugin(
+        "simple_test",
+        {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
+    )
 
-        assert "simple_test" in NodeRegistry.list_plugins()
-        assert "SimpleTestNode" in NodeRegistry.list_plugin_nodes()
+    assert "simple_test" in registry.list_plugins()
+    assert "SimpleTestNode" in registry.plugin_registry
 
-        node_class = NodeRegistry.get("SimpleTestNode")
-        instance = node_class()
-        assert instance.test_value == "Hello from plugin!"
-    finally:
-        NodeRegistry.clear_plugins()
+    node_class = registry.get("SimpleTestNode")
+    instance = node_class()
+    assert instance.test_value == "Hello from plugin!"
 
 
 def test_manifest_relative_path_resolution(tmp_path: Path):
@@ -170,39 +131,31 @@ def test_manifest_relative_path_resolution(tmp_path: Path):
     manifest_file = tmp_path / "plugins.yaml"
     PluginManifest.from_dict(manifest_data).to_yaml(manifest_file)
 
-    NodeRegistry.clear_plugins()
-    try:
-        loaded_count = NodeRegistry.load_plugins(manifest_file)
-        assert loaded_count == 1
-        assert "SimpleTestNode" in NodeRegistry.list_plugin_nodes()
-    finally:
-        NodeRegistry.clear_plugins()
+    registry = NodeRegistry()
+    loaded_count = registry.load_plugins(manifest_file)
+    assert loaded_count == 1
+    assert "SimpleTestNode" in registry.plugin_registry
 
 
 def test_pipeline_integration_with_plugin(tmp_path: Path):
     plugin_root = _write_local_plugin(tmp_path / "simple_plugin")
-    NodeRegistry.clear_plugins()
+    registry = NodeRegistry()
 
-    try:
-        NodeRegistry.load_plugin(
-            "simple_test",
-            {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
-        )
-        config = {
-            "metadata": {"name": "plugin_pipeline"},
-            "nodes": [{"name": "plugin_node", "class": "SimpleTestNode", "params": {}}],
-            "connections": [],
-        }
+    registry.load_plugin(
+        "simple_test",
+        {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
+    )
+    config = {
+        "metadata": {"name": "plugin_pipeline"},
+        "nodes": [{"name": "plugin_node", "class": "SimpleTestNode", "params": {}}],
+        "connections": [],
+    }
 
-        builder = PipelineBuilder()
-        pipeline = builder.build_from_config(config)
+    builder = PipelineBuilder(node_registry=registry)
+    pipeline = builder.build_from_config(config)
 
-        assert pipeline.name == "plugin_pipeline"
-        assert any(
-            node.__class__.__name__ == "SimpleTestNode" for node in pipeline.nodes
-        )
-    finally:
-        NodeRegistry.clear_plugins()
+    assert pipeline.name == "plugin_pipeline"
+    assert any(node.__class__.__name__ == "SimpleTestNode" for node in pipeline.nodes)
 
 
 # this doesnt work in windows apparently

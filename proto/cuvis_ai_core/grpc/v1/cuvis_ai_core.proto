@@ -466,6 +466,77 @@ message InferenceResponse {
 }
 
 // ============================================================================
+// Plugin Management
+// ============================================================================
+
+// Configuration message using JSON transport.
+// The config_bytes field contains JSON-serialized PluginManifest (Pydantic schema)
+message PluginManifest {
+  bytes config_bytes = 1;
+}
+
+// Plugin information
+message PluginInfo {
+  string name = 1;
+  string type = 2;  // "git" or "local"
+  string source = 3;  // repo URL or filesystem path
+  string ref = 4;  // Git ref (if applicable)
+  repeated string provides = 5;  // Class paths provided
+}
+
+// Node information
+message NodeInfo {
+  string class_name = 1;
+  string full_path = 2;
+  string source = 3;  // "builtin", "plugin", or "custom"
+  string plugin_name = 4;  // If from plugin
+}
+
+// Request/Response messages
+message LoadPluginsRequest {
+  string session_id = 1;
+  PluginManifest manifest = 2;
+}
+
+message LoadPluginsResponse {
+  repeated string loaded_plugins = 1;
+  map<string, string> failed_plugins = 2;  // name → error message
+}
+
+message ListLoadedPluginsRequest {
+  string session_id = 1;
+}
+
+message ListLoadedPluginsResponse {
+  repeated PluginInfo plugins = 1;
+}
+
+message GetPluginInfoRequest {
+  string session_id = 1;
+  string plugin_name = 2;
+}
+
+message GetPluginInfoResponse {
+  PluginInfo plugin = 1;
+}
+
+message ListAvailableNodesRequest {
+  string session_id = 1;
+}
+
+message ListAvailableNodesResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message ClearPluginCacheRequest {
+  string plugin_name = 1;  // Empty string = clear all
+}
+
+message ClearPluginCacheResponse {
+  int32 cleared_count = 1;
+}
+
+// ============================================================================
 // Service Definition
 // ============================================================================
 
@@ -507,4 +578,11 @@ service CuvisAIService {
 
   // Inference
   rpc Inference(InferenceRequest) returns (InferenceResponse);
+
+  // Plugin Management
+  rpc LoadPlugins(LoadPluginsRequest) returns (LoadPluginsResponse);
+  rpc ListLoadedPlugins(ListLoadedPluginsRequest) returns (ListLoadedPluginsResponse);
+  rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+  rpc ListAvailableNodes(ListAvailableNodesRequest) returns (ListAvailableNodesResponse);
+  rpc ClearPluginCache(ClearPluginCacheRequest) returns (ClearPluginCacheResponse);
 }

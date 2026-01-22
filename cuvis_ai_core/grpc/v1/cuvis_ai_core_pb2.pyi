@@ -943,3 +943,140 @@ class InferenceResponse(_message.Message):
         outputs: _Optional[_Mapping[str, Tensor]] = ...,
         metrics: _Optional[_Mapping[str, float]] = ...,
     ) -> None: ...
+
+class PluginManifest(_message.Message):
+    __slots__ = ("config_bytes",)
+    CONFIG_BYTES_FIELD_NUMBER: _ClassVar[int]
+    config_bytes: bytes
+    def __init__(self, config_bytes: _Optional[bytes] = ...) -> None: ...
+
+class PluginInfo(_message.Message):
+    __slots__ = ("name", "type", "source", "ref", "provides")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    REF_FIELD_NUMBER: _ClassVar[int]
+    PROVIDES_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    type: str
+    source: str
+    ref: str
+    provides: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        type: _Optional[str] = ...,
+        source: _Optional[str] = ...,
+        ref: _Optional[str] = ...,
+        provides: _Optional[_Iterable[str]] = ...,
+    ) -> None: ...
+
+class NodeInfo(_message.Message):
+    __slots__ = ("class_name", "full_path", "source", "plugin_name")
+    CLASS_NAME_FIELD_NUMBER: _ClassVar[int]
+    FULL_PATH_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_NAME_FIELD_NUMBER: _ClassVar[int]
+    class_name: str
+    full_path: str
+    source: str
+    plugin_name: str
+    def __init__(
+        self,
+        class_name: _Optional[str] = ...,
+        full_path: _Optional[str] = ...,
+        source: _Optional[str] = ...,
+        plugin_name: _Optional[str] = ...,
+    ) -> None: ...
+
+class LoadPluginsRequest(_message.Message):
+    __slots__ = ("session_id", "manifest")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    MANIFEST_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    manifest: PluginManifest
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        manifest: _Optional[_Union[PluginManifest, _Mapping]] = ...,
+    ) -> None: ...
+
+class LoadPluginsResponse(_message.Message):
+    __slots__ = ("loaded_plugins", "failed_plugins")
+    class FailedPluginsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(
+            self, key: _Optional[str] = ..., value: _Optional[str] = ...
+        ) -> None: ...
+
+    LOADED_PLUGINS_FIELD_NUMBER: _ClassVar[int]
+    FAILED_PLUGINS_FIELD_NUMBER: _ClassVar[int]
+    loaded_plugins: _containers.RepeatedScalarFieldContainer[str]
+    failed_plugins: _containers.ScalarMap[str, str]
+    def __init__(
+        self,
+        loaded_plugins: _Optional[_Iterable[str]] = ...,
+        failed_plugins: _Optional[_Mapping[str, str]] = ...,
+    ) -> None: ...
+
+class ListLoadedPluginsRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class ListLoadedPluginsResponse(_message.Message):
+    __slots__ = ("plugins",)
+    PLUGINS_FIELD_NUMBER: _ClassVar[int]
+    plugins: _containers.RepeatedCompositeFieldContainer[PluginInfo]
+    def __init__(
+        self, plugins: _Optional[_Iterable[_Union[PluginInfo, _Mapping]]] = ...
+    ) -> None: ...
+
+class GetPluginInfoRequest(_message.Message):
+    __slots__ = ("session_id", "plugin_name")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PLUGIN_NAME_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    plugin_name: str
+    def __init__(
+        self, session_id: _Optional[str] = ..., plugin_name: _Optional[str] = ...
+    ) -> None: ...
+
+class GetPluginInfoResponse(_message.Message):
+    __slots__ = ("plugin",)
+    PLUGIN_FIELD_NUMBER: _ClassVar[int]
+    plugin: PluginInfo
+    def __init__(
+        self, plugin: _Optional[_Union[PluginInfo, _Mapping]] = ...
+    ) -> None: ...
+
+class ListAvailableNodesRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class ListAvailableNodesResponse(_message.Message):
+    __slots__ = ("nodes",)
+    NODES_FIELD_NUMBER: _ClassVar[int]
+    nodes: _containers.RepeatedCompositeFieldContainer[NodeInfo]
+    def __init__(
+        self, nodes: _Optional[_Iterable[_Union[NodeInfo, _Mapping]]] = ...
+    ) -> None: ...
+
+class ClearPluginCacheRequest(_message.Message):
+    __slots__ = ("plugin_name",)
+    PLUGIN_NAME_FIELD_NUMBER: _ClassVar[int]
+    plugin_name: str
+    def __init__(self, plugin_name: _Optional[str] = ...) -> None: ...
+
+class ClearPluginCacheResponse(_message.Message):
+    __slots__ = ("cleared_count",)
+    CLEARED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    cleared_count: int
+    def __init__(self, cleared_count: _Optional[int] = ...) -> None: ...

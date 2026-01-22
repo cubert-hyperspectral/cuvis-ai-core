@@ -17,6 +17,7 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
     TrainRunConfig,
 )
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 
 @dataclass
@@ -24,6 +25,7 @@ class SessionState:
     """State for a single training session."""
 
     session_id: str
+    node_registry: NodeRegistry  # Instance for plugin isolation
     pipeline: CuvisPipeline | None = None
     _pipeline_config: PipelineConfig | None = field(default=None, repr=False)
     data_config: DataConfig | None = None
@@ -34,6 +36,9 @@ class SessionState:
     )
     is_training: bool = False
     trainer: Any | None = None
+    loaded_plugins: dict[str, dict] = field(
+        default_factory=dict
+    )  # NEW: Track loaded plugins
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -80,8 +85,13 @@ class SessionManager:
             Session ID
         """
         session_id = str(uuid.uuid4())
+
+        # Create NodeRegistry instance for this session
+        node_registry = NodeRegistry()
+
         state = SessionState(
             session_id=session_id,
+            node_registry=node_registry,
             pipeline=pipeline,
             _pipeline_config=pipeline_config,
             data_config=data_config,
@@ -147,6 +157,8 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         state = self._sessions.pop(session_id)
+
+        # Cleanup trainer
         trainer = state.trainer
         if trainer is not None and hasattr(trainer, "cleanup"):
             try:
@@ -155,7 +167,10 @@ class SessionManager:
                 # Cleanup best-effort; avoid cascading errors
                 pass
 
-        logger.info(f"Closing session: {session_id}")
+        # Clear plugin tracking (GC will handle registry cleanup automatically)
+        state.loaded_plugins.clear()
+
+        logger.info(f"Closed session: {session_id}")
 
     def list_sessions(self) -> list[str]:
         """List all active session IDs."""

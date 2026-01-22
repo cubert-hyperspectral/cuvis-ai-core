@@ -31,14 +31,15 @@ class PipelineBuilder:
 
     def __init__(
         self,
-        node_registry: type | None = None,
+        node_registry: NodeRegistry | type | None = None,
         default_pipeline_dir: str = "configs/pipeline",
     ) -> None:
         """
         Initialize PipelineBuilder.
 
         Args:
-            node_registry: Registry class to use (defaults to NodeRegistry)
+            node_registry: Registry instance or class to use (defaults to NodeRegistry class)
+                          Pass an instance for plugin support, or class for built-ins only
             default_pipeline_dir: Default directory for pipeline configs when using short names
                                (relative to current working directory)
         """
@@ -187,7 +188,7 @@ class PipelineBuilder:
                     f"Expected dict after resolving node config, got {type(resolved_cfg)}"
                 )
 
-            # Get node class from registry
+            # Get node class from registry (unified call - works for both class and instance!)
             node_class = self.node_registry.get(resolved_cfg["class"])
 
             # Extract parameters

@@ -22,26 +22,29 @@ from loguru import logger
 
 class NodeRegistry:
     """
-    Hybrid registry supporting both built-in and custom nodes.
+    Hybrid registry supporting both class and instance usage.
+
+    CLASS MODE (built-ins only):
+        NodeRegistry.get("MinMaxNormalizer")  # No instantiation needed
+
+    INSTANCE MODE (built-ins + plugins):
+        registry = NodeRegistry()
+        registry.load_plugin("adaclip", config)
+        registry.get("AdaCLIPDetector")  # Access both built-ins and plugins
 
     Built-in nodes are registered via @register decorator for O(1) lookup.
-    Custom nodes are loaded via importlib using full import paths.
-
-    Examples:
-        # Built-in node (registry lookup)
-        normalizer_class = NodeRegistry.get("MinMaxNormalizer")
-
-        # Custom node (importlib)
-        custom_class = NodeRegistry.get("my_package.nodes.CustomRXDetector")
+    Plugin nodes are loaded into instances for session isolation.
     """
 
-    _builtin_registry: Dict[str, type] = {}  # Existing: @register decorated nodes
-    _plugin_registry: Dict[str, type] = {}  # NEW: Plugin nodes by class name
-    _plugin_configs: Dict[
-        str, Union[GitPluginConfig, LocalPluginConfig]
-    ] = {}  # NEW: Track loaded plugins
-    _plugin_class_map: Dict[str, str] = {}  # NEW: class_path → plugin_name
-    _cache_dir: Path = Path.home() / ".cuvis_plugins"  # NEW: Git cache directory
+    # ========== CLASS-LEVEL: Built-in nodes (singleton) ==========
+    _builtin_registry: Dict[str, type] = {}
+
+    def __init__(self):
+        """Create instance for plugin support."""
+        self.plugin_registry: Dict[str, type] = {}
+        self.plugin_configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
+        self.plugin_class_map: Dict[str, str] = {}
+        self.cache_dir: Path = Path.home() / ".cuvis_plugins"
 
     @classmethod
     def register(cls, node_class: type) -> type:
@@ -72,18 +75,25 @@ class NodeRegistry:
         return node_class
 
     @classmethod
-    def get(cls, class_identifier: str) -> type:
+    def get(
+        cls, class_identifier: str, instance: Optional["NodeRegistry"] = None
+    ) -> type:
         """
-        Get node class by name or full import path.
+        Get node class - works as both class and instance method!
 
-        Resolution order:
-        1. Check built-in registry (O(1) lookup)
-        2. Try importlib for full paths (e.g., "my_package.MyNode")
-        3. Raise clear error if not found
+        Auto-detects usage:
+        - Class call → only built-ins
+        - Instance call → built-ins + plugins
+
+        Resolution order (instance mode):
+        1. Check instance plugins (if instance mode)
+        2. Check built-in registry (O(1) lookup)
+        3. Try importlib for full paths (e.g., "my_package.MyNode")
 
         Args:
             class_identifier: Either a simple class name for built-in nodes
                             or full import path for custom nodes
+            instance: Optional NodeRegistry instance for plugin lookup (auto-filled when called on instance)
 
         Returns:
             The node class
@@ -94,37 +104,60 @@ class NodeRegistry:
             AttributeError: If module doesn't contain the class
 
         Examples:
-            # Built-in node
+            # Built-in node (class call)
             cls = NodeRegistry.get("MinMaxNormalizer")
+
+            # Plugin node (instance call)
+            registry = NodeRegistry()
+            registry.load_plugin("adaclip", config)
+            cls = registry.get("AdaCLIPDetector")
 
             # Custom node with full path
             cls = NodeRegistry.get("my_company.detectors.AdvancedRXDetector")
         """
-        # Try built-in registry first
+        # 1. Check instance plugins first (if instance provided)
+        if instance is not None:
+            if class_identifier in instance.plugin_registry:
+                return instance.plugin_registry[class_identifier]
+            # For full paths, also check if last component is in plugins
+            if "." in class_identifier:
+                class_name = class_identifier.rsplit(".", 1)[1]
+                if class_name in instance.plugin_registry:
+                    return instance.plugin_registry[class_name]
+
+        # 2. Check built-in registry (both modes)
         if class_identifier in cls._builtin_registry:
             return cls._builtin_registry[class_identifier]
 
-        # Try plugin registry (NEW)
-        if class_identifier in cls._plugin_registry:
-            return cls._plugin_registry[class_identifier]
-
-        # For full paths, also check if last component is in plugin registry
-        if "." in class_identifier:
-            class_name = class_identifier.rsplit(".", 1)[1]
-            if class_name in cls._plugin_registry:
-                return cls._plugin_registry[class_name]
-
-        # Try importlib for custom nodes (must have dot in path)
+        # 3. Try importlib for custom nodes (must have dot in path)
         if "." in class_identifier:
             return cls._import_from_path(class_identifier)
 
         # Not found
-        available = cls.list_builtin_nodes() + cls.list_plugin_nodes()
+        available = cls.list_builtin_nodes()
+        if instance is not None:
+            available = available + sorted(instance.plugin_registry.keys())
         raise KeyError(
             f"Node '{class_identifier}' not found in registry.\n"
             f"For custom nodes, provide full import path (e.g., 'my_package.MyNode').\n"
             f"Available nodes: {available}"
         )
+
+    def __getattribute__(self, name: str):
+        """
+        Override to make get() work seamlessly on instances.
+
+        When calling registry.get("Node"), this intercepts and wraps the classmethod
+        to automatically pass the instance.
+        """
+        attr = object.__getattribute__(self, name)
+        if name == "get" and callable(attr):
+            # Return a wrapper that passes this instance to the classmethod
+            def instance_get(class_identifier: str) -> type:
+                return type(self).get(class_identifier, instance=self)
+
+            return instance_get
+        return attr
 
     @classmethod
     def _import_from_path(cls, import_path: str) -> type:
@@ -255,18 +288,7 @@ class NodeRegistry:
 
         return registered_count
 
-    @classmethod
-    def list_plugin_nodes(cls) -> list[str]:
-        """
-        List all nodes provided by plugins.
-
-        Returns:
-            Sorted list of plugin node class names
-        """
-        return sorted(cls._plugin_registry.keys())
-
-    @classmethod
-    def load_plugins(cls, manifest_path: Union[str, Path]) -> int:
+    def load_plugins(self, manifest_path: Union[str, Path]) -> int:
         """
         Load multiple plugins from a YAML manifest file.
 
@@ -277,9 +299,16 @@ class NodeRegistry:
             Number of plugins loaded
 
         Example:
-            count = NodeRegistry.load_plugins("plugins.yaml")
+            registry = NodeRegistry()
+            count = registry.load_plugins("plugins.yaml")
             print(f"Loaded {count} plugins")
         """
+        if not hasattr(self, "plugin_registry"):
+            raise RuntimeError(
+                "load_plugins() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
         from cuvis_ai_core.utils.plugin_config import PluginManifest
 
         manifest_path = Path(manifest_path)
@@ -288,21 +317,22 @@ class NodeRegistry:
 
         loaded = 0
         for plugin_name, config in manifest.plugins.items():
-            cls.load_plugin(plugin_name, config.model_dump(), manifest_dir=manifest_dir)
+            self.load_plugin(
+                plugin_name, config.model_dump(), manifest_dir=manifest_dir
+            )
             loaded += 1
 
         logger.info(f"Loaded {loaded} plugins from {manifest_path}")
         return loaded
 
-    @classmethod
     def load_plugin(
-        cls,
+        self,
         name: str,
         config: dict,
         manifest_dir: Optional[Path] = None,
     ) -> None:
         """
-        Load a single plugin from a configuration dict.
+        Load a single plugin into THIS INSTANCE.
 
         Args:
             name: Plugin identifier (e.g., "adaclip")
@@ -310,32 +340,41 @@ class NodeRegistry:
                 - repo + ref (for Git plugins)
                 - path (for local plugins)
                 - provides: list of class paths
+            manifest_dir: Optional base directory for resolving local plugin paths
 
         Examples:
             # Git plugin
-            NodeRegistry.load_plugin("adaclip", {
+            registry = NodeRegistry()
+            registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
                 "ref": "v1.2.3",
                 "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
             })
 
             # Local plugin
-            NodeRegistry.load_plugin("local_dev", {
+            registry.load_plugin("local_dev", {
                 "path": "../my-plugin",
                 "provides": ["my_plugin.MyNode"]
             })
         """
+        # Check instance mode
+        if not hasattr(self, "plugin_registry"):
+            raise RuntimeError(
+                "load_plugin() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
         from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
 
-        # Already loaded?
-        if name in cls._plugin_configs:
+        # Check if already loaded in this instance
+        if name in self.plugin_configs:
             logger.debug(f"Plugin '{name}' already loaded, skipping")
             return
 
         # Validate and parse config
         if "repo" in config:
             plugin_config = GitPluginConfig.model_validate(config)
-            plugin_path = cls._ensure_git_plugin(name, plugin_config)
+            plugin_path = self._ensure_git_plugin(name, plugin_config)
         elif "path" in config:
             if manifest_dir is not None:
                 config = dict(config)
@@ -343,25 +382,24 @@ class NodeRegistry:
                     LocalPluginConfig(**config).resolve_path(manifest_dir)
                 )
             plugin_config = LocalPluginConfig.model_validate(config)
-            plugin_path = cls._ensure_local_plugin(name, plugin_config)
+            plugin_path = self._ensure_local_plugin(name, plugin_config)
         else:
             raise ValueError(
                 f"Plugin '{name}' must have either 'repo' (Git) or 'path' (local)"
             )
 
         # Add to sys.path
-        cls._add_to_sys_path(plugin_path)
+        self._add_to_sys_path(plugin_path)
 
         # Import and register all provided classes
         for class_path in plugin_config.provides:
             try:
-                node_class = cls._import_from_path(class_path)
+                node_class = self._import_from_path(class_path)
                 class_name = node_class.__name__
 
-                # Register in plugin registry
-                cls._plugin_registry[class_name] = node_class
-                cls._plugin_class_map[class_path] = name
-
+                # Register in instance plugin registry
+                self.plugin_registry[class_name] = node_class
+                self.plugin_class_map[class_path] = name
                 logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
             except Exception as e:
                 logger.warning(
@@ -369,13 +407,13 @@ class NodeRegistry:
                 )
 
         # Track plugin config
-        cls._plugin_configs[name] = plugin_config
+        self.plugin_configs[name] = plugin_config
+
         logger.info(f"Loaded plugin '{name}' with {len(plugin_config.provides)} nodes")
 
-    @classmethod
-    def unload_plugin(cls, name: str) -> None:
+    def unload_plugin(self, name: str) -> None:
         """
-        Unload a plugin and remove its nodes from the registry.
+        Unload a plugin and remove its nodes from THIS INSTANCE.
 
         Args:
             name: Plugin identifier to unload
@@ -384,38 +422,50 @@ class NodeRegistry:
             Does not remove the plugin from sys.path (Python limitation).
             Cached Git repositories are NOT deleted (use clear_plugin_cache).
         """
-        if name not in cls._plugin_configs:
+        if not hasattr(self, "plugin_registry"):
+            raise RuntimeError(
+                "unload_plugin() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
+        if name not in self.plugin_configs:
             logger.warning(f"Plugin '{name}' not loaded, nothing to unload")
             return
 
-        config = cls._plugin_configs[name]
+        config = self.plugin_configs[name]
 
         # Remove nodes from registry
         for class_path in config.provides:
             class_name = class_path.rsplit(".", 1)[1]
-            cls._plugin_registry.pop(class_name, None)
-            cls._plugin_class_map.pop(class_path, None)
+            self.plugin_registry.pop(class_name, None)
+            self.plugin_class_map.pop(class_path, None)
 
         # Remove config
-        del cls._plugin_configs[name]
+        del self.plugin_configs[name]
         logger.info(f"Unloaded plugin '{name}'")
 
-    @classmethod
-    def list_plugins(cls) -> list[str]:
+    def list_plugins(self) -> list[str]:
         """
-        List all loaded plugin names.
+        List all loaded plugin names in THIS INSTANCE.
 
         Returns:
             Sorted list of plugin names
         """
-        return sorted(cls._plugin_configs.keys())
+        if not hasattr(self, "plugin_registry"):
+            return []
+        return sorted(self.plugin_configs.keys())
 
-    @classmethod
-    def clear_plugins(cls) -> None:
-        """Unload all plugins and clear plugin registries."""
-        cls._plugin_registry.clear()
-        cls._plugin_configs.clear()
-        cls._plugin_class_map.clear()
+    def clear_plugins(self) -> None:
+        """Unload all plugins and clear plugin registries in THIS INSTANCE."""
+        if not hasattr(self, "plugin_registry"):
+            raise RuntimeError(
+                "clear_plugins() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
+        self.plugin_registry.clear()
+        self.plugin_configs.clear()
+        self.plugin_class_map.clear()
         logger.info("Cleared all plugins")
 
     @classmethod
