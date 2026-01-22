@@ -4,17 +4,13 @@ import pytest
 import torch
 from omegaconf import DictConfig, OmegaConf
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
-from cuvis_ai.anomaly.rx_logit_head import RXLogitHead
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import (
     OptimizerConfig,
     TrainerConfig,
     TrainingConfig,
 )
+from tests.fixtures import MockStatisticalTrainableNode, SoftChannelSelector
 
 
 def test_trainer_config_defaults():
@@ -142,10 +138,14 @@ class TestUnfreezeNodesByName:
             input_channels=10,
             init_method="uniform",
         )
-        logit_head = RXLogitHead(name="RXLogitHead")
+        trainable = MockStatisticalTrainableNode(
+            name="MockStatisticalTrainableNode",
+            input_dim=3,
+            hidden_dim=5
+        )
 
         # Connect nodes to add them to pipeline (pipeline auto-adds nodes on connect)
-        pipeline.connect(selector.outputs.selected, logit_head.inputs.scores)
+        pipeline.connect(selector.outputs.selected, trainable.inputs.data)
 
         return pipeline
 
@@ -171,26 +171,26 @@ class TestUnfreezeNodesByName:
 
         # Verify nodes are frozen (parameters converted to buffers)
         selector = None
-        logit_head = None
+        trainable = None
         for node in mock_pipeline.nodes():
             if node.name == "SoftChannelSelector":
                 selector = node
-            elif node.name == "RXLogitHead":
-                logit_head = node
+            elif node.name == "MockStatisticalTrainableNode":
+                trainable = node
 
         assert selector is not None, "SoftChannelSelector not found in pipeline"
-        assert logit_head is not None, "RXLogitHead not found in pipeline"
+        assert trainable is not None, "MockStatisticalTrainableNode not found in pipeline"
 
         # After freezing, trainable parameter count should be 0
         assert sum(p.numel() for p in selector.parameters() if p.requires_grad) == 0
-        assert sum(p.numel() for p in logit_head.parameters() if p.requires_grad) == 0
+        assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) == 0
 
         # Now unfreeze
-        mock_pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "RXLogitHead"])
+        mock_pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "MockStatisticalTrainableNode"])
 
         # After unfreezing, should have trainable parameters again
         assert sum(p.numel() for p in selector.parameters() if p.requires_grad) > 0
-        assert sum(p.numel() for p in logit_head.parameters() if p.requires_grad) > 0
+        assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) > 0
 
     def test_unfreeze_missing_nodes_raises_error(self, mock_pipeline):
         """Test that missing node names raise ValueError with helpful message."""
@@ -203,7 +203,7 @@ class TestUnfreezeNodesByName:
         assert "AnotherMissingNode" in error_msg
         assert "Available nodes" in error_msg
         assert "SoftChannelSelector" in error_msg
-        assert "RXLogitHead" in error_msg
+        assert "MockStatisticalTrainableNode" in error_msg
 
     def test_unfreeze_partial_missing_nodes_raises_error(self, mock_pipeline):
         """Test that partially missing nodes raise error."""

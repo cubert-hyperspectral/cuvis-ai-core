@@ -6,15 +6,24 @@ Fixtures are imported from the fixtures/ directory and made available to all tes
 
 from __future__ import annotations
 
+import warnings
 import pytest
+
+# Filter PyTorch Lightning internal deprecation warnings
+# TreeSpec deprecation in pytorch_lightning.utilities._pytree
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    module="pytorch_lightning.utilities._pytree",
+)
 
 # Import all fixtures from fixtures/ modules
 # This makes them available to all tests without explicit imports
+# Note: mock_nodes is imported at runtime in reset_global_state to avoid assertion rewrite issues
 pytest_plugins = [
     "tests.fixtures.basic_nodes",
     "tests.fixtures.basic_pipelines",
     "tests.fixtures.mock_models",
-    "tests.fixtures.mock_nodes",
     "tests.fixtures.data_factory",
     "tests.fixtures.grpc",
     "tests.fixtures.config_factory",
@@ -110,6 +119,17 @@ def mock_pipeline_dir(tmp_path):
     return pipeline_dir
 
 
+@pytest.fixture
+def mock_statistical_trainable_node():
+    """Fixture providing MockStatisticalTrainableNode class for tests.
+    
+    Returns:
+        MockStatisticalTrainableNode class (not an instance)
+    """
+    from tests.fixtures.mock_nodes import MockStatisticalTrainableNode
+    return MockStatisticalTrainableNode
+
+
 @pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset any global state between tests.
@@ -138,6 +158,7 @@ def reset_global_state():
     NodeRegistry._builtin_registry["LossNode"] = MockLossNode
     NodeRegistry._builtin_registry["MetricNode"] = MockMetricNode
     NodeRegistry._builtin_registry["LentilsAnomalyDataNode"] = mock_nodes.LentilsAnomalyDataNode
+    NodeRegistry._builtin_registry["SimpleLossNode"] = mock_nodes.SimpleLossNode
     NodeRegistry._builtin_registry["SimpleMSELoss"] = MockLossNode  # Alias for loss node
     NodeRegistry._builtin_registry["SimpleMetric"] = MockMetricNode  # Alias for metric node
     

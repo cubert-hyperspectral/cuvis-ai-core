@@ -25,8 +25,8 @@ def create_pipeline_config_proto(
         PipelineConfig proto with config_bytes field populated
 
     Examples:
-        >>> config = create_pipeline_config_proto("channel_selector")
-        >>> config = create_pipeline_config_proto("channel_selector", load_weights=True)
+        >>> config = create_pipeline_config_proto("gradient_based")
+        >>> config = create_pipeline_config_proto("gradient_based", load_weights=True)
     """
     from cuvis_ai_core.grpc.helpers import resolve_pipeline_path
     from cuvis_ai_core.training.config import PipelineConfig

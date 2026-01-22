@@ -29,12 +29,12 @@ class TestConfigPreservationThroughTraining:
         `training_config_py = session.training_config or TrainingConfig()`
         in the Train method's statistical training branch.
         """
-        # Use existing deep_svdd train run which has max_epochs=20
-        trainrun_path = "configs/trainrun/deep_svdd.yaml"
+        # Use existing gradient_based train run which has max_epochs=20
+        trainrun_path = "configs/trainrun/gradient_based.yaml"
         resolved_path = materialize_trainrun_config(trainrun_path)
 
-        # Verify the trainrun file has max_epochs=20
-        with open(trainrun_path) as f:
+        # Verify the resolved trainrun file has max_epochs=20 (Hydra-composed config)
+        with open(resolved_path) as f:
             trainrun_config_dict = yaml.safe_load(f)
         assert trainrun_config_dict["training"]["trainer"]["max_epochs"] == 20
 
@@ -128,14 +128,14 @@ class TestConfigPreservationThroughTraining:
         Test that all training config fields (not just max_epochs) are preserved
         through the training workflow.
         """
-        trainrun_path = "configs/trainrun/deep_svdd.yaml"
-
-        # Load original config
-        with open(trainrun_path) as f:
-            original_config = yaml.safe_load(f)
+        trainrun_path = "configs/trainrun/gradient_based.yaml"
 
         # Resolve and restore
         resolved_path = materialize_trainrun_config(trainrun_path)
+        
+        # Load resolved config (Hydra-composed)
+        with open(resolved_path) as f:
+            original_config = yaml.safe_load(f)
         restore_response = grpc_stub.RestoreTrainRun(
             cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=resolved_path)
         )
@@ -274,7 +274,7 @@ class TestSessionStateManagement:
         Test that trainrun config (including loss_nodes, metric_nodes) is preserved
         in session state through training operations.
         """
-        trainrun_path = "configs/trainrun/deep_svdd.yaml"
+        trainrun_path = "configs/trainrun/gradient_based.yaml"
         resolved_path = materialize_trainrun_config(trainrun_path)
 
         # Load original trainrun config
@@ -325,7 +325,7 @@ class TestSessionStateManagement:
 
         Ensures that config changes in one session don't affect other sessions.
         """
-        trainrun_path = "configs/trainrun/deep_svdd.yaml"
+        trainrun_path = "configs/trainrun/gradient_based.yaml"
         resolved_path = materialize_trainrun_config(trainrun_path)
 
         # Create two sessions

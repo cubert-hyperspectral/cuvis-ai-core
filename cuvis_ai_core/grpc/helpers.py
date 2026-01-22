@@ -299,7 +299,7 @@ def resolve_pipeline_path(config_path: str, base_dir: Path | None = None) -> Pat
     Resolution order:
     1. If absolute path exists, use it
     2. If relative path from CWD exists, use it
-    3. Try as short name in base_dir (e.g., "rx_statistical" -> "configs/pipeline/rx_statistical.yaml")
+    3. Try as short name in base_dir (e.g., "statistical_based" -> "configs/pipeline/statistical_based.yaml")
     4. Try as short name with .yaml extension in base_dir
     5. Fallback to default ./configs/pipeline even when CUVIS_CONFIGS_DIR is set
 
@@ -470,7 +470,7 @@ def _infer_tags_from_pipeline(pipeline_data: dict) -> list[str]:
     nodes = pipeline_data.get("nodes", [])
 
     # Check for anomaly detection nodes
-    anomaly_keywords = ["rx", "anomaly", "detector", "deep_svdd", "lad"]
+    anomaly_keywords = ["rx", "anomaly", "detector", "gradient_based", "lad"]
     for node in nodes:
         if isinstance(node, dict):
             node_type = node.get("type", "").lower()
@@ -558,7 +558,7 @@ def get_pipeline_info(
     """Get detailed information about a specific pipeline.
 
     Args:
-        pipeline_name: Pipeline short name (e.g., "rx_statistical")
+        pipeline_name: Pipeline short name (e.g., "statistical_based")
         base_dir: Base directory for pipeline configs (defaults to server base dir / pipeline)
         include_yaml_content: Whether to include full YAML content in response
 

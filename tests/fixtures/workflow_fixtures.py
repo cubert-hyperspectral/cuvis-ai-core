@@ -19,7 +19,7 @@ def pretrained_pipeline(
     """Function-scoped fixture that creates and caches a pretrained pipeline.
 
     This fixture creates a trainable pipeline, performs statistical training,
-    and saves it to a temporary directory. Uses the channel_selector pipeline
+    and saves it to a temporary directory. Uses the gradient_based pipeline
     from configs which contains trainable nodes.
 
     Yields:
@@ -43,7 +43,7 @@ def pretrained_pipeline(
 
     try:
         # Load the trainable pipeline using proper proto construction
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/channel_selector")
+        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/gradient_based")
 
         # Perform statistical training to initialize nodes
         stat_train_request = cuvis_ai_pb2.TrainRequest(
@@ -89,7 +89,7 @@ def shared_workflow_setup(
     """Shared setup for workflow tests that need multiple pipeline types.
 
     Creates and saves multiple pipeline types that can be reused across tests.
-    Uses the channel_selector pipeline from configs.
+    Uses the gradient_based pipeline from configs.
 
     Yields:
         dict: Dictionary containing paths to different pipeline types
@@ -103,7 +103,7 @@ def shared_workflow_setup(
     
     try:
         # Load pipeline using proper proto construction
-        resolve_and_load_pipeline(grpc_stub, session1.session_id, path="pipeline/channel_selector")
+        resolve_and_load_pipeline(grpc_stub, session1.session_id, path="pipeline/gradient_based")
 
         # Perform statistical training
         stat_train_request = cuvis_ai_pb2.TrainRequest(
@@ -134,7 +134,7 @@ def shared_workflow_setup(
         
         try:
             # Load pipeline using proper proto construction
-            resolve_and_load_pipeline(grpc_stub, session2.session_id, path="pipeline/channel_selector")
+            resolve_and_load_pipeline(grpc_stub, session2.session_id, path="pipeline/gradient_based")
 
             # Perform statistical training
             stat_train_request = cuvis_ai_pb2.TrainRequest(

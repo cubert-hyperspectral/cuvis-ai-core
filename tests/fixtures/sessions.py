@@ -156,7 +156,7 @@ def trained_pipeline_session(
     cu3s_file, json_file = test_data_files_cached
     created_sessions: list[str] = []
 
-    def _create_trained_pipeline_session(pipeline_path: str = "channel_selector") -> str:
+    def _create_trained_pipeline_session(pipeline_path: str = "gradient_based") -> str:
         # Step 1: Create empty session
         response = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = response.session_id
@@ -222,7 +222,7 @@ def session(grpc_stub: Any) -> Generator[Callable[[str], str], None, None]:
     """
     created_sessions: list[str] = []
 
-    def _create_session(pipeline_type: str = "channel_selector") -> str:
+    def _create_session(pipeline_type: str = "gradient_based") -> str:
         # Step 1: Create empty session
         response = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = response.session_id
@@ -274,7 +274,7 @@ def trained_session(
     created_sessions: list[str] = []
 
     def _create_trained_session(
-        trainrun_path: str = "configs/trainrun/deep_svdd.yaml",
+        trainrun_path: str = "configs/trainrun/gradient_based.yaml",
     ) -> tuple[str, cuvis_ai_pb2.DataConfig]:
         # Resolve Hydra defaults for tests, then RestoreTrainRun to load full config
         resolved_path = materialize_trainrun_config(trainrun_path)

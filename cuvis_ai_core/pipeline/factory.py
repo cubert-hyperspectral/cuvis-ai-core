@@ -60,7 +60,7 @@ class PipelineBuilder:
 
         Example:
             pipeline = builder.build_from_config(
-                "configs/channel_selector.yaml",
+                "configs/gradient_based.yaml",
                 "configs/lentils_experiment.yaml"
             )
         """
@@ -87,7 +87,7 @@ class PipelineBuilder:
         """
         Load configuration from file or dict.
 
-        Supports short names (e.g., "rx_statistical") which will be resolved to
+        Supports short names (e.g., "statistical_based") which will be resolved to
         "{default_pipeline_dir}/{short_name}.yaml".
 
         Args:
@@ -128,8 +128,8 @@ class PipelineBuilder:
             Resolved Path object
 
         Examples:
-            "rx_statistical" -> "configs/pipeline/rx_statistical.yaml"
-            "configs/pipeline/rx_statistical.yaml" -> "configs/pipeline/rx_statistical.yaml"
+            "statistical_based" -> "configs/pipeline/statistical_based.yaml"
+            "configs/pipeline/statistical_based.yaml" -> "configs/pipeline/statistical_based.yaml"
             "/abs/path/to/config.yaml" -> "/abs/path/to/config.yaml"
         """
         config_path = Path(config)

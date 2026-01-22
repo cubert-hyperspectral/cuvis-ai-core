@@ -17,41 +17,34 @@ import pytest
 import torch
 from torch import Tensor
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
-from cuvis_ai.anomaly.rx_detector import RXPerBatch
-from cuvis_ai.anomaly.rx_logit_head import RXLogitHead
-from cuvis_ai.node.data import LentilsAnomalyDataNode
-from cuvis_ai.node.losses import AnomalyBCEWithLogits
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.ports import PortSpec
+from cuvis_ai_core.utils.types import ExecutionStage
+from tests.fixtures import MockStatisticalTrainableNode, SimpleLossNode
 
 
-class BCEwithSigmoidLoss(AnomalyBCEWithLogits):
-    """Custom BCE loss for testing that applies sigmoid."""
+class SimpleDataNode(Node):
+    """Simple data node for testing that outputs cube and mask."""
 
     INPUT_SPECS = {
-        "predictions": PortSpec(
-            dtype=torch.float32, shape=(-1, -1, -1, 1), description="Anomaly predictions (logits)"
-        ),
-        "targets": PortSpec(
-            dtype=torch.bool, shape=(-1, -1, -1, 1), description="Ground truth anomaly masks"
-        ),
+        "cube": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+        "wavelengths": PortSpec(dtype=torch.int32, shape=(-1, -1)),
+    }
+    OUTPUT_SPECS = {
+        "cube": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+        "mask": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
     }
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Loss nodes should only execute in train/val/test, not inference
-        from cuvis_ai_core.utils.types import ExecutionStage
+    def forward(self, cube, wavelengths, **kwargs):
+        # Just pass through cube and create a dummy mask (4D to match loss node expectations)
+        batch_size, height, width, channels = cube.shape
+        # Create 4D mask with single channel
+        mask = torch.zeros(batch_size, height, width, 1, dtype=torch.float32)
+        return {"cube": cube, "mask": mask}
 
-        self.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
-
-    def forward(self, predictions: Tensor, targets: Tensor, **_: Any) -> dict[str, torch.Tensor]:
-        sigmoided_preds = torch.sigmoid(predictions)
-        result = super().forward(sigmoided_preds, targets, **_)
-        return result
+    def load(self, params: dict, serial_dir: str) -> None:
+        pass
 
 
 class TestRequiredPortValidation:
@@ -59,24 +52,23 @@ class TestRequiredPortValidation:
 
     def test_missing_required_input_raises_runtime_error(self, create_test_cube) -> None:
         """Missing required input for executing node should raise RuntimeError."""
-        pipeline = CuvisPipeline("selector_rx_validation")
-        data = LentilsAnomalyDataNode(normal_class_ids=[0])  # I: cube, mask, O: cube, mask
-        rx_node = RXPerBatch()  # I: data, O: scores
-        rx_logits = RXLogitHead()  # I: scores, O: logits
-        bce_loss = BCEwithSigmoidLoss(weight=0.3)  # I: predictions, targets, O: loss
+        pipeline = CuvisPipeline("statistical_validation")
+        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
+        
+        data = SimpleDataNode()  # I: cube, wavelengths, O: cube, mask
+        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)  # I: data, O: result
+        loss_node = SimpleLossNode(weight=0.3)  # I: predictions, targets, O: loss
+        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
         pipeline.connect(
-            (data.outputs.cube, rx_node.data),
-            (rx_node.scores, rx_logits.scores),
-            (rx_logits.logits, bce_loss.predictions),
+            (data.outputs.cube, statistical_node.data),
+            (statistical_node.outputs.output, loss_node.predictions),
         )
 
-        # Note: bce_loss.targets is NOT connected and NOT in batch
-        # This should fail because bce_loss executes in train stage
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8)
+        # Note: loss_node.targets is NOT connected and NOT in batch
+        # This should fail because loss_node executes in train stage
         bad_batch = {
             "cube": cube,
-            "mask": torch.randint(0, 2, (2, 4, 4, 1), dtype=torch.int32),
             "wavelengths": wavelengths,
         }
 
@@ -85,67 +77,72 @@ class TestRequiredPortValidation:
 
     def test_excluded_node_with_missing_input_only_warns(self, caplog, create_test_cube) -> None:
         """Excluded node with missing input should only warn, not error."""
-        pipeline = CuvisPipeline("selector_rx_validation")
-        data = LentilsAnomalyDataNode(normal_class_ids=[0])
-        rx_node = RXPerBatch()
-        rx_logits = RXLogitHead()
-        bce_loss = BCEwithSigmoidLoss(weight=0.3)
+        pipeline = CuvisPipeline("statistical_validation")
+        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
+        
+        data = SimpleDataNode()
+        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
+        statistical_node._statistically_initialized = True  # Mark as initialized for testing
+        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        trainable._statistically_initialized = True  # Mark as initialized for testing
+        loss_node = SimpleLossNode(weight=0.3)
+        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
         pipeline.connect(
-            (data.outputs.cube, rx_node.data),
-            (rx_node.scores, rx_logits.scores),
-            (rx_logits.logits, bce_loss.predictions),
-            (data.outputs.mask, bce_loss.targets),  # Connect targets from data node
+            (data.outputs.cube, statistical_node.data),
+            (statistical_node.outputs.output, trainable.data),
+            (trainable.outputs.output, loss_node.predictions),
+            (data.outputs.mask, loss_node.targets),  # Connect targets from data node
         )
 
-        # Provide all required inputs with correct shape (3D not 4D)
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8)
-        bad_batch = {
+        # Provide all required inputs
+        batch = {
             "cube": cube,
-            "mask": torch.randint(0, 2, (2, 4, 4), dtype=torch.int32),
             "wavelengths": wavelengths,
         }
 
         # Should NOT raise since all inputs are provided
-        outputs = pipeline.forward(stage="val", batch=bad_batch)
+        outputs = pipeline.forward(stage="val", batch=batch)
 
-        # Execution should succeed up to rx_logits
-        assert (rx_logits.name, "logits") in outputs
-        # BCE loss executes in val stage for validation metrics
-        assert (bce_loss.name, "loss") in outputs
+        # Execution should succeed up to trainable
+        assert (trainable.name, "output") in outputs
+        # Loss executes in val stage for validation metrics
+        assert (loss_node.name, "loss") in outputs
 
     def test_upto_node_excludes_downstream_validation(self, create_test_cube) -> None:
         """upto_node parameter should exclude downstream nodes from validation."""
-        pipeline = CuvisPipeline("selector_rx_validation")
-        data = LentilsAnomalyDataNode(normal_class_ids=[0])
-        rx_node = RXPerBatch()
-        rx_logits = RXLogitHead()
-        bce_loss = BCEwithSigmoidLoss(weight=0.3)
+        pipeline = CuvisPipeline("statistical_validation")
+        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
+        
+        data = SimpleDataNode()
+        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
+        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        loss_node = SimpleLossNode(weight=0.3)
+        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
         pipeline.connect(
-            (data.outputs.cube, rx_node.data),
-            (rx_node.scores, rx_logits.scores),
-            (rx_logits.logits, bce_loss.predictions),
+            (data.outputs.cube, statistical_node.data),
+            (statistical_node.outputs.output, trainable.data),
+            (trainable.outputs.output, loss_node.predictions),
         )
 
-        # bce_loss is excluded via upto_node, so missing targets should not error
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8)
+        # loss_node is excluded via upto_node, so missing targets should not error
         bad_batch = {
             "cube": cube,
             "wavelengths": wavelengths,
         }
 
-        # Should succeed - bce_loss is downstream of rx_node and excluded
+        # Should succeed - loss_node is downstream of statistical_node and excluded
         outputs = pipeline.forward(
             stage="train",
             batch=bad_batch,
-            upto_node=rx_node,
+            upto_node=statistical_node,
         )
 
-        # Should only execute data node (ancestor of rx_node)
+        # Should only execute data node (ancestor of statistical_node)
         assert (data.name, "cube") in outputs
-        # rx_node itself should NOT execute (upto_node is exclusive)
-        assert (rx_node.name, "scores") not in outputs
+        # statistical_node itself should NOT execute (upto_node is exclusive)
+        assert (statistical_node.name, "output") not in outputs
 
 
 class TestOptionalPortHandling:
@@ -326,48 +323,55 @@ class TestStageAwareExecution:
     def test_train_stage_executes_loss_nodes(self, create_test_cube) -> None:
         """Loss nodes should execute in train stage."""
         pipeline = CuvisPipeline("stage_test")
-        data = LentilsAnomalyDataNode(normal_class_ids=[0])
-        rx_node = RXPerBatch()
-        rx_logits = RXLogitHead()
-        bce_loss = BCEwithSigmoidLoss(weight=0.3)
+        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
+        
+        data = SimpleDataNode()
+        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
+        statistical_node._statistically_initialized = True  # Mark as initialized for testing
+        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        trainable._statistically_initialized = True  # Mark as initialized for testing
+        loss_node = SimpleLossNode(weight=0.3)
+        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
         pipeline.connect(
-            (data.outputs.cube, rx_node.data),
-            (rx_node.scores, rx_logits.scores),
-            (rx_logits.logits, bce_loss.predictions),
-            (data.outputs.mask, bce_loss.targets),  # Connect targets from data node
+            (data.outputs.cube, statistical_node.data),
+            (statistical_node.outputs.output, trainable.data),
+            (trainable.outputs.output, loss_node.predictions),
+            (data.outputs.mask, loss_node.targets),  # Connect targets from data node
         )
 
-        # Provide all required inputs with correct dtype and shape (3D not 4D)
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8)
+        # Provide all required inputs
         batch = {
             "cube": cube,
-            "mask": torch.randint(0, 2, (2, 4, 4), dtype=torch.int32),
             "wavelengths": wavelengths,
         }
 
         outputs = pipeline.forward(stage="train", batch=batch)
 
         # Loss should execute in train stage
-        assert (bce_loss.name, "loss") in outputs
+        assert (loss_node.name, "loss") in outputs
 
     def test_inference_stage_skips_loss_nodes(self, create_test_cube) -> None:
         """Loss nodes should not execute in inference stage."""
         pipeline = CuvisPipeline("stage_test")
-        data = LentilsAnomalyDataNode(normal_class_ids=[0])
-        rx_node = RXPerBatch()
-        rx_logits = RXLogitHead()
-        bce_loss = BCEwithSigmoidLoss(weight=0.3)
+        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
+        
+        data = SimpleDataNode()
+        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
+        statistical_node._statistically_initialized = True  # Mark as initialized for testing
+        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        trainable._statistically_initialized = True  # Mark as initialized for testing
+        loss_node = SimpleLossNode(weight=0.3)
+        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
         pipeline.connect(
-            (data.outputs.cube, rx_node.data),
-            (rx_node.scores, rx_logits.scores),
-            (rx_logits.logits, bce_loss.predictions),
+            (data.outputs.cube, statistical_node.data),
+            (statistical_node.outputs.output, trainable.data),
+            (trainable.outputs.output, loss_node.predictions),
             # Don't connect targets - loss won't execute in inference anyway
         )
 
         # Provide cube only - loss doesn't execute in inference
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8)
         batch = {
             "cube": cube,
             "wavelengths": wavelengths,
@@ -376,9 +380,9 @@ class TestStageAwareExecution:
         outputs = pipeline.forward(stage="inference", batch=batch)
 
         # Loss should NOT execute in inference stage
-        assert (bce_loss.name, "loss") not in outputs
-        # But rx_logits should execute
-        assert (rx_logits.name, "logits") in outputs
+        assert (loss_node.name, "loss") not in outputs
+        # But trainable should execute
+        assert (trainable.name, "output") in outputs
 
 
 class TestMultipleEntryPoints:

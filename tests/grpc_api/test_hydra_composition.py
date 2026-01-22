@@ -119,9 +119,9 @@ def test_trainrun_resolution_with_config_root():
     """Trainrun config should compose against the config root (defaults across groups)."""
     config_dict = resolve_config_with_hydra(
         config_type="trainrun",
-        config_path="trainrun/rx_statistical",
+        config_path="trainrun/gradient_based",
         search_paths=[str(Path("configs").resolve())],
     )
 
-    assert config_dict["pipeline"]["metadata"]["name"] == "RX_Statistical"
-    assert config_dict["training"]["trainer"]["max_epochs"] == 10
+    assert config_dict["pipeline"]["metadata"]["name"] == "gradient_based"
+    assert config_dict["training"]["trainer"]["max_epochs"] == 20

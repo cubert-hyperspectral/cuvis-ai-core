@@ -34,7 +34,7 @@ class TestWorkflow1_TrainFromScratch:
         assert session_id
 
         # Build pipeline
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/channel_selector")
+        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/gradient_based")
 
         # Step 2: Train with explicit data and training configs
         # Note: Skipping actual training in this test
@@ -152,7 +152,7 @@ class TestWorkflow3_ResumeTraining:
         setup_session_id = setup_response.session_id
 
         # Build pipeline
-        resolve_and_load_pipeline(grpc_stub, setup_session_id, path="pipeline/channel_selector")
+        resolve_and_load_pipeline(grpc_stub, setup_session_id, path="pipeline/gradient_based")
 
         pipeline_path = mock_pipeline_dir / "initial.yaml"
         save_pipeline_response = grpc_stub.SavePipeline(

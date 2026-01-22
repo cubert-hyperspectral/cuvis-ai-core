@@ -51,7 +51,7 @@ def shared_trained_session(grpc_server, test_data_files_cached):
 
     try:
         # Create session using RestoreTrainRun to get full config
-        resolved_path = materialize_trainrun_config("configs/trainrun/deep_svdd.yaml")
+        resolved_path = materialize_trainrun_config("configs/trainrun/gradient_based.yaml")
         restore_req = cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=resolved_path)
         response = stub.RestoreTrainRun(restore_req)
         session_id = response.session_id

@@ -3,13 +3,9 @@
 import pytest
 import torch
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
 from cuvis_ai_core.node.node import Node
-from cuvis_ai.node.pca import TrainablePCA
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.ports import InputPort, OutputPort, PortSpec
+from tests.fixtures import SoftChannelSelector
 
 
 def test_init_subclass_adds_annotations():
@@ -42,19 +38,6 @@ def test_init_subclass_adds_annotations():
     assert "labels" in node._input_ports
     assert "output_result" in node._output_ports
     assert "scores" in node._output_ports
-
-
-def test_real_node_has_annotations_pca():
-    """Test that TrainablePCA has port specs."""
-
-    # Check INPUT_SPECS and OUTPUT_SPECS exist
-    assert "data" in TrainablePCA.INPUT_SPECS
-    assert "projected" in TrainablePCA.OUTPUT_SPECS
-
-    # Create instance to check runtime ports
-    pca = TrainablePCA(n_components=5, input_channels=10)
-    assert hasattr(pca.inputs, "data")
-    assert hasattr(pca.outputs, "projected")
 
 
 def test_real_node_has_annotations_selector():

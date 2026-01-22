@@ -282,11 +282,11 @@ class TestPipelineBuilderPathResolution:
 class TestPipelineBuilderRealConfigs:
     """Tests using actual config files if they exist."""
 
-    def test_load_channel_selector_if_exists(self):
-        """Test loading channel_selector.yaml if it exists."""
-        config_path = Path("configs/pipeline/channel_selector.yaml")
+    def test_load_gradient_based_if_exists(self):
+        """Test loading gradient_based.yaml if it exists."""
+        config_path = Path("configs/pipeline/gradient_based.yaml")
         if not config_path.exists():
-            pytest.skip("channel_selector.yaml not found")
+            pytest.skip("gradient_based.yaml not found")
 
         builder = PipelineBuilder()
         pipeline = builder.build_from_config(str(config_path))
@@ -294,11 +294,11 @@ class TestPipelineBuilderRealConfigs:
         assert isinstance(pipeline, CuvisPipeline)
         assert len(list(pipeline.nodes())) > 0
 
-    def test_load_rx_statistical_if_exists(self):
-        """Test loading rx_statistical.yaml if it exists."""
-        config_path = Path("configs/pipeline/rx_statistical.yaml")
+    def test_load_statistical_based_if_exists(self):
+        """Test loading statistical_based.yaml if it exists."""
+        config_path = Path("configs/pipeline/statistical_based.yaml")
         if not config_path.exists():
-            pytest.skip("rx_statistical.yaml not found")
+            pytest.skip("statistical_based.yaml not found")
 
         builder = PipelineBuilder()
         pipeline = builder.build_from_config(str(config_path))

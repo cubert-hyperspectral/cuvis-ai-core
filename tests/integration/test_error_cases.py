@@ -5,7 +5,7 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 
 
-def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "rx_statistical"):
+def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical_based"):
     """Helper to resolve and load a pipeline using bytes-based API."""
     config_response = grpc_stub.ResolveConfig(
         cuvis_ai_pb2.ResolveConfigRequest(
@@ -201,7 +201,7 @@ name: invalid-config
                 cuvis_ai_pb2.ResolveConfigRequest(
                     session_id=session_id,
                     config_type="invalid_type_xyz",  # Invalid type
-                    path="rx_statistical.yaml",
+                    path="statistical_based.yaml",
                     overrides=[],
                 )
             )
@@ -278,7 +278,7 @@ name: invalid-config
                 cuvis_ai_pb2.ResolveConfigRequest(
                     session_id=session_id,
                     config_type="trainrun",
-                    path="rx_statistical",
+                    path="statistical_based",
                     overrides=["this is not valid override syntax!!!"],
                 )
             )

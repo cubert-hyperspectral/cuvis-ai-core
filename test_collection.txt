@@ -201,7 +201,7 @@ asyncio: mode=auto, debug=False, asyncio_default_fixture_loop_scope=None, asynci
         <Class TestPipelinePathResolution>
           Test pipeline path resolution logic.
           <Function test_resolve_pipeline_path_with_short_name>
-            Test resolving pipeline by short name (e.g., 'rx_statistical').
+            Test resolving pipeline by short name (e.g., 'statistical_based').
           <Function test_resolve_pipeline_path_with_extension>
             Test resolving pipeline with explicit .yaml extension.
           <Function test_resolve_pipeline_path_absolute>

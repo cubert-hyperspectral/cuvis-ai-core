@@ -228,7 +228,7 @@ message ListAvailablePipelineesResponse {
 }
 
 message GetPipelineInfoRequest {
-  string pipeline_name = 1;  // Short name (e.g., "rx_statistical")
+  string pipeline_name = 1;  // Short name (e.g., "statistical_based")
 }
 
 message GetPipelineInfoResponse {

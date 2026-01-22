@@ -482,16 +482,16 @@ def restore_trainrun_cli() -> None:
         epilog="""
 Examples:
   # Display trainrun info
-  uv run restore-trainrun --trainrun-path outputs/channel_selector/trained_models/channel_selector_trainrun.yaml
+  uv run restore-trainrun --trainrun-path outputs/gradient_based/trained_models/gradient_based_trainrun.yaml
 
   # Re-run training
   uv run restore-trainrun \\
-    --trainrun-path outputs/channel_selector/trained_models/channel_selector_trainrun.yaml \\
+    --trainrun-path outputs/gradient_based/trained_models/gradient_based_trainrun.yaml \\
     --mode train
 
   # Run validation
   uv run restore-trainrun \\
-    --trainrun-path outputs/channel_selector/trained_models/channel_selector_trainrun.yaml \\
+    --trainrun-path outputs/gradient_based/trained_models/gradient_based_trainrun.yaml \\
     --mode validate
 
   # Override data and training configs

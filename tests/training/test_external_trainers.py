@@ -1,24 +1,18 @@
 """Test suite for external trainer orchestrators."""
 
-import pytest
-
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
 import pytorch_lightning as pl
+import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 
-from cuvis_ai.anomaly.rx_detector import RXGlobal
 from cuvis_ai_core.node import Node
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.ports import PortSpec
-from cuvis_ai.node.losses import MSEReconstructionLoss
 from cuvis_ai_core.training import CuvisDataModule
-
 from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_core.utils.types import Context, ExecutionStage
+from tests.fixtures import MockStatisticalTrainableNode, SimpleLossNode, SoftChannelSelector
 
 
 class TestGradientTrainer:
@@ -258,14 +252,14 @@ class TestGradientTrainer:
         pipeline = CuvisPipeline("test_training")
         normalizer = SimpleStatisticalNode()
         projection = TrainableProjection(input_dim=10, output_dim=10)
-        loss_node = MSEReconstructionLoss(name="mse_loss", weight=1.0)
+        loss_node = SimpleLossNode(name="mse_loss", weight=1.0)
         loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL}
 
         # Connect nodes
         pipeline.connect(
             (normalizer.normalized, projection.features),
-            (projection.outputs.projected, loss_node.reconstruction),
-            (normalizer.normalized, loss_node.target),
+            (projection.outputs.projected, loss_node.predictions),
+            (normalizer.normalized, loss_node.targets),
         )
 
         # Create datamodule
@@ -491,12 +485,14 @@ class TestGraphInputValidation:
             def train_dataloader(self) -> DataLoader:
                 return DataLoader(self.dataset, batch_size=2, shuffle=False)
 
-        pipeline = CuvisPipeline("selector_rx_validation")
+        pipeline = CuvisPipeline("selector_statistical_validation")
         soft_selector = SoftChannelSelector(
             n_select=2, input_channels=8
         )  # input is data, output is selected
-        rx_node = RXGlobal(num_channels=2)  # input is data, output is scores
-        pipeline.connect(soft_selector.selected, rx_node.data)
+        statistical_node = MockStatisticalTrainableNode(
+            input_dim=2, hidden_dim=4
+        )  # input is data, output is result
+        pipeline.connect(soft_selector.selected, statistical_node.data)
 
         datamodule = MockDataModule(
             batch_key="cube"
@@ -512,5 +508,5 @@ class TestGraphInputValidation:
             pipeline.forward(
                 stage=ExecutionStage.TRAIN,
                 batch=bad_batch,
-                upto_node=rx_node,
+                upto_node=statistical_node,
             )

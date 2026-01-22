@@ -2,12 +2,8 @@
 
 import pytest
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
-from cuvis_ai.node.normalization import MinMaxNormalizer
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from tests.fixtures import MinMaxNormalizer, SoftChannelSelector
 
 
 class TestCounterBasedNames:

@@ -12,7 +12,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline1 = CuvisPipeline.load_pipeline(str(pipeline_path))
         pipeline2 = CuvisPipeline.load_pipeline(str(pipeline_path))
 
@@ -28,7 +28,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
 
         session_id = manager.create_session(pipeline=pipeline)
@@ -44,7 +44,7 @@ class TestSessionManager:
     def test_pipeline_config_property_derives_from_pipeline(self):
         manager = SessionManager()
 
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
 
         session_id = manager.create_session(pipeline=pipeline)
@@ -63,7 +63,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
         session_id = manager.create_session(pipeline=pipeline)
 
@@ -80,7 +80,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
         session_id = manager.create_session(pipeline=pipeline)
 
@@ -94,7 +94,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
         session_id = manager.create_session(pipeline=pipeline)
 
@@ -110,7 +110,7 @@ class TestSessionManager:
         manager = SessionManager()
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
         session_id = manager.create_session(pipeline=pipeline)
         state = manager.get_session(session_id)
@@ -130,7 +130,7 @@ class TestSessionManager:
         )
 
         # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("channel_selector")
+        pipeline_path = resolve_pipeline_path("gradient_based")
         pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
 
         # Create trainrun config

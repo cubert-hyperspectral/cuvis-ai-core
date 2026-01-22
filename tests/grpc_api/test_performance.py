@@ -5,7 +5,7 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
 
 
-def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "rx_statistical"):
+def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical_based"):
     """Helper to load pipeline using bytes-based RPC."""
     config_response = grpc_stub.ResolveConfig(
         cuvis_ai_pb2.ResolveConfigRequest(

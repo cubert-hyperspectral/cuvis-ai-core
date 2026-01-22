@@ -6,39 +6,34 @@ Tests end-to-end functionality of the typed I/O system.
 import pytest
 import torch
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
-from cuvis_ai.anomaly.rx_detector import RXGlobal
 from cuvis_ai_core.node import Node
-from cuvis_ai.node.normalization import MinMaxNormalizer
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.utils.types import ExecutionStage
+from tests.fixtures import MinMaxNormalizer, MockStatisticalTrainableNode, SoftChannelSelector
 
 
 class TestLinearPipeline:
     """Test simple linear pipelines."""
 
     def test_normalizer_selector_rx_pipeline(self):
-        """Test complete pipeline: normalizer -> selector -> RX."""
+        """Test complete pipeline: normalizer -> selector -> trainable node."""
         pipeline = CuvisPipeline("test_pipeline")
 
         # Create nodes (selector now accepts input_channels as parameter)
         normalizer = MinMaxNormalizer()
         selector = SoftChannelSelector(n_select=15, input_channels=50)
-        rx = RXGlobal(num_channels=50)
+        trainable = MockStatisticalTrainableNode(input_dim=50, hidden_dim=10)
 
         # Connect (nodes auto-added)
         pipeline.connect(
             (normalizer.outputs.normalized, selector.inputs.data),
-            (selector.outputs.selected, rx.inputs.data),
+            (selector.outputs.selected, trainable.inputs.data),
         )
 
-        # Initialize RXGlobal with training data (must match selector output shape: 50 channels)
+        # Initialize trainable node with training data (must match selector output shape: 50 channels)
         train_data = [{"data": torch.randn(4, 10, 10, 50)} for _ in range(5)]
-        rx.statistical_initialization(iter(train_data))
+        trainable.statistical_initialization(iter(train_data))
 
         # Execute with pipeline.forward()
         input_cube = torch.randn(2, 10, 10, 50)
@@ -46,10 +41,10 @@ class TestLinearPipeline:
         outputs = pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
 
         # Verify outputs exist
-        assert (rx.name, "scores") in outputs
-        scores = outputs[(rx.name, "scores")]
-        assert scores.shape == (2, 10, 10, 1)
-        assert torch.all(torch.isfinite(scores))
+        assert (trainable.name, "output") in outputs
+        output = outputs[(trainable.name, "output")]
+        assert output.shape == (2, 10, 10, 10)  # hidden_dim=10
+        assert torch.all(torch.isfinite(output))
 
     def test_executor_reuse_efficiency(self):
         """Test that executor can be reused for multiple batches."""
@@ -76,34 +71,34 @@ class TestComplexDAG:
         """Test node with multiple outputs feeding different nodes (fan-out)."""
         pipeline = CuvisPipeline("multi_output")
 
-        # Selector output feeds two different RX detectors (fan-out pattern)
+        # Selector output feeds two different trainable nodes (fan-out pattern)
         normalizer = MinMaxNormalizer()
         selector = SoftChannelSelector(n_select=15, input_channels=50)
-        rx1 = RXGlobal(num_channels=50)
-        rx2 = RXGlobal(num_channels=50)
+        trainable1 = MockStatisticalTrainableNode(input_dim=50, hidden_dim=10)
+        trainable2 = MockStatisticalTrainableNode(input_dim=50, hidden_dim=10)
 
-        # Connect selector output to two different RX detectors
+        # Connect selector output to two different trainable nodes
         pipeline.connect(
             (normalizer.outputs.normalized, selector.inputs.data),
-            (selector.outputs.selected, rx1.inputs.data),
-            (selector.outputs.selected, rx2.inputs.data),
+            (selector.outputs.selected, trainable1.inputs.data),
+            (selector.outputs.selected, trainable2.inputs.data),
         )
 
-        # Initialize both RXGlobal instances with training data
+        # Initialize both trainable nodes with training data
         # (must match selector output shape: 50 channels)
         train_data = [{"data": torch.randn(4, 10, 10, 50)} for _ in range(5)]
-        rx1.statistical_initialization(iter(train_data))
-        rx2.statistical_initialization(iter(train_data))
+        trainable1.statistical_initialization(iter(train_data))
+        trainable2.statistical_initialization(iter(train_data))
 
         input_cube = torch.randn(2, 10, 10, 50)
         outputs = pipeline.forward(stage=ExecutionStage.INFERENCE, batch={"data": input_cube})
 
-        # Both RX detectors should have outputs
-        assert (rx1.name, "scores") in outputs
-        assert (rx2.name, "scores") in outputs
+        # Both trainable nodes should have outputs
+        assert (trainable1.name, "output") in outputs
+        assert (trainable2.name, "output") in outputs
 
         # Both should have same shape
-        assert outputs[(rx1.name, "scores")].shape == outputs[(rx2.name, "scores")].shape
+        assert outputs[(trainable1.name, "output")].shape == outputs[(trainable2.name, "output")].shape
 
 
 class TestGradientFlow:
@@ -115,27 +110,27 @@ class TestGradientFlow:
 
         normalizer = MinMaxNormalizer()
         selector = SoftChannelSelector(n_select=15, input_channels=50)
-        rx = RXGlobal(num_channels=50)
+        trainable = MockStatisticalTrainableNode(input_dim=50, hidden_dim=10)
 
         pipeline.connect(
             (normalizer.outputs.normalized, selector.inputs.data),
-            (selector.outputs.selected, rx.inputs.data),
+            (selector.outputs.selected, trainable.inputs.data),
         )
 
-        # Initialize RXGlobal with training data (must match selector output shape: 50 channels)
+        # Initialize trainable node with training data (must match selector output shape: 50 channels)
         train_data = [{"data": torch.randn(4, 10, 10, 50)} for _ in range(5)]
-        rx.statistical_initialization(iter(train_data))
+        trainable.statistical_initialization(iter(train_data))
 
-        # Unfreeze both selector and RX to enable gradient flow
+        # Unfreeze both selector and trainable node to enable gradient flow
         selector.unfreeze()
-        rx.unfreeze()
+        trainable.unfreeze()
 
         # Forward pass with gradient tracking
         input_cube = torch.randn(2, 10, 10, 50, requires_grad=True)
         outputs = pipeline.forward(stage=ExecutionStage.TRAIN, batch={"data": input_cube})
 
         # Backward pass
-        loss = outputs[(rx.name, "scores")].sum()
+        loss = outputs[(trainable.name, "output")].sum()
         loss.backward()
 
         # Check gradients flow to input

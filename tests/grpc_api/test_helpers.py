@@ -18,17 +18,17 @@ class TestPipelinePathResolution:
     """Test pipeline path resolution logic."""
 
     def test_resolve_pipeline_path_with_short_name(self):
-        """Test resolving pipeline by short name (e.g., 'rx_statistical')."""
-        resolved = resolve_pipeline_path("rx_statistical")
+        """Test resolving pipeline by short name (e.g., 'statistical_based')."""
+        resolved = resolve_pipeline_path("statistical_based")
         assert resolved.exists()
-        assert resolved.name == "rx_statistical.yaml"
+        assert resolved.name == "statistical_based.yaml"
         assert "pipeline" in str(resolved)
 
     def test_resolve_pipeline_path_with_extension(self):
         """Test resolving pipeline with explicit .yaml extension."""
-        resolved = resolve_pipeline_path("rx_statistical.yaml")
+        resolved = resolve_pipeline_path("statistical_based.yaml")
         assert resolved.exists()
-        assert resolved.name == "rx_statistical.yaml"
+        assert resolved.name == "statistical_based.yaml"
 
     def test_resolve_pipeline_path_absolute(self, tmp_path):
         """Test pipeline resolution with absolute path."""

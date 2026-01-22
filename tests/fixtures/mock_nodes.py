@@ -73,8 +73,16 @@ class MockStatisticalTrainableNode(Node):
         self.fitted_std = X.std(dim=0) + 1e-6  # [C]
 
         # Compute simple PCA-like transform (just random projection for testing)
-        U, _, _ = torch.svd(X.T @ X)
-        self.fitted_transform = U[: self.hidden_dim, :].clone()  # [hidden_dim, input_dim]
+        # Handle case where hidden_dim might be larger than input_dim
+        if self.hidden_dim <= self.input_dim:
+            U, _, _ = torch.svd(X.T @ X)
+            self.fitted_transform = U[: self.hidden_dim, :].clone()  # [hidden_dim, input_dim]
+        else:
+            # When hidden_dim > input_dim, pad with random values
+            U, _, _ = torch.svd(X.T @ X)
+            transform = torch.randn(self.hidden_dim, self.input_dim) * 0.01
+            transform[: self.input_dim, :] = U.clone()
+            self.fitted_transform = transform
 
         self._statistically_initialized = True
 
@@ -377,6 +385,54 @@ class MinMaxNormalizer(Node):
 
         normalized = scaled.view(B, H, W, C)
         return {"normalized": normalized}
+
+
+class SimpleLossNode(Node):
+    """Simple loss node for testing training workflows.
+    
+    Computes MSE loss between predictions and targets.
+    Only executes during TRAIN, VAL, and TEST stages.
+    """
+
+    INPUT_SPECS = {
+        "predictions": PortSpec(
+            dtype=torch.float32,
+            shape=(-1, -1, -1, -1),
+            description="Model predictions",
+        ),
+        "targets": PortSpec(
+            dtype=torch.float32,
+            shape=(-1, -1, -1, -1),
+            description="Ground truth targets",
+        ),
+    }
+
+    OUTPUT_SPECS = {
+        "loss": PortSpec(
+            dtype=torch.float32,
+            shape=(),
+            description="Scalar loss value",
+        ),
+    }
+
+    def __init__(self, weight: float = 1.0, **kwargs):
+        from cuvis_ai_core.utils.types import ExecutionStage
+        
+        self.weight = weight
+        super().__init__(weight=weight, **kwargs)
+        
+        # Loss nodes only execute during training/validation/test
+        self.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+
+    def forward(self, predictions: torch.Tensor, targets: torch.Tensor, **_) -> dict[str, torch.Tensor]:
+        """Compute MSE loss between predictions and targets."""
+        # Compute MSE loss
+        loss = torch.nn.functional.mse_loss(predictions, targets)
+        
+        # Apply weight
+        loss = loss * self.weight
+        
+        return {"loss": loss}
 
 
 # Pytest Fixtures

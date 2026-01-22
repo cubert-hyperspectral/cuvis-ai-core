@@ -91,7 +91,7 @@ def grpc_session_manager(grpc_server: str) -> SessionManager:
 
 
 def resolve_and_load_pipeline(
-    grpc_stub, session_id: str, path: str = "pipeline/channel_selector"
+    grpc_stub, session_id: str, path: str = "pipeline/gradient_based"
 ) -> cuvis_ai_pb2.LoadPipelineResponse:
     """Resolve and load pipeline structure via bytes-based API.
 
@@ -100,7 +100,7 @@ def resolve_and_load_pipeline(
     Args:
         grpc_stub: gRPC stub for making API calls
         session_id: Session ID to load pipeline into
-        path: Pipeline path (e.g., "pipeline/channel_selector")
+        path: Pipeline path (e.g., "pipeline/gradient_based")
 
     Returns:
         LoadPipelineResponse from the gRPC call

@@ -33,7 +33,7 @@ class TestCreateAndClose:
         grpc_stub.LoadPipelineWeights(
             cuvis_ai_pb2.LoadPipelineWeightsRequest(
                 session_id=session_id,
-                weights_path=str(Path("configs/pipeline/channel_selector.pt").resolve()),
+                weights_path=str(Path("configs/pipeline/gradient_based.pt").resolve()),
                 strict=True,
             )
         )
@@ -58,7 +58,7 @@ class TestCreateAndClose:
 
     def test_close_session_success(self, grpc_stub, session):
         """Test closing a session successfully using session fixture."""
-        session_id = session(pipeline_type="channel_selector")
+        session_id = session(pipeline_type="gradient_based")
         result = grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
         assert result.success
 
@@ -81,7 +81,7 @@ class TestInference:
         # Convert wavelengths to 2D format [B, C] as required by LentilsAnomalyDataNode
         wavelengths_2d = np.tile(wavelengths, (cube.shape[0], 1)).astype(np.int32)
 
-        session_id = trained_pipeline_session(pipeline_path="channel_selector")
+        session_id = trained_pipeline_session(pipeline_path="gradient_based")
 
         response = grpc_stub.Inference(
             cuvis_ai_pb2.InferenceRequest(
@@ -116,7 +116,7 @@ class TestInference:
         # Convert wavelengths to 2D format [B, C] as required by LentilsAnomalyDataNode
         wavelengths_2d = np.tile(wavelengths, (cube.shape[0], 1)).astype(np.int32)
 
-        session_id = trained_pipeline_session(pipeline_path="channel_selector")
+        session_id = trained_pipeline_session(pipeline_path="gradient_based")
 
         response = grpc_stub.Inference(
             cuvis_ai_pb2.InferenceRequest(
@@ -150,7 +150,7 @@ class TestInference:
 
     def test_inference_missing_cube(self, grpc_stub, session):
         """Test inference with missing cube using session fixture."""
-        session_id = session(pipeline_type="channel_selector")
+        session_id = session(pipeline_type="gradient_based")
         with pytest.raises(grpc.RpcError) as exc:
             grpc_stub.Inference(
                 cuvis_ai_pb2.InferenceRequest(

@@ -1,11 +1,7 @@
-# Skip entire module if cuvis_ai is not available
 import pytest
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
 
-from cuvis_ai.node.data import LentilsAnomalyDataNode
-from cuvis_ai.node.normalization import MinMaxNormalizer
-from cuvis_ai.node.selector import SoftChannelSelector
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from tests.fixtures import LentilsAnomalyDataNode, MinMaxNormalizer, SoftChannelSelector
 
 
 class TestPipelineIntrospection:
