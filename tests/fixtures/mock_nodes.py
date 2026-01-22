@@ -76,7 +76,9 @@ class MockStatisticalTrainableNode(Node):
         # Handle case where hidden_dim might be larger than input_dim
         if self.hidden_dim <= self.input_dim:
             U, _, _ = torch.svd(X.T @ X)
-            self.fitted_transform = U[: self.hidden_dim, :].clone()  # [hidden_dim, input_dim]
+            self.fitted_transform = U[
+                : self.hidden_dim, :
+            ].clone()  # [hidden_dim, input_dim]
         else:
             # When hidden_dim > input_dim, pad with random values
             U, _, _ = torch.svd(X.T @ X)
@@ -109,7 +111,9 @@ class MockStatisticalTrainableNode(Node):
         transformed = normalized @ self.fitted_transform.T  # [B*H*W, hidden_dim]
 
         # Apply trainable linear layer
-        output = transformed @ self.linear_weight.T + self.linear_bias  # [B*H*W, hidden_dim]
+        output = (
+            transformed @ self.linear_weight.T + self.linear_bias
+        )  # [B*H*W, hidden_dim]
 
         # Reshape back
         output = output.reshape(B, H, W, self.hidden_dim)
@@ -119,7 +123,7 @@ class MockStatisticalTrainableNode(Node):
 
 class LentilsAnomalyDataNode(Node):
     """Mock data node for testing - replaces cuvis-ai LentilsAnomalyDataNode.
-    
+
     This is a pass-through node that accepts cube and wavelengths inputs
     and outputs them along with a generated mask for anomaly detection testing.
     Automatically converts uint16 cubes to float32.
@@ -160,20 +164,22 @@ class LentilsAnomalyDataNode(Node):
         self.normal_class_ids = normal_class_ids or [0, 1]
         super().__init__(normal_class_ids=normal_class_ids, **kwargs)
 
-    def forward(self, cube: torch.Tensor, wavelengths: torch.Tensor, **_) -> dict[str, torch.Tensor]:
+    def forward(
+        self, cube: torch.Tensor, wavelengths: torch.Tensor, **_
+    ) -> dict[str, torch.Tensor]:
         """Pass through cube and wavelengths, generate dummy mask.
-        
+
         Converts cube to float32 if needed (e.g., from uint16).
         """
         B, H, W, C = cube.shape
-        
+
         # Convert to float32 if needed
         if cube.dtype != torch.float32:
             cube = cube.to(torch.float32)
-        
+
         # Generate a simple random mask for testing
         mask = torch.rand(B, H, W) > 0.8  # ~20% anomalies
-        
+
         return {
             "cube": cube,
             "wavelengths": wavelengths,
@@ -183,7 +189,7 @@ class LentilsAnomalyDataNode(Node):
 
 class SoftChannelSelector(Node):
     """Mock channel selector for testing - replaces cuvis-ai SoftChannelSelector.
-    
+
     This node performs soft channel selection on hyperspectral data with
     trainable parameters for statistical training.
     """
@@ -219,7 +225,7 @@ class SoftChannelSelector(Node):
         temperature_decay: float = 0.9,
         hard: bool = False,
         eps: float = 1e-6,
-        **kwargs
+        **kwargs,
     ):
         self.n_select = n_select
         self.input_channels = input_channels
@@ -229,7 +235,7 @@ class SoftChannelSelector(Node):
         self.temperature_decay = temperature_decay
         self.hard = hard
         self.eps = eps
-        
+
         super().__init__(
             n_select=n_select,
             input_channels=input_channels,
@@ -239,13 +245,13 @@ class SoftChannelSelector(Node):
             temperature_decay=temperature_decay,
             hard=hard,
             eps=eps,
-            **kwargs
+            **kwargs,
         )
 
         # Initialize channel logits as buffer (becomes parameter after unfreeze)
         initial_logits = torch.zeros(input_channels)
         self.register_buffer("channel_logits", initial_logits)
-        
+
         self._statistically_initialized = False
 
     def statistical_initialization(self, input_stream: InputStream) -> None:
@@ -263,12 +269,12 @@ class SoftChannelSelector(Node):
 
         # Concatenate all data
         X = torch.cat(all_data, dim=0)  # [B, H, W, C]
-        
+
         # Compute variance across all spatial and batch dimensions
         # Flatten to [B*H*W, C]
         X_flat = X.reshape(-1, X.shape[-1])
         channel_variance = X_flat.var(dim=0)  # [C]
-        
+
         # Initialize logits based on variance (higher variance = higher logit)
         if self.init_method == "variance":
             # Use log of variance as logits
@@ -276,7 +282,7 @@ class SoftChannelSelector(Node):
         else:
             # Uniform initialization (zeros)
             self.channel_logits = torch.zeros(self.input_channels)
-        
+
         self._statistically_initialized = True
 
     def unfreeze(self) -> None:
@@ -289,11 +295,11 @@ class SoftChannelSelector(Node):
         """Forward pass - apply soft channel selection."""
         # Compute selection weights from logits
         weights = torch.softmax(self.channel_logits, dim=0)
-        
+
         # Apply soft weighting to channels
         # data: [B, H, W, C], weights: [C]
         selected = data * weights.view(1, 1, 1, -1)
-        
+
         return {
             "selected": selected,
             "weights": weights,
@@ -302,7 +308,7 @@ class SoftChannelSelector(Node):
 
 class MinMaxNormalizer(Node):
     """Mock min-max normalizer for testing - replaces cuvis-ai MinMaxNormalizer.
-    
+
     Can operate in two modes:
     1. Per-sample normalization (default): min/max computed per batch
     2. Global normalization: uses running statistics from initialization
@@ -389,7 +395,7 @@ class MinMaxNormalizer(Node):
 
 class SimpleLossNode(Node):
     """Simple loss node for testing training workflows.
-    
+
     Computes MSE loss between predictions and targets.
     Only executes during TRAIN, VAL, and TEST stages.
     """
@@ -417,33 +423,40 @@ class SimpleLossNode(Node):
 
     def __init__(self, weight: float = 1.0, **kwargs):
         from cuvis_ai_core.utils.types import ExecutionStage
-        
+
         self.weight = weight
         super().__init__(weight=weight, **kwargs)
-        
-        # Loss nodes only execute during training/validation/test
-        self.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
 
-    def forward(self, predictions: torch.Tensor, targets: torch.Tensor, **_) -> dict[str, torch.Tensor]:
+        # Loss nodes only execute during training/validation/test
+        self.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
+
+    def forward(
+        self, predictions: torch.Tensor, targets: torch.Tensor, **_
+    ) -> dict[str, torch.Tensor]:
         """Compute MSE loss between predictions and targets."""
         # Compute MSE loss
         loss = torch.nn.functional.mse_loss(predictions, targets)
-        
+
         # Apply weight
         loss = loss * self.weight
-        
+
         return {"loss": loss}
 
 
 # Pytest Fixtures
 # ----------------
 
+
 @pytest.fixture
 def mock_statistical_trainable_node():
     """Factory fixture for MockStatisticalTrainableNode.
-    
+
     Returns the class itself so tests can instantiate it with custom parameters.
-    
+
     Usage:
         node = mock_statistical_trainable_node(input_dim=4, hidden_dim=3)
     """

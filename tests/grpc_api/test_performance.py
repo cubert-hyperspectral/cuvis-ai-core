@@ -5,7 +5,9 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
 
 
-def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical_based"):
+def _load_pipeline(
+    grpc_stub, session_id: str, pipeline_name: str = "statistical_based"
+):
     """Helper to load pipeline using bytes-based RPC."""
     config_response = grpc_stub.ResolveConfig(
         cuvis_ai_pb2.ResolveConfigRequest(
@@ -17,7 +19,9 @@ def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_response.config_bytes),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=config_response.config_bytes
+            ),
         )
     )
     assert response.success
@@ -37,7 +41,9 @@ class TestPerformance:
             resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
             # Step 2: Load pipeline using ResolveConfig + LoadPipeline
             _load_pipeline(grpc_stub, resp.session_id)
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=resp.session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=resp.session_id)
+            )
             timings.append(time.perf_counter() - start)
 
         avg_duration = sum(timings) / len(timings)
@@ -64,7 +70,9 @@ class TestPerformance:
         ):
             pass
 
-        cube, wavelengths = create_test_cube(batch_size=1, height=16, width=16, num_channels=61)
+        cube, wavelengths = create_test_cube(
+            batch_size=1, height=16, width=16, num_channels=61
+        )
         # Convert to numpy arrays for proto
 
         request = cuvis_ai_pb2.InferenceRequest(
@@ -109,7 +117,9 @@ class TestPerformance:
         ):
             pass
 
-        cube, wavelengths = create_test_cube(batch_size=1, height=16, width=16, num_channels=61)
+        cube, wavelengths = create_test_cube(
+            batch_size=1, height=16, width=16, num_channels=61
+        )
         # Convert to numpy arrays for proto
 
         request = cuvis_ai_pb2.InferenceRequest(

@@ -15,8 +15,7 @@ from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.training.datamodule import CuvisDataModule
-from cuvis_ai_core.training.trainers import StatisticalTrainer, GradientTrainer
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig, TrainingConfig
+from cuvis_ai_core.training.trainers import StatisticalTrainer
 
 from tests.fixtures.mock_nodes import (
     MockStatisticalTrainableNode,
@@ -70,7 +69,9 @@ class SyntheticDataModule(CuvisDataModule):
         # Split into train/val (80/20)
         n_train = int(0.8 * len(dataset))
         self.train_dataset = torch.utils.data.Subset(dataset, range(n_train))
-        self.val_dataset = torch.utils.data.Subset(dataset, range(n_train, len(dataset)))
+        self.val_dataset = torch.utils.data.Subset(
+            dataset, range(n_train, len(dataset))
+        )
 
     def train_dataloader(self):
         return DataLoader(
@@ -138,14 +139,18 @@ def create_test_graph(n_channels: int = 10) -> tuple[CuvisPipeline, dict]:
 
     # Trainable node (statistical init + gradient training)
     hidden_dim = min(5, n_channels)
-    trainable = MockStatisticalTrainableNode(input_dim=n_channels, hidden_dim=hidden_dim)
+    trainable = MockStatisticalTrainableNode(
+        input_dim=n_channels, hidden_dim=hidden_dim
+    )
     pipeline.connect(normalizer.normalized, trainable.data)
 
     # Loss node - compares trainable output with normalized input (simple reconstruction-like loss)
     loss_node = SimpleLossNode(weight=1.0)
     # Need to reshape trainable output to match normalized shape for loss computation
     # For simplicity, we'll create a second trainable node to match dimensions
-    trainable2 = MockStatisticalTrainableNode(input_dim=hidden_dim, hidden_dim=n_channels)
+    trainable2 = MockStatisticalTrainableNode(
+        input_dim=hidden_dim, hidden_dim=n_channels
+    )
     pipeline.connect(trainable.output, trainable2.data)
     pipeline.connect(trainable2.output, loss_node.predictions)
     pipeline.connect(normalizer.normalized, loss_node.targets)
@@ -227,8 +232,12 @@ def test_small_scale():
 
     # Verify correctness - check that nodes were statistically initialized
     assert nodes["normalizer"]._is_initialized(), "Normalizer not initialized"
-    assert nodes["trainable"]._statistically_initialized, "Trainable node not initialized"
-    assert nodes["trainable2"]._statistically_initialized, "Trainable2 node not initialized"
+    assert nodes["trainable"]._statistically_initialized, (
+        "Trainable node not initialized"
+    )
+    assert nodes["trainable2"]._statistically_initialized, (
+        "Trainable2 node not initialized"
+    )
 
     # Test forward pass
     # Add batch dimension to all items
@@ -297,7 +306,9 @@ def test_medium_scale():
 
     # Verify statistical initialization
     assert nodes["normalizer"]._is_initialized(), "Normalizer not initialized"
-    assert nodes["trainable"]._statistically_initialized, "Trainable node not initialized"
+    assert nodes["trainable"]._statistically_initialized, (
+        "Trainable node not initialized"
+    )
 
     print("\n✓ Medium scale test passed")
 
@@ -339,7 +350,9 @@ def test_varying_channels():
         train_time = time.time() - start_time
 
         # Verify nodes handle the channel dimension correctly
-        assert nodes["trainable"]._statistically_initialized, "Trainable node not initialized"
+        assert nodes["trainable"]._statistically_initialized, (
+            "Trainable node not initialized"
+        )
         assert nodes["trainable"].input_dim == n_channels, (
             f"Trainable node dimension mismatch for {n_channels} channels"
         )
@@ -484,7 +497,9 @@ def test_forward_pass_latency():
     for batch_size in [1, 4, 8, 16]:
         # Create batch dict with all keys from dataset
         batch = {
-            k: torch.stack([dataset[i][k] for i in range(min(batch_size, len(dataset)))])
+            k: torch.stack(
+                [dataset[i][k] for i in range(min(batch_size, len(dataset)))]
+            )
             for k in dataset[0].keys()
         }
 

@@ -12,7 +12,11 @@ from cuvis_ai_core.training import CuvisDataModule
 from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_core.utils.types import Context, ExecutionStage
-from tests.fixtures import MockStatisticalTrainableNode, SimpleLossNode, SoftChannelSelector
+from tests.fixtures import (
+    MockStatisticalTrainableNode,
+    SimpleLossNode,
+    SoftChannelSelector,
+)
 
 
 class TestGradientTrainer:
@@ -41,7 +45,9 @@ class TestGradientTrainer:
 
         # Should raise TypeError - missing required parameter
         with pytest.raises(TypeError, match="loss_nodes"):
-            GradientTrainer(pipeline=pipeline, datamodule=datamodule, trainer_config=trainer_config)
+            GradientTrainer(
+                pipeline=pipeline, datamodule=datamodule, trainer_config=trainer_config
+            )
 
     def test_gradient_trainer_creates_executor_once(self):
         """Test that GradientTrainer is properly initialized."""
@@ -159,7 +165,9 @@ class TestGradientTrainer:
             """Statistical node for normalization."""
 
             INPUT_SPECS = {"features": PortSpec(dtype=torch.Tensor, shape=(-1, -1))}
-            OUTPUT_SPECS = {"normalized": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))}
+            OUTPUT_SPECS = {
+                "normalized": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
 
             def __init__(self):
                 super().__init__()
@@ -192,8 +200,12 @@ class TestGradientTrainer:
         class TrainableProjection(Node):
             """Trainable projection layer."""
 
-            INPUT_SPECS = {"features": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))}
-            OUTPUT_SPECS = {"projected": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))}
+            INPUT_SPECS = {
+                "features": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
+            OUTPUT_SPECS = {
+                "projected": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
 
             def __init__(self, input_dim: int = 10, output_dim: int = 3):
                 super().__init__()
@@ -238,7 +250,9 @@ class TestGradientTrainer:
 
             def val_dataloader(self):
                 return DataLoader(
-                    self.val_dataset, batch_size=self.batch_size, collate_fn=self.collate_batch
+                    self.val_dataset,
+                    batch_size=self.batch_size,
+                    collate_fn=self.collate_batch,
                 )
 
             def collate_batch(self, batch):
@@ -277,7 +291,9 @@ class TestGradientTrainer:
         datamodule.setup("fit")
         initial_batch = next(iter(datamodule.train_dataloader()))
 
-        initial_outputs = pipeline.forward(stage=ExecutionStage.TRAIN, batch=initial_batch)
+        initial_outputs = pipeline.forward(
+            stage=ExecutionStage.TRAIN, batch=initial_batch
+        )
 
         # Extract initial loss directly from the loss node
         loss_key = (loss_node.name, "loss")
@@ -289,7 +305,8 @@ class TestGradientTrainer:
         for node in pipeline.nodes():
             if isinstance(node, TrainableProjection):
                 initial_params[node.name] = {
-                    name: param.clone().detach() for name, param in node.named_parameters()
+                    name: param.clone().detach()
+                    for name, param in node.named_parameters()
                 }
                 projection_node_id = node.name
                 break
@@ -323,7 +340,9 @@ class TestGradientTrainer:
         grad_trainer.fit()
 
         # Step 4: Verify training effects
-        final_outputs = pipeline.forward(stage=ExecutionStage.TRAIN, batch=initial_batch)
+        final_outputs = pipeline.forward(
+            stage=ExecutionStage.TRAIN, batch=initial_batch
+        )
 
         # Extract final loss directly from the loss node
         loss_key = (loss_node.name, "loss")

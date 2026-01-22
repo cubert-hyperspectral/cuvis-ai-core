@@ -59,17 +59,23 @@ class TestCreateAndClose:
     def test_close_session_success(self, grpc_stub, session):
         """Test closing a session successfully using session fixture."""
         session_id = session(pipeline_type="gradient_based")
-        result = grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+        result = grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+        )
         assert result.success
 
     def test_close_session_not_found(self, grpc_stub):
         with pytest.raises(grpc.RpcError) as exc:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id="missing"))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id="missing")
+            )
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
 
 class TestInference:
-    def test_inference_returns_outputs(self, grpc_stub, create_test_cube, trained_pipeline_session):
+    def test_inference_returns_outputs(
+        self, grpc_stub, create_test_cube, trained_pipeline_session
+    ):
         # Use fixture to generate cube and wavelengths together
         cube, wavelengths = create_test_cube(
             batch_size=1,
@@ -133,7 +139,11 @@ class TestInference:
 
     def test_inference_invalid_session(self, grpc_stub, create_test_cube):
         cube, wavelengths = create_test_cube(
-            batch_size=1, height=2, width=2, num_channels=DEFAULT_CHANNELS, mode="random"
+            batch_size=1,
+            height=2,
+            width=2,
+            num_channels=DEFAULT_CHANNELS,
+            mode="random",
         )
 
         with pytest.raises(grpc.RpcError) as exc:

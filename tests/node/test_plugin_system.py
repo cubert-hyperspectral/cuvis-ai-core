@@ -27,12 +27,12 @@ def _write_local_plugin(plugin_root: Path) -> Path:
         "from cuvis_ai_core.node.node import Node\n"
         "\n"
         "class SimpleTestNode(Node):\n"
-        "    def __init__(self, name=\"SimpleTestNode\"):\n"
+        '    def __init__(self, name="SimpleTestNode"):\n'
         "        super().__init__(name)\n"
-        "        self.test_value = \"Hello from plugin!\"\n"
+        '        self.test_value = "Hello from plugin!"\n'
         "\n"
         "    def forward(self, **inputs):\n"
-        "        return {\"result\": self.test_value}\n"
+        '        return {"result": self.test_value}\n'
     )
     return plugin_root
 
@@ -44,11 +44,11 @@ def _write_git_plugin(repo_root: Path) -> tuple[Path, str, str]:
         "from cuvis_ai_core.node.node import Node\n"
         "\n"
         "class GitTestNode(Node):\n"
-        "    def __init__(self, name=\"GitTestNode\"):\n"
+        '    def __init__(self, name="GitTestNode"):\n'
         "        super().__init__(name)\n"
         "\n"
         "    def forward(self, **inputs):\n"
-        "        return {\"ok\": True}\n"
+        '        return {"ok": True}\n'
     )
 
     repo = git.Repo.init(repo_root, initial_branch="main")
@@ -60,11 +60,11 @@ def _write_git_plugin(repo_root: Path) -> tuple[Path, str, str]:
         "from cuvis_ai_core.node.node import Node\n"
         "\n"
         "class GitTestNode(Node):\n"
-        "    def __init__(self, name=\"GitTestNode\"):\n"
+        '    def __init__(self, name="GitTestNode"):\n'
         "        super().__init__(name)\n"
         "\n"
         "    def forward(self, **inputs):\n"
-        "        return {\"ok\": \"v2\"}\n"
+        '        return {"ok": "v2"}\n'
     )
     repo.index.add(["node_impl.py"])
     repo.index.commit("second commit")
@@ -198,9 +198,12 @@ def test_pipeline_integration_with_plugin(tmp_path: Path):
         pipeline = builder.build_from_config(config)
 
         assert pipeline.name == "plugin_pipeline"
-        assert any(node.__class__.__name__ == "SimpleTestNode" for node in pipeline.nodes)
+        assert any(
+            node.__class__.__name__ == "SimpleTestNode" for node in pipeline.nodes
+        )
     finally:
         NodeRegistry.clear_plugins()
+
 
 # this doesnt work in windows apparently
 # @pytest.mark.skipif(git is None, reason="gitpython not installed")

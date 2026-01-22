@@ -85,9 +85,9 @@ class SyntheticHyperspectralDataset(Dataset):
         self.normal_signature = np.exp(-((wavelengths - 0.5) ** 2) / 0.1)
 
         # Anomaly class: different spectral signature with peaks
-        self.anomaly_signature = 0.5 * np.exp(-((wavelengths - 0.3) ** 2) / 0.05) + 0.5 * np.exp(
-            -((wavelengths - 0.7) ** 2) / 0.05
-        )
+        self.anomaly_signature = 0.5 * np.exp(
+            -((wavelengths - 0.3) ** 2) / 0.05
+        ) + 0.5 * np.exp(-((wavelengths - 0.7) ** 2) / 0.05)
 
         # Scale signatures to reasonable range
         self.normal_signature = self.normal_signature * 100.0

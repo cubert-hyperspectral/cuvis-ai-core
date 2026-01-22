@@ -100,10 +100,12 @@ def shared_workflow_setup(
 
     # Create and save a trainable pipeline
     session1 = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
-    
+
     try:
         # Load pipeline using proper proto construction
-        resolve_and_load_pipeline(grpc_stub, session1.session_id, path="pipeline/gradient_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session1.session_id, path="pipeline/gradient_based"
+        )
 
         # Perform statistical training
         stat_train_request = cuvis_ai_pb2.TrainRequest(
@@ -131,10 +133,12 @@ def shared_workflow_setup(
 
         # Create and save a second trainable pipeline
         session2 = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
-        
+
         try:
             # Load pipeline using proper proto construction
-            resolve_and_load_pipeline(grpc_stub, session2.session_id, path="pipeline/gradient_based")
+            resolve_and_load_pipeline(
+                grpc_stub, session2.session_id, path="pipeline/gradient_based"
+            )
 
             # Perform statistical training
             stat_train_request = cuvis_ai_pb2.TrainRequest(
@@ -168,4 +172,6 @@ def shared_workflow_setup(
         yield setup_data
 
     finally:
-        grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session1.session_id))
+        grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=session1.session_id)
+        )

@@ -103,7 +103,11 @@ class TestWorkflow2_InferenceWithPretrained:
 
         # Step 2: Run inference
         cube, wavelengths = create_test_cube(
-            batch_size=1, height=3, width=3, num_channels=DEFAULT_CHANNELS, mode="random"
+            batch_size=1,
+            height=3,
+            width=3,
+            num_channels=DEFAULT_CHANNELS,
+            mode="random",
         )
 
         inference_response = grpc_stub.Inference(
@@ -152,7 +156,9 @@ class TestWorkflow3_ResumeTraining:
         setup_session_id = setup_response.session_id
 
         # Build pipeline
-        resolve_and_load_pipeline(grpc_stub, setup_session_id, path="pipeline/gradient_based")
+        resolve_and_load_pipeline(
+            grpc_stub, setup_session_id, path="pipeline/gradient_based"
+        )
 
         pipeline_path = mock_pipeline_dir / "initial.yaml"
         save_pipeline_response = grpc_stub.SavePipeline(
@@ -163,7 +169,9 @@ class TestWorkflow3_ResumeTraining:
         )
         weights_path = Path(save_pipeline_response.weights_path)
 
-        grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=setup_session_id))
+        grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=setup_session_id)
+        )
 
         # Create experiments directory
         exp_dir = temp_workspace / "experiments"
@@ -316,7 +324,11 @@ class TestWorkflow5_LoadPipelineWeights:
 
         # Step 3: Run inference
         cube, wavelengths = create_test_cube(
-            batch_size=1, height=2, width=2, num_channels=DEFAULT_CHANNELS, mode="random"
+            batch_size=1,
+            height=2,
+            width=2,
+            num_channels=DEFAULT_CHANNELS,
+            mode="random",
         )
         # Convert to numpy arrays for proto
 
@@ -339,14 +351,20 @@ class TestWorkflow5_LoadPipelineWeights:
 class TestWorkflowIntegration:
     """Test combinations and interactions between workflows."""
 
-    def test_multiple_sessions_parallel(self, grpc_stub, trained_session, create_test_cube):
+    def test_multiple_sessions_parallel(
+        self, grpc_stub, trained_session, create_test_cube
+    ):
         """Test that multiple sessions can coexist using shared trained session."""
         # Get a trained session
         session_id, _ = trained_session()
 
         # Run inference on the trained session
         cube, wavelengths = create_test_cube(
-            batch_size=1, height=2, width=2, num_channels=DEFAULT_CHANNELS, mode="random"
+            batch_size=1,
+            height=2,
+            width=2,
+            num_channels=DEFAULT_CHANNELS,
+            mode="random",
         )
 
         response = grpc_stub.Inference(
@@ -382,7 +400,11 @@ class TestWorkflowIntegration:
         try:
             # Test with different cube generation modes
             cube, wavelengths = create_test_cube(
-                batch_size=1, height=3, width=3, num_channels=DEFAULT_CHANNELS, mode=test_mode
+                batch_size=1,
+                height=3,
+                width=3,
+                num_channels=DEFAULT_CHANNELS,
+                mode=test_mode,
             )
 
             inference_response = grpc_stub.Inference(
@@ -405,7 +427,9 @@ class TestWorkflowIntegration:
             assert selected.shape == cube.shape
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
 
     def test_session_reuse_after_save_load(
         self, grpc_stub, mock_pipeline_dir, trained_session, create_test_cube
@@ -416,7 +440,11 @@ class TestWorkflowIntegration:
 
         # Run inference before save
         cube, wavelengths = create_test_cube(
-            batch_size=1, height=2, width=2, num_channels=DEFAULT_CHANNELS, mode="random"
+            batch_size=1,
+            height=2,
+            width=2,
+            num_channels=DEFAULT_CHANNELS,
+            mode="random",
         )
         # Convert to numpy arrays for proto
         inf1 = grpc_stub.Inference(

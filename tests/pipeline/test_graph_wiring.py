@@ -11,11 +11,9 @@ Tests ensure proper validation of:
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 import torch
-from torch import Tensor
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
@@ -50,15 +48,25 @@ class SimpleDataNode(Node):
 class TestRequiredPortValidation:
     """Test validation of required port connections."""
 
-    def test_missing_required_input_raises_runtime_error(self, create_test_cube) -> None:
+    def test_missing_required_input_raises_runtime_error(
+        self, create_test_cube
+    ) -> None:
         """Missing required input for executing node should raise RuntimeError."""
         pipeline = CuvisPipeline("statistical_validation")
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
-        
+        cube, wavelengths = create_test_cube(
+            batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32
+        )
+
         data = SimpleDataNode()  # I: cube, wavelengths, O: cube, mask
-        statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)  # I: data, O: result
+        statistical_node = MockStatisticalTrainableNode(
+            input_dim=8, hidden_dim=4
+        )  # I: data, O: result
         loss_node = SimpleLossNode(weight=0.3)  # I: predictions, targets, O: loss
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        loss_node.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -75,18 +83,30 @@ class TestRequiredPortValidation:
         with pytest.raises(RuntimeError, match="missing required inputs"):
             pipeline.forward(stage="train", batch=bad_batch)
 
-    def test_excluded_node_with_missing_input_only_warns(self, caplog, create_test_cube) -> None:
+    def test_excluded_node_with_missing_input_only_warns(
+        self, caplog, create_test_cube
+    ) -> None:
         """Excluded node with missing input should only warn, not error."""
         pipeline = CuvisPipeline("statistical_validation")
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
-        
+        cube, wavelengths = create_test_cube(
+            batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32
+        )
+
         data = SimpleDataNode()
         statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
-        statistical_node._statistically_initialized = True  # Mark as initialized for testing
-        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        statistical_node._statistically_initialized = (
+            True  # Mark as initialized for testing
+        )
+        trainable = MockStatisticalTrainableNode(
+            input_dim=4, hidden_dim=2, name="trainable"
+        )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        loss_node.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -112,13 +132,21 @@ class TestRequiredPortValidation:
     def test_upto_node_excludes_downstream_validation(self, create_test_cube) -> None:
         """upto_node parameter should exclude downstream nodes from validation."""
         pipeline = CuvisPipeline("statistical_validation")
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
-        
+        cube, wavelengths = create_test_cube(
+            batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32
+        )
+
         data = SimpleDataNode()
         statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
-        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        trainable = MockStatisticalTrainableNode(
+            input_dim=4, hidden_dim=2, name="trainable"
+        )
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        loss_node.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -323,15 +351,25 @@ class TestStageAwareExecution:
     def test_train_stage_executes_loss_nodes(self, create_test_cube) -> None:
         """Loss nodes should execute in train stage."""
         pipeline = CuvisPipeline("stage_test")
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
-        
+        cube, wavelengths = create_test_cube(
+            batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32
+        )
+
         data = SimpleDataNode()
         statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
-        statistical_node._statistically_initialized = True  # Mark as initialized for testing
-        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        statistical_node._statistically_initialized = (
+            True  # Mark as initialized for testing
+        )
+        trainable = MockStatisticalTrainableNode(
+            input_dim=4, hidden_dim=2, name="trainable"
+        )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        loss_node.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -354,15 +392,25 @@ class TestStageAwareExecution:
     def test_inference_stage_skips_loss_nodes(self, create_test_cube) -> None:
         """Loss nodes should not execute in inference stage."""
         pipeline = CuvisPipeline("stage_test")
-        cube, wavelengths = create_test_cube(batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32)
-        
+        cube, wavelengths = create_test_cube(
+            batch_size=2, height=4, width=4, num_channels=8, dtype=torch.float32
+        )
+
         data = SimpleDataNode()
         statistical_node = MockStatisticalTrainableNode(input_dim=8, hidden_dim=4)
-        statistical_node._statistically_initialized = True  # Mark as initialized for testing
-        trainable = MockStatisticalTrainableNode(input_dim=4, hidden_dim=2, name="trainable")
+        statistical_node._statistically_initialized = (
+            True  # Mark as initialized for testing
+        )
+        trainable = MockStatisticalTrainableNode(
+            input_dim=4, hidden_dim=2, name="trainable"
+        )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        loss_node.execution_stages = {
+            ExecutionStage.TRAIN,
+            ExecutionStage.VAL,
+            ExecutionStage.TEST,
+        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),

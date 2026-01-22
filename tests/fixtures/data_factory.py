@@ -13,7 +13,12 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_core.training.config import DataConfig, OptimizerConfig, TrainerConfig, TrainingConfig
+from cuvis_ai_core.training.config import (
+    DataConfig,
+    OptimizerConfig,
+    TrainerConfig,
+    TrainingConfig,
+)
 from cuvis_ai_core.training.datamodule import CuvisDataModule
 
 # Session-scoped cache for test data files to avoid repeated file system operations
@@ -21,7 +26,9 @@ _test_data_cache = {}
 
 
 @pytest.fixture(scope="session")
-def test_data_files_cached(test_data_path: Path) -> Generator[tuple[Path, Path], None, None]:
+def test_data_files_cached(
+    test_data_path: Path,
+) -> Generator[tuple[Path, Path], None, None]:
     """Session-scoped cached version of test data files.
 
     Caches the test data file paths to avoid repeated file existence checks
@@ -111,7 +118,9 @@ def data_config_factory(test_data_files_cached: tuple[Path, Path]):
             pytest.skip(f"Test data not found under {cu3s_file_path.parent}")
 
         processing_mode_str = (
-            "Raw" if processing_mode == cuvis_ai_pb2.PROCESSING_MODE_RAW else "Reflectance"
+            "Raw"
+            if processing_mode == cuvis_ai_pb2.PROCESSING_MODE_RAW
+            else "Reflectance"
         )
 
         # Use memoized function for caching
@@ -131,7 +140,7 @@ def data_config_factory(test_data_files_cached: tuple[Path, Path]):
 @pytest.fixture
 def sample_batch():
     """Generate a simple sample batch for testing.
-    
+
     Returns:
         Dict with sample image and label tensors
     """
@@ -144,17 +153,19 @@ def sample_batch():
 @pytest.fixture
 def hyperspectral_batch():
     """Generate a sample hyperspectral data batch.
-    
+
     Returns:
         Dict with hyperspectral cube, wavelengths, and optional metadata
     """
     batch_size = 2
     height, width = 64, 64
     channels = 5
-    
+
     return {
         "cube": torch.randn(batch_size, height, width, channels),
-        "wavelengths": torch.arange(channels, dtype=torch.int32).unsqueeze(0).repeat(batch_size, 1),
+        "wavelengths": torch.arange(channels, dtype=torch.int32)
+        .unsqueeze(0)
+        .repeat(batch_size, 1),
         "mask": torch.rand(batch_size, height, width) > 0.5,
     }
 
@@ -162,11 +173,11 @@ def hyperspectral_batch():
 @pytest.fixture
 def batch_factory():
     """Factory fixture for creating customizable data batches.
-    
+
     Returns:
         Callable that creates batches with specified parameters
     """
-    
+
     def _create_batch(
         batch_size: int = 4,
         height: int = 64,
@@ -176,7 +187,7 @@ def batch_factory():
         dtype: torch.dtype = torch.float32,
     ):
         """Create a data batch with specified configuration.
-        
+
         Args:
             batch_size: Number of samples in batch
             height: Image height
@@ -184,21 +195,23 @@ def batch_factory():
             channels: Number of channels
             include_labels: Whether to include labels/masks
             dtype: Data type for tensors
-        
+
         Returns:
             Dict containing batch data
         """
         batch = {
             "cube": torch.randn(batch_size, height, width, channels, dtype=dtype),
-            "wavelengths": torch.arange(channels, dtype=torch.int32).unsqueeze(0).repeat(batch_size, 1),
+            "wavelengths": torch.arange(channels, dtype=torch.int32)
+            .unsqueeze(0)
+            .repeat(batch_size, 1),
         }
-        
+
         if include_labels:
             batch["mask"] = torch.rand(batch_size, height, width) > 0.5
             batch["labels"] = torch.randint(0, 2, (batch_size,))
-        
+
         return batch
-    
+
     return _create_batch
 
 
@@ -225,7 +238,9 @@ def create_test_cube():
         height: int = 10,
         width: int = 10,
         num_channels: int = 61,
-        mode: Literal["wavelength_dependent", "random", "synthetic"] = "wavelength_dependent",
+        mode: Literal[
+            "wavelength_dependent", "random", "synthetic"
+        ] = "wavelength_dependent",
         wavelength_range: tuple[float, float] = (430.0, 910.0),
         seed: int = 123,
         dtype: torch.dtype = torch.uint16,
@@ -279,14 +294,16 @@ def create_test_cube():
             # Random values from normal distribution
             rng = torch.Generator().manual_seed(seed)
             cube = torch.randn(
-                (batch_size, height, width, num_channels), generator=rng, dtype=torch.float32
+                (batch_size, height, width, num_channels),
+                generator=rng,
+                dtype=torch.float32,
             )
         elif mode == "synthetic":
             # Random with spectral trend (for anomaly detection)
             rng = np.random.default_rng(seed)
-            base = rng.normal(0, 1, size=(batch_size, height, width, num_channels)).astype(
-                np.float32
-            )
+            base = rng.normal(
+                0, 1, size=(batch_size, height, width, num_channels)
+            ).astype(np.float32)
             # Add mild trend across channels
             trend = np.linspace(-0.2, 0.2, num_channels, dtype=np.float32)
             base += trend.reshape(1, 1, 1, num_channels)
@@ -379,7 +396,9 @@ class SyntheticAnomalyDataModule(CuvisDataModule):
             )
         elif mode == "synthetic":
             rng = np.random.default_rng(seed)
-            base = rng.normal(0, 1, size=(num_samples, height, width, channels)).astype(np.float32)
+            base = rng.normal(0, 1, size=(num_samples, height, width, channels)).astype(
+                np.float32
+            )
             trend = np.linspace(-0.2, 0.2, channels, dtype=np.float32)
             base += trend.reshape(1, 1, 1, channels)
             cubes = torch.from_numpy(base)

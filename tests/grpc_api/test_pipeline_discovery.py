@@ -13,7 +13,9 @@ def pipeline_directory(monkeypatch):
 
     # Use the real configs/pipeline directory
     pipeline_dir = Path(__file__).parent.parent.parent / "configs"  # / "pipeline"
-    monkeypatch.setattr("cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: pipeline_dir)
+    monkeypatch.setattr(
+        "cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: pipeline_dir
+    )
     return pipeline_dir
 
 
@@ -21,7 +23,9 @@ class TestListAvailablePipelinees:
     """Test the ListAvailablePipelinees RPC method."""
 
     def test_list_all_pipelinees(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(cuvis_ai_pb2.ListAvailablePipelineesRequest())
+        response = grpc_stub.ListAvailablePipelinees(
+            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        )
 
         assert len(response.pipelinees) > 1
         pipeline_names = {c.name for c in response.pipelinees}
@@ -63,32 +67,46 @@ class TestListAvailablePipelinees:
         empty_dir = tmp_path / "empty_pipelines"
         empty_dir.mkdir(exist_ok=True)
         (empty_dir / "pipeline").mkdir(exist_ok=True)
-        
-        monkeypatch.setattr("cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: empty_dir)
-        
-        response = grpc_stub.ListAvailablePipelinees(cuvis_ai_pb2.ListAvailablePipelineesRequest())
+
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: empty_dir
+        )
+
+        response = grpc_stub.ListAvailablePipelinees(
+            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        )
 
         assert len(response.pipelinees) == 0
 
     def test_list_includes_weights_info(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(cuvis_ai_pb2.ListAvailablePipelineesRequest())
+        response = grpc_stub.ListAvailablePipelinees(
+            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        )
 
         pipelinees_by_name = {c.name: c for c in response.pipelinees}
 
         rx_weights = pipeline_directory / "pipeline" / "statistical_based.pt"
-        assert pipelinees_by_name["statistical_based"].has_weights == rx_weights.exists()
+        assert (
+            pipelinees_by_name["statistical_based"].has_weights == rx_weights.exists()
+        )
         if rx_weights.exists():
             assert pipelinees_by_name["statistical_based"].weights_path
-            assert "statistical_based.pt" in pipelinees_by_name["statistical_based"].weights_path
+            assert (
+                "statistical_based.pt"
+                in pipelinees_by_name["statistical_based"].weights_path
+            )
         else:
             assert not pipelinees_by_name["statistical_based"].weights_path
 
         gradient_based_weights = pipeline_directory / "pipeline" / "gradient_based.pt"
         assert (
-            pipelinees_by_name["gradient_based"].has_weights == gradient_based_weights.exists()
+            pipelinees_by_name["gradient_based"].has_weights
+            == gradient_based_weights.exists()
         )
         if gradient_based_weights.exists():
-            assert "gradient_based.pt" in pipelinees_by_name["gradient_based"].weights_path
+            assert (
+                "gradient_based.pt" in pipelinees_by_name["gradient_based"].weights_path
+            )
         else:
             assert not pipelinees_by_name["gradient_based"].weights_path
 

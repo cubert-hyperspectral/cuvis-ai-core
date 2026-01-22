@@ -4,7 +4,12 @@ import grpc
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
-from cuvis_ai_core.training.config import DataConfig, PipelineConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.training.config import (
+    DataConfig,
+    PipelineConfig,
+    TrainingConfig,
+    TrainRunConfig,
+)
 
 
 def _build_pipeline(stub, session_id: str, pipeline_dict: dict) -> None:
@@ -18,7 +23,9 @@ def _build_pipeline(stub, session_id: str, pipeline_dict: dict) -> None:
     response = stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=json.dumps(payload).encode("utf-8")),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=json.dumps(payload).encode("utf-8")
+            ),
         )
     )
     assert response.success

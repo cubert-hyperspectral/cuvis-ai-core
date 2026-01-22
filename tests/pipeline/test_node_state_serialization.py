@@ -93,7 +93,9 @@ class TestNodeStateSerialization:
 
         assert torch.allclose(original_output["output"], loaded_output["output"])
 
-    def test_buffer_to_parameter_conversion_preserved(self, mock_statistical_trainable_node):
+    def test_buffer_to_parameter_conversion_preserved(
+        self, mock_statistical_trainable_node
+    ):
         """Test that buffer->parameter conversion is preserved through serialization."""
         node = mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
 
@@ -162,7 +164,9 @@ class TestNodeStateSerialization:
         with pytest.raises(RuntimeError):
             new_node2.load_state_dict(extra_state, strict=True)
 
-    def test_pipeline_integration_with_mock_node(self, mock_statistical_trainable_node, tmp_path):
+    def test_pipeline_integration_with_mock_node(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
         """Test that mock node works correctly in pipeline serialization."""
         # Create pipeline with mock node
         pipeline = CuvisPipeline("test_pipeline")

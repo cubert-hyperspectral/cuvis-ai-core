@@ -81,7 +81,9 @@ class TestNodeRegistry:
     def test_get_custom_node_via_importlib(self):
         """Test getting custom node via full import path."""
         # Test with a mock node from our test fixtures
-        cls = NodeRegistry.get("tests.fixtures.registry_test_nodes.MockMinMaxNormalizer")
+        cls = NodeRegistry.get(
+            "tests.fixtures.registry_test_nodes.MockMinMaxNormalizer"
+        )
         assert cls.__name__ == "MockMinMaxNormalizer"
 
     def test_get_missing_node_raises_error(self):
@@ -132,7 +134,7 @@ class TestNodeRegistry:
     def test_auto_register_package(self):
         """Test auto-registering entire package."""
         NodeRegistry.clear()
-        
+
         # Test with the test fixtures package which has mock nodes
         count = NodeRegistry.auto_register_package("tests.fixtures.test_nodes_package")
         assert count > 0
@@ -171,7 +173,9 @@ class TestNodeRegistry:
         assert normalizer_cls.__name__ == "MockMinMaxNormalizer"
 
         # Should still be able to get via full path
-        normalizer_cls2 = NodeRegistry.get("tests.fixtures.test_nodes_package.normalizers.MockMinMaxNormalizer")
+        normalizer_cls2 = NodeRegistry.get(
+            "tests.fixtures.test_nodes_package.normalizers.MockMinMaxNormalizer"
+        )
         assert normalizer_cls2 is normalizer_cls
 
     def test_import_from_path_invalid_format(self):
@@ -184,7 +188,9 @@ class TestNodeRegistry:
         # Try to import a function or variable instead of a class
         with pytest.raises(TypeError, match="not a class"):
             # __name__ is a module attribute, not a class
-            NodeRegistry._import_from_path("tests.fixtures.registry_test_nodes.__name__")
+            NodeRegistry._import_from_path(
+                "tests.fixtures.registry_test_nodes.__name__"
+            )
 
     def test_auto_register_invalid_package(self):
         """Test auto-registering invalid package raises ImportError."""

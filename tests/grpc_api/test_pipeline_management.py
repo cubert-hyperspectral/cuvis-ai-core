@@ -21,7 +21,9 @@ def _pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
 class TestSavePipeline:
     """Test the SavePipeline RPC method."""
 
-    def test_save_pipeline_creates_yaml_and_pt(self, grpc_stub, session, tmp_path, monkeypatch):
+    def test_save_pipeline_creates_yaml_and_pt(
+        self, grpc_stub, session, tmp_path, monkeypatch
+    ):
         """Test that SavePipeline creates both .yaml and .pt files."""
         monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(tmp_path))
         session_id = session()
@@ -47,7 +49,9 @@ class TestSavePipeline:
         assert Path(response.weights_path).parent == Path(response.pipeline_path).parent
         assert Path(response.weights_path).stem == Path(response.pipeline_path).stem
 
-    def test_save_pipeline_with_metadata(self, grpc_stub, session, tmp_path, monkeypatch):
+    def test_save_pipeline_with_metadata(
+        self, grpc_stub, session, tmp_path, monkeypatch
+    ):
         """Test that metadata is correctly saved."""
         monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(tmp_path))
         session_id = session()
@@ -97,7 +101,9 @@ class TestSavePipeline:
             )
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
-    def test_save_pipeline_creates_directories(self, grpc_stub, session, tmp_path, monkeypatch):
+    def test_save_pipeline_creates_directories(
+        self, grpc_stub, session, tmp_path, monkeypatch
+    ):
         """Test that SavePipeline creates parent directories if needed."""
         monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(tmp_path))
         session_id = session()
@@ -127,14 +133,18 @@ class TestLoadPipeline:
         self, grpc_stub, session, saved_pipeline, monkeypatch
     ):
         """Test LoadPipeline loads weights when weights_path is provided."""
-        monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent))
+        monkeypatch.setenv(
+            "CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent)
+        )
         session_id = session()
 
         response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
                 pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(saved_pipeline["pipeline_path"])
+                    config_bytes=_pipeline_bytes_from_path(
+                        saved_pipeline["pipeline_path"]
+                    )
                 ),
             )
         )
@@ -193,18 +203,27 @@ class TestLoadPipeline:
                     weights_path=missing_weights,
                 )
             )
-        assert exc.value.code() in [grpc.StatusCode.NOT_FOUND, grpc.StatusCode.INVALID_ARGUMENT]
+        assert exc.value.code() in [
+            grpc.StatusCode.NOT_FOUND,
+            grpc.StatusCode.INVALID_ARGUMENT,
+        ]
 
-    def test_load_pipeline_strict_mode(self, grpc_stub, session, saved_pipeline, monkeypatch):
+    def test_load_pipeline_strict_mode(
+        self, grpc_stub, session, saved_pipeline, monkeypatch
+    ):
         """Test strict weight loading mode."""
-        monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent))
+        monkeypatch.setenv(
+            "CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent)
+        )
         session_id = session()
 
         response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
                 pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(saved_pipeline["pipeline_path"])
+                    config_bytes=_pipeline_bytes_from_path(
+                        saved_pipeline["pipeline_path"]
+                    )
                 ),
             )
         )
@@ -218,16 +237,22 @@ class TestLoadPipeline:
 
         assert response.success
 
-    def test_load_pipeline_non_strict_mode(self, grpc_stub, session, saved_pipeline, monkeypatch):
+    def test_load_pipeline_non_strict_mode(
+        self, grpc_stub, session, saved_pipeline, monkeypatch
+    ):
         """Test non-strict weight loading allows missing keys."""
-        monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent))
+        monkeypatch.setenv(
+            "CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent)
+        )
         session_id = session()
 
         response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
                 pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(saved_pipeline["pipeline_path"])
+                    config_bytes=_pipeline_bytes_from_path(
+                        saved_pipeline["pipeline_path"]
+                    )
                 ),
             )
         )
@@ -241,9 +266,13 @@ class TestLoadPipeline:
 
         assert response.success
 
-    def test_load_pipeline_updates_session(self, grpc_stub, session, saved_pipeline, monkeypatch):
+    def test_load_pipeline_updates_session(
+        self, grpc_stub, session, saved_pipeline, monkeypatch
+    ):
         """Test that LoadPipeline properly updates the session pipeline."""
-        monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent))
+        monkeypatch.setenv(
+            "CUVIS_CONFIGS_DIR", str(Path(saved_pipeline["pipeline_path"]).parent)
+        )
         session_id = session()
 
         # Load the pipeline
@@ -251,7 +280,9 @@ class TestLoadPipeline:
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
                 pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(saved_pipeline["pipeline_path"])
+                    config_bytes=_pipeline_bytes_from_path(
+                        saved_pipeline["pipeline_path"]
+                    )
                 ),
             )
         )
@@ -275,7 +306,9 @@ class TestLoadPipeline:
 class TestPipelineRoundTrip:
     """Test complete save/load cycles."""
 
-    def test_save_load_preserves_structure(self, grpc_stub, session, tmp_path, monkeypatch):
+    def test_save_load_preserves_structure(
+        self, grpc_stub, session, tmp_path, monkeypatch
+    ):
         """Test that saving and loading preserves pipeline structure."""
         monkeypatch.setenv("CUVIS_CONFIGS_DIR", str(tmp_path))
         session_id = session()
@@ -296,7 +329,9 @@ class TestPipelineRoundTrip:
         assert save_response.success
 
         # Create a new session and load the saved pipeline using the new four-step workflow
-        new_session_response = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
+        new_session_response = grpc_stub.CreateSession(
+            cuvis_ai_pb2.CreateSessionRequest()
+        )
         new_session_id = new_session_response.session_id
         assert new_session_id  # Verify session was created successfully
 
@@ -325,4 +360,6 @@ class TestPipelineRoundTrip:
         assert len(pipeline_response.input_names) > 0  # Pipeline structure preserved
 
         # Cleanup
-        grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=new_session_id))
+        grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=new_session_id)
+        )

@@ -1059,7 +1059,6 @@ class CuvisPipeline:
         PortSpec
             Inferred specification
         """
-        from cuvis_ai_core.pipeline.ports import PortSpec
 
         if hasattr(value, "dtype") and hasattr(value, "shape"):
             # It's a tensor-like object

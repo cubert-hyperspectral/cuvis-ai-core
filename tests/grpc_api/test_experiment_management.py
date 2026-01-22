@@ -51,7 +51,9 @@ def shared_trained_session(grpc_server, test_data_files_cached):
 
     try:
         # Create session using RestoreTrainRun to get full config
-        resolved_path = materialize_trainrun_config("configs/trainrun/gradient_based.yaml")
+        resolved_path = materialize_trainrun_config(
+            "configs/trainrun/gradient_based.yaml"
+        )
         restore_req = cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=resolved_path)
         response = stub.RestoreTrainRun(restore_req)
         session_id = response.session_id
@@ -80,7 +82,9 @@ def shared_trained_session(grpc_server, test_data_files_cached):
 
 
 @pytest.fixture(scope="session")
-def shared_saved_trainrun_with_weights(grpc_server, shared_trained_session, tmp_path_factory):
+def shared_saved_trainrun_with_weights(
+    grpc_server, shared_trained_session, tmp_path_factory
+):
     """Pre-saved trainrun with weights for weight-loading tests.
 
     Creates a saved trainrun + weights once at session scope, which is then
@@ -184,7 +188,9 @@ class TestSaveTrainRun:
 
         response = grpc_stub.SaveTrainRun(
             cuvis_ai_pb2.SaveTrainRunRequest(
-                session_id=session_id, trainrun_path=trainrun_path, save_weights=save_weights
+                session_id=session_id,
+                trainrun_path=trainrun_path,
+                save_weights=save_weights,
             )
         )
 
@@ -229,7 +235,9 @@ class TestRestoreTrainRun:
 
         # Cleanup
         try:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=response.session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=response.session_id)
+            )
         except grpc.RpcError:
             pass
 
@@ -273,7 +281,9 @@ class TestRestoreTrainRun:
             )
             assert len(inference_response.outputs) > 0
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=response.session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=response.session_id)
+            )
 
     def test_restore_trainrun_invalid_file(self, grpc_stub, tmp_path):
         """Test error handling for non-existent trainrun file."""
@@ -285,7 +295,9 @@ class TestRestoreTrainRun:
             )
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
-    def test_restore_trainrun_missing_pipeline_nodes(self, grpc_stub, tmp_path, mock_pipeline_dict):
+    def test_restore_trainrun_missing_pipeline_nodes(
+        self, grpc_stub, tmp_path, mock_pipeline_dict
+    ):
         """Test error when trainrun references invalid pipeline (empty nodes)."""
         bad_trainrun_path = tmp_path / "bad_trainrun.yaml"
         bad_pipeline = mock_pipeline_dict.copy()
@@ -353,7 +365,9 @@ class TestRestoreTrainRun:
 
         # Should have at least some statistical nodes initialized
         if len(stat_nodes_initialized) > 0:
-            assert any(stat_nodes_initialized), "Weights load should initialize at least one node"
+            assert any(stat_nodes_initialized), (
+                "Weights load should initialize at least one node"
+            )
 
         # Cleanup
         grpc_stub.CloseSession(
@@ -456,7 +470,11 @@ class TestWeightTransfer:
         )
 
     def test_statistical_node_inference_without_refit(
-        self, grpc_stub, shared_saved_trainrun_with_weights, create_test_cube, grpc_session_manager
+        self,
+        grpc_stub,
+        shared_saved_trainrun_with_weights,
+        create_test_cube,
+        grpc_session_manager,
     ):
         """Test that statistical nodes work after weight restore without re-fitting."""
         from cuvis_ai_core.grpc import helpers
@@ -572,7 +590,9 @@ class TestExperimentWorkflow:
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=restored_session_id,
                 pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(pipeline_response.pipeline_path)
+                    config_bytes=_pipeline_bytes_from_path(
+                        pipeline_response.pipeline_path
+                    )
                 ),
             )
         )
@@ -610,7 +630,9 @@ class TestExperimentWorkflow:
         assert len(inference_response.outputs) > 0
 
         # Cleanup
-        grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=restored_session_id))
+        grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=restored_session_id)
+        )
 
     @pytest.mark.slow
     def test_experiment_reproducibility(self, grpc_stub, experiment_file):
@@ -636,7 +658,9 @@ class TestExperimentWorkflow:
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 
     @pytest.mark.slow
-    def test_resume_training_workflow(self, grpc_stub, shared_saved_trainrun_with_weights):
+    def test_resume_training_workflow(
+        self, grpc_stub, shared_saved_trainrun_with_weights
+    ):
         """Test resume training workflow: restore with weights -> continue training."""
         saved_data = shared_saved_trainrun_with_weights
 
@@ -656,7 +680,8 @@ class TestExperimentWorkflow:
         try:
             for progress in grpc_stub.Train(
                 cuvis_ai_pb2.TrainRequest(
-                    session_id=restored_session_id, trainer_type=cuvis_ai_pb2.TRAINER_TYPE_GRADIENT
+                    session_id=restored_session_id,
+                    trainer_type=cuvis_ai_pb2.TRAINER_TYPE_GRADIENT,
                 )
             ):
                 if progress.status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE:
@@ -675,4 +700,6 @@ class TestExperimentWorkflow:
         assert training_complete, "Training should complete or fail with valid error"
 
         # Cleanup
-        grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=restored_session_id))
+        grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=restored_session_id)
+        )

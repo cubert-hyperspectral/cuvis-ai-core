@@ -323,7 +323,9 @@ class TestBinaryDeciderBug:
             INPUT_SPECS = {}
             OUTPUT_SPECS = {
                 "scores": PortSpec(
-                    dtype=torch.float32, shape=(-1, -1, -1, 1), description="Normalized scores"
+                    dtype=torch.float32,
+                    shape=(-1, -1, -1, 1),
+                    description="Normalized scores",
                 )
             }
 

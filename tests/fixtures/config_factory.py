@@ -34,7 +34,9 @@ def create_pipeline_config_proto(
     # When loading weights, provide the identifier directly without validation
     # This allows the service to handle path resolution and error handling
     if load_weights:
-        return cuvis_ai_pb2.PipelineConfig(config_bytes=pipeline_identifier.encode("utf-8"))
+        return cuvis_ai_pb2.PipelineConfig(
+            config_bytes=pipeline_identifier.encode("utf-8")
+        )
 
     # For load_weights=False, we try to resolve and embed the full YAML content.
     # If resolution fails (e.g., non-existent pipeline), fall back to passing the
@@ -42,7 +44,9 @@ def create_pipeline_config_proto(
     try:
         pipeline_path = resolve_pipeline_path(pipeline_identifier)
     except FileNotFoundError:
-        return cuvis_ai_pb2.PipelineConfig(config_bytes=pipeline_identifier.encode("utf-8"))
+        return cuvis_ai_pb2.PipelineConfig(
+            config_bytes=pipeline_identifier.encode("utf-8")
+        )
 
     # Load the YAML config
     with open(pipeline_path) as f:
@@ -137,7 +141,10 @@ def mock_pipeline_dict():
             },
         ],
         "connections": [
-            {"from": "LentilsAnomalyDataNode.outputs.cube", "to": "SoftChannelSelector.inputs.data"},
+            {
+                "from": "LentilsAnomalyDataNode.outputs.cube",
+                "to": "SoftChannelSelector.inputs.data",
+            },
         ],
     }
 
@@ -145,7 +152,7 @@ def mock_pipeline_dict():
 @pytest.fixture
 def minimal_pipeline_dict():
     """Minimal valid pipeline configuration dictionary for tests.
-    
+
     Uses only mock nodes from cuvis-ai-core (no cuvis-ai dependencies).
     """
     return {

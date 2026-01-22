@@ -10,7 +10,11 @@ from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.utils.types import ExecutionStage
-from tests.fixtures import MinMaxNormalizer, MockStatisticalTrainableNode, SoftChannelSelector
+from tests.fixtures import (
+    MinMaxNormalizer,
+    MockStatisticalTrainableNode,
+    SoftChannelSelector,
+)
 
 
 class TestLinearPipeline:
@@ -59,7 +63,9 @@ class TestLinearPipeline:
         for _ in range(3):
             batch_data = torch.randn(2, 10, 10, 50)
             # Use simple port name for entry point
-            outputs = pipeline.forward(stage=ExecutionStage.INFERENCE, batch={"data": batch_data})
+            outputs = pipeline.forward(
+                stage=ExecutionStage.INFERENCE, batch={"data": batch_data}
+            )
             assert (selector.name, "selected") in outputs
             assert outputs[(selector.name, "selected")].shape == (2, 10, 10, 50)
 
@@ -91,14 +97,19 @@ class TestComplexDAG:
         trainable2.statistical_initialization(iter(train_data))
 
         input_cube = torch.randn(2, 10, 10, 50)
-        outputs = pipeline.forward(stage=ExecutionStage.INFERENCE, batch={"data": input_cube})
+        outputs = pipeline.forward(
+            stage=ExecutionStage.INFERENCE, batch={"data": input_cube}
+        )
 
         # Both trainable nodes should have outputs
         assert (trainable1.name, "output") in outputs
         assert (trainable2.name, "output") in outputs
 
         # Both should have same shape
-        assert outputs[(trainable1.name, "output")].shape == outputs[(trainable2.name, "output")].shape
+        assert (
+            outputs[(trainable1.name, "output")].shape
+            == outputs[(trainable2.name, "output")].shape
+        )
 
 
 class TestGradientFlow:
@@ -127,7 +138,9 @@ class TestGradientFlow:
 
         # Forward pass with gradient tracking
         input_cube = torch.randn(2, 10, 10, 50, requires_grad=True)
-        outputs = pipeline.forward(stage=ExecutionStage.TRAIN, batch={"data": input_cube})
+        outputs = pipeline.forward(
+            stage=ExecutionStage.TRAIN, batch={"data": input_cube}
+        )
 
         # Backward pass
         loss = outputs[(trainable.name, "output")].sum()
@@ -154,7 +167,9 @@ class TestGradientFlow:
         # Use 4D tensor as expected by normalizer (BHWC format)
         input_data = torch.randn(1, 2, 2, 3, requires_grad=True)
         # Use simple port name for entry point
-        outputs = pipeline.forward(stage=ExecutionStage.INFERENCE, batch={"data": input_data})
+        outputs = pipeline.forward(
+            stage=ExecutionStage.INFERENCE, batch={"data": input_data}
+        )
 
         # Output should still require grad
         output = outputs[(normalizer.name, "normalized")]

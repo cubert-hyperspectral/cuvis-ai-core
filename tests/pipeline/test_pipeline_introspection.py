@@ -1,5 +1,3 @@
-import pytest
-
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from tests.fixtures import LentilsAnomalyDataNode, MinMaxNormalizer, SoftChannelSelector
 
@@ -84,7 +82,8 @@ class TestPipelineIntrospection:
         # Check that normalizer's data port is NOT in the input specs
         # (it's connected from data_node)
         normalizer_data_in_specs = any(
-            spec["name"] == "data" and "normalizer" in str(spec) for spec in input_specs.values()
+            spec["name"] == "data" and "normalizer" in str(spec)
+            for spec in input_specs.values()
         )
         assert not normalizer_data_in_specs
 

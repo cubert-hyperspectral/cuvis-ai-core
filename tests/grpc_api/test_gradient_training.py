@@ -41,7 +41,8 @@ class TestGradientTraining:
                 saw_loss = True
                 # Loss keys can be "total" or have "loss" in them
                 assert any(
-                    key in ["total"] or "loss" in key.lower() for key in update.losses.keys()
+                    key in ["total"] or "loss" in key.lower()
+                    for key in update.losses.keys()
                 ), "Loss keys should contain 'total' or 'loss'"
                 break
 
@@ -58,7 +59,9 @@ class TestGradientTraining:
 
         # Validate stage reporting
         stages = {update.context.stage for update in updates}
-        assert cuvis_ai_pb2.EXECUTION_STAGE_TRAIN in stages, "Training should include TRAIN stage"
+        assert cuvis_ai_pb2.EXECUTION_STAGE_TRAIN in stages, (
+            "Training should include TRAIN stage"
+        )
 
         # Validate epoch progression
         epochs = [update.context.epoch for update in updates]

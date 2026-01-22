@@ -49,7 +49,9 @@ class TestStatisticalTraining:
         # Verify pipeline is updated by running inference
         # (Statistical training should initialize normalizers, selectors, etc.)
 
-        cube, wavelengths = create_test_cube(batch_size=1, height=32, width=32, num_channels=61)
+        cube, wavelengths = create_test_cube(
+            batch_size=1, height=32, width=32, num_channels=61
+        )
 
         inference_request = cuvis_ai_pb2.InferenceRequest(
             session_id=session_id,

@@ -27,14 +27,18 @@ class TestTrainingCapabilities:
     """Training capability discovery."""
 
     def test_get_training_capabilities(self, grpc_stub):
-        response = grpc_stub.GetTrainingCapabilities(cuvis_ai_pb2.GetTrainingCapabilitiesRequest())
+        response = grpc_stub.GetTrainingCapabilities(
+            cuvis_ai_pb2.GetTrainingCapabilitiesRequest()
+        )
 
         assert "adam" in response.supported_optimizers
         assert response.supported_schedulers
         assert response.supported_callbacks
 
     def test_callback_info_structure(self, grpc_stub):
-        response = grpc_stub.GetTrainingCapabilities(cuvis_ai_pb2.GetTrainingCapabilitiesRequest())
+        response = grpc_stub.GetTrainingCapabilities(
+            cuvis_ai_pb2.GetTrainingCapabilitiesRequest()
+        )
 
         for callback in response.supported_callbacks:
             assert callback.type
@@ -91,13 +95,18 @@ class TestConfigValidation:
         )
 
         assert not response.valid
-        assert any("learning rate" in err.lower() or "lr" in err.lower() for err in response.errors)
+        assert any(
+            "learning rate" in err.lower() or "lr" in err.lower()
+            for err in response.errors
+        )
 
 
 class TestComplexInputs:
     """Complex input parsing (bboxes, points, text prompts)."""
 
-    def test_inference_with_bounding_boxes(self, grpc_stub, trained_session, create_test_cube):
+    def test_inference_with_bounding_boxes(
+        self, grpc_stub, trained_session, create_test_cube
+    ):
         cube, wavelengths = create_test_cube(
             batch_size=1,
             height=32,
@@ -171,7 +180,9 @@ class TestComplexInputs:
 
         assert response.outputs
 
-    def test_inference_with_text_prompt(self, grpc_stub, trained_session, create_test_cube):
+    def test_inference_with_text_prompt(
+        self, grpc_stub, trained_session, create_test_cube
+    ):
         cube, wavelengths = create_test_cube(
             batch_size=1,
             height=32,

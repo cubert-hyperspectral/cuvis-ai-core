@@ -33,7 +33,9 @@ class TestPipelinePathResolution:
     def test_resolve_pipeline_path_absolute(self, tmp_path):
         """Test pipeline resolution with absolute path."""
         pipeline_file = tmp_path / "custom_pipeline.yaml"
-        pipeline_file.write_text("metadata:\n  name: test\nnodes: []\nconnections: []\n")
+        pipeline_file.write_text(
+            "metadata:\n  name: test\nnodes: []\nconnections: []\n"
+        )
 
         resolved = resolve_pipeline_path(str(pipeline_file))
         assert resolved == pipeline_file
@@ -152,7 +154,10 @@ class TestConfigOverrideUtility:
     def base_config(self):
         return {
             "metadata": {"name": "original"},
-            "nodes": [{"params": {"lr": 0.1, "path": "/tmp"}}, {"params": {"flag": False}}],
+            "nodes": [
+                {"params": {"lr": 0.1, "path": "/tmp"}},
+                {"params": {"flag": False}},
+            ],
             "connections": [],
         }
 
@@ -166,7 +171,10 @@ class TestConfigOverrideUtility:
         assert base_config["metadata"]["name"] == "original"
 
     def test_override_with_dict_format(self, base_config):
-        overrides = {"metadata": {"name": "dict-name"}, "nodes": [{"params": {"lr": 0.3}}]}
+        overrides = {
+            "metadata": {"name": "dict-name"},
+            "nodes": [{"params": {"lr": 0.3}}],
+        }
         updated = apply_config_overrides(base_config, overrides)
         assert updated["metadata"]["name"] == "dict-name"
         assert updated["nodes"][0]["params"]["lr"] == 0.3

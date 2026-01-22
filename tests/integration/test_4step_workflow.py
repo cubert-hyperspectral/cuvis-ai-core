@@ -71,7 +71,9 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     load_response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=pipeline_resolved.config_bytes),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=pipeline_resolved.config_bytes
+            ),
         )
     )
     assert load_response.success

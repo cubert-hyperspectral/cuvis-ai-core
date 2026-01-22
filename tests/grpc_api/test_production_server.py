@@ -28,7 +28,10 @@ def test_setup_logging_uses_json_formatter() -> None:
 
     try:
         setup_logging("INFO", "json")
-        assert any(isinstance(handler.formatter, JSONFormatter) for handler in root_logger.handlers)
+        assert any(
+            isinstance(handler.formatter, JSONFormatter)
+            for handler in root_logger.handlers
+        )
     finally:
         root_logger.handlers = original_handlers
         root_logger.setLevel(original_level)
@@ -43,7 +46,9 @@ def test_server_start_and_shutdown_updates_health_status() -> None:
         assert server.server is not None
         assert server.health_service is not None
 
-        resp = server.health_service.Check(health_pb2.HealthCheckRequest(), context=None)
+        resp = server.health_service.Check(
+            health_pb2.HealthCheckRequest(), context=None
+        )
         assert resp.status == health_pb2.HealthCheckResponse.SERVING
     finally:
         server.shutdown()

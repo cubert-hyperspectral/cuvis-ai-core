@@ -28,7 +28,9 @@ class TestGetPipelineInputs:
 
     def test_invalid_session(self, grpc_stub):
         with pytest.raises(grpc.RpcError) as exc_info:
-            grpc_stub.GetPipelineInputs(cuvis_ai_pb2.GetPipelineInputsRequest(session_id="invalid"))
+            grpc_stub.GetPipelineInputs(
+                cuvis_ai_pb2.GetPipelineInputsRequest(session_id="invalid")
+            )
 
         assert exc_info.value.code() == grpc.StatusCode.NOT_FOUND
 
@@ -58,7 +60,9 @@ class TestGetPipelineVisualization:
     def test_get_visualization_png(self, grpc_stub, session):
         session_id = session()
         response = grpc_stub.GetPipelineVisualization(
-            cuvis_ai_pb2.GetPipelineVisualizationRequest(session_id=session_id, format="png")
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(
+                session_id=session_id, format="png"
+            )
         )
 
         assert response.image_data
@@ -67,7 +71,9 @@ class TestGetPipelineVisualization:
     def test_get_visualization_svg(self, grpc_stub, session):
         session_id = session()
         response = grpc_stub.GetPipelineVisualization(
-            cuvis_ai_pb2.GetPipelineVisualizationRequest(session_id=session_id, format="svg")
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(
+                session_id=session_id, format="svg"
+            )
         )
 
         assert response.image_data

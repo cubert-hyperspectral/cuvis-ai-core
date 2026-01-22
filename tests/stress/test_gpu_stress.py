@@ -20,14 +20,12 @@ from tests.fixtures.mock_nodes import (
 from tests.fixtures.registry_test_nodes import MockMetricNode
 
 from .synthetic_data import create_small_scale_dataset
-from .test_pipeline_stress import SimpleDataNode, SyntheticDataModule, get_memory_usage, create_test_graph
-
-
-def create_test_graph(n_channels: int = 10):
-    """Import create_test_graph from test_pipeline_stress."""
-    from .test_pipeline_stress import create_test_graph as _create_test_graph
-
-    return _create_test_graph(n_channels)
+from .test_pipeline_stress import (
+    SimpleDataNode,
+    SyntheticDataModule,
+    get_memory_usage,
+    create_test_graph,
+)
 
 
 def create_realistic_test_graph(n_channels: int = 50) -> tuple[CuvisPipeline, dict]:
@@ -57,19 +55,27 @@ def create_realistic_test_graph(n_channels: int = 50) -> tuple[CuvisPipeline, di
 
     # First trainable layer - reduce dimensions
     hidden_dim_1 = min(20, n_channels)
-    trainable1 = MockStatisticalTrainableNode(input_dim=n_channels, hidden_dim=hidden_dim_1)
+    trainable1 = MockStatisticalTrainableNode(
+        input_dim=n_channels, hidden_dim=hidden_dim_1
+    )
     pipeline.connect(normalizer.normalized, trainable1.data)
 
     # Second trainable layer - further reduction
     hidden_dim_2 = min(10, hidden_dim_1)
-    trainable2 = MockStatisticalTrainableNode(input_dim=hidden_dim_1, hidden_dim=hidden_dim_2)
+    trainable2 = MockStatisticalTrainableNode(
+        input_dim=hidden_dim_1, hidden_dim=hidden_dim_2
+    )
     pipeline.connect(trainable1.output, trainable2.data)
 
     # Third trainable layer - expand back to original dimensions for reconstruction
-    trainable3 = MockStatisticalTrainableNode(input_dim=hidden_dim_2, hidden_dim=hidden_dim_1)
+    trainable3 = MockStatisticalTrainableNode(
+        input_dim=hidden_dim_2, hidden_dim=hidden_dim_1
+    )
     pipeline.connect(trainable2.output, trainable3.data)
 
-    trainable4 = MockStatisticalTrainableNode(input_dim=hidden_dim_1, hidden_dim=n_channels)
+    trainable4 = MockStatisticalTrainableNode(
+        input_dim=hidden_dim_1, hidden_dim=n_channels
+    )
     pipeline.connect(trainable3.output, trainable4.data)
 
     # Loss node - reconstruction loss comparing output with input
@@ -111,7 +117,9 @@ def test_gpu_acceleration():
     print("STRESS TEST: GPU Acceleration (Improved)")
     print("=" * 80)
     print(f"GPU Device: {torch.cuda.get_device_name(0)}")
-    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    print(
+        f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
+    )
 
     # Create realistic dataset - larger size to benefit from GPU
     print("\n--- Dataset Configuration ---")
@@ -213,8 +221,12 @@ def test_gpu_acceleration():
     start_cpu = time.time()
 
     # Find loss nodes and metric nodes
-    loss_nodes = [node for node in graph_cpu.nodes() if isinstance(node, SimpleLossNode)]
-    metric_nodes = [node for node in graph_cpu.nodes() if isinstance(node, MockMetricNode)]
+    loss_nodes = [
+        node for node in graph_cpu.nodes() if isinstance(node, SimpleLossNode)
+    ]
+    metric_nodes = [
+        node for node in graph_cpu.nodes() if isinstance(node, MockMetricNode)
+    ]
     if loss_nodes:
         trainer = GradientTrainer(
             pipeline=graph_cpu,
@@ -273,7 +285,9 @@ def test_gpu_acceleration():
     warmup_dm_gpu = SyntheticDataModule(warmup_data_gpu, batch_size=batch_size)
 
     # Statistical initialization for warmup
-    stat_warmup_gpu = StatisticalTrainer(pipeline=graph_gpu_warmup, datamodule=warmup_dm_gpu)
+    stat_warmup_gpu = StatisticalTrainer(
+        pipeline=graph_gpu_warmup, datamodule=warmup_dm_gpu
+    )
     stat_warmup_gpu.fit()
 
     # Unfreeze trainable nodes for gradient training
@@ -328,7 +342,9 @@ def test_gpu_acceleration():
     start_gpu = time.time()
 
     # Use external trainer for GPU
-    loss_nodes_gpu = [node for node in graph_gpu.nodes() if isinstance(node, SimpleLossNode)]
+    loss_nodes_gpu = [
+        node for node in graph_gpu.nodes() if isinstance(node, SimpleLossNode)
+    ]
     metric_nodes_gpu = [
         node for node in graph_gpu.nodes() if isinstance(node, MockMetricNode)
     ]
@@ -454,7 +470,9 @@ def test_gpu_batch_size_scaling():
         warmup_dm = SyntheticDataModule(warmup_data, batch_size=batch_size)
 
         # Statistical initialization for warmup
-        stat_warmup_batch = StatisticalTrainer(pipeline=graph_warmup, datamodule=warmup_dm)
+        stat_warmup_batch = StatisticalTrainer(
+            pipeline=graph_warmup, datamodule=warmup_dm
+        )
         stat_warmup_batch.fit()
 
         # Unfreeze trainable nodes for gradient training
@@ -509,7 +527,9 @@ def test_gpu_batch_size_scaling():
         start_time = time.time()
 
         # Use external trainer
-        loss_nodes_batch = [node for node in graph.nodes() if isinstance(node, SimpleLossNode)]
+        loss_nodes_batch = [
+            node for node in graph.nodes() if isinstance(node, SimpleLossNode)
+        ]
         metric_nodes_batch = [
             node for node in graph.nodes() if isinstance(node, MockMetricNode)
         ]
@@ -567,8 +587,12 @@ def test_gpu_batch_size_scaling():
 
     # Analysis
     print("\nAnalysis:")
-    print(f"  Smallest batch (size={batch_sizes[0]}): {results[0]['throughput']:.2f} samples/s")
-    print(f"  Largest batch (size={batch_sizes[-1]}): {results[-1]['throughput']:.2f} samples/s")
+    print(
+        f"  Smallest batch (size={batch_sizes[0]}): {results[0]['throughput']:.2f} samples/s"
+    )
+    print(
+        f"  Largest batch (size={batch_sizes[-1]}): {results[-1]['throughput']:.2f} samples/s"
+    )
     improvement = results[-1]["throughput"] / results[0]["throughput"]
     print(f"  Improvement: {improvement:.2f}x faster with larger batches")
 
@@ -622,7 +646,9 @@ def test_gpu_memory_scaling():
         )
 
         # Use external trainer
-        loss_nodes_mem = [node for node in graph.nodes() if isinstance(node, SimpleLossNode)]
+        loss_nodes_mem = [
+            node for node in graph.nodes() if isinstance(node, SimpleLossNode)
+        ]
         metric_nodes_mem = [
             node for node in graph.nodes() if isinstance(node, MockMetricNode)
         ]
@@ -657,7 +683,9 @@ def test_gpu_memory_scaling():
     print(f"{'Batch Size':>12} | {'Allocated (MB)':>15} | {'Peak (MB)':>12}")
     print("-" * 45)
     for r in results:
-        print(f"{r['batch_size']:>12} | {r['allocated_mb']:>15.2f} | {r['peak_mb']:>12.2f}")
+        print(
+            f"{r['batch_size']:>12} | {r['allocated_mb']:>15.2f} | {r['peak_mb']:>12.2f}"
+        )
 
     print("\n✓ GPU memory scaling test passed")
 

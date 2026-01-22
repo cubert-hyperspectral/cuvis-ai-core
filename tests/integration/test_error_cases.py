@@ -5,7 +5,9 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 
 
-def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical_based"):
+def _load_pipeline(
+    grpc_stub, session_id: str, pipeline_name: str = "statistical_based"
+):
     """Helper to resolve and load a pipeline using bytes-based API."""
     config_response = grpc_stub.ResolveConfig(
         cuvis_ai_pb2.ResolveConfigRequest(
@@ -17,7 +19,9 @@ def _load_pipeline(grpc_stub, session_id: str, pipeline_name: str = "statistical
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_response.config_bytes),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=config_response.config_bytes
+            ),
         )
     )
     assert response.success
@@ -143,7 +147,9 @@ class TestErrorCases:
         except Exception as e:
             # Should report YAML or parsing error
             assert (
-                "yaml" in str(e).lower() or "parse" in str(e).lower() or "invalid" in str(e).lower()
+                "yaml" in str(e).lower()
+                or "parse" in str(e).lower()
+                or "invalid" in str(e).lower()
             )
 
         # Cleanup
@@ -229,12 +235,16 @@ name: invalid-config
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        response1 = grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+        response1 = grpc_stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+        )
         assert response1.success
 
         # Try to close again
         try:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
             # May succeed silently or raise error
         except Exception as e:
             assert "session" in str(e).lower() or "not found" in str(e).lower()
@@ -302,7 +312,9 @@ name: invalid-config
         # This tests session state management
         for _ in range(5):
             try:
-                grpc_stub.GetTrainStatus(cuvis_ai_pb2.GetTrainStatusRequest(session_id=session_id))
+                grpc_stub.GetTrainStatus(
+                    cuvis_ai_pb2.GetTrainStatusRequest(session_id=session_id)
+                )
             except Exception:
                 # May fail if training not started, which is fine
                 pass

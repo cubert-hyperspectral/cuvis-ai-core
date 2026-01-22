@@ -14,7 +14,6 @@ from cuvis_ai_core.data.coco_labels import Annotation, COCOData, RLE2mask
 from cuvis_ai_core.utils.general import _resolve_measurement_indices
 
 
-
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
@@ -135,6 +134,7 @@ class SingleCu3sDataset(Dataset):
 
         return out
 
+
 class SingleCu3sDataModule(pl.LightningDataModule):
     def __init__(
         self,
@@ -242,19 +242,26 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             raise RuntimeError(
                 "Train dataset is not initialized. Call setup('fit') first."
             )
-        return DataLoader(self.train_ds, shuffle=True, batch_size=self.batch_size, num_workers=0)
+        return DataLoader(
+            self.train_ds, shuffle=True, batch_size=self.batch_size, num_workers=0
+        )
 
     def val_dataloader(self) -> DataLoader:
         if self.val_ds is None:
             raise RuntimeError("Validation dataset is not initialized.")
-        return DataLoader(self.val_ds, shuffle=False, batch_size=self.batch_size, num_workers=0)
+        return DataLoader(
+            self.val_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
+        )
 
     def test_dataloader(self) -> DataLoader:
         if self.test_ds is None:
             raise RuntimeError(
                 "Test dataset is not initialized. Call setup('test') first."
             )
-        return DataLoader(self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=0)
+        return DataLoader(
+            self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
+        )
+
 
 def create_mask(
     annotations: Iterable[Annotation],

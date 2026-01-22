@@ -58,7 +58,9 @@ class TestTrainingConfig:
         config = TrainingConfig()
         assert config.scheduler is None
 
-        config_with_scheduler = TrainingConfig(scheduler=SchedulerConfig(name="cosine", t_max=10))
+        config_with_scheduler = TrainingConfig(
+            scheduler=SchedulerConfig(name="cosine", t_max=10)
+        )
         assert config_with_scheduler.scheduler.name == "cosine"
 
 

@@ -35,7 +35,9 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
     trainrun_file = Path(trainrun_path)
     raw = yaml.safe_load(trainrun_file.read_text())
     if not isinstance(raw, dict) or "defaults" not in raw:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", mode="w", encoding="utf-8")
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".yaml", mode="w", encoding="utf-8"
+        )
         yaml.safe_dump(raw, tmp, sort_keys=False)
         return tmp.name
 
@@ -46,7 +48,11 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
         if not isinstance(entry, dict):
             continue
         for raw_key, name in entry.items():
-            key = raw_key.split("@")[-1].lstrip("/") if isinstance(raw_key, str) else str(raw_key)
+            key = (
+                raw_key.split("@")[-1].lstrip("/")
+                if isinstance(raw_key, str)
+                else str(raw_key)
+            )
             subdir = base_dir / key
             candidate = subdir / f"{name}.yaml"
             if candidate.exists():
@@ -64,7 +70,13 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
     # Hoist training-scoped fields (Hydra-style) to top-level TrainRunConfig fields
     training_cfg = resolved.get("training")
     if isinstance(training_cfg, dict):
-        for field in ("loss_nodes", "metric_nodes", "unfreeze_nodes", "freeze_nodes", "output_dir"):
+        for field in (
+            "loss_nodes",
+            "metric_nodes",
+            "unfreeze_nodes",
+            "freeze_nodes",
+            "output_dir",
+        ):
             if field in training_cfg and field not in resolved:
                 resolved[field] = training_cfg.pop(field)
 
@@ -72,8 +84,12 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
         optimizer_cfg = training_cfg.get("optimizer")
         if isinstance(optimizer_cfg, dict) and "scheduler" in optimizer_cfg:
             scheduler_cfg = optimizer_cfg.pop("scheduler")
-            if "scheduler" in training_cfg and isinstance(training_cfg["scheduler"], dict):
-                training_cfg["scheduler"] = _deep_merge(training_cfg["scheduler"], scheduler_cfg)
+            if "scheduler" in training_cfg and isinstance(
+                training_cfg["scheduler"], dict
+            ):
+                training_cfg["scheduler"] = _deep_merge(
+                    training_cfg["scheduler"], scheduler_cfg
+                )
             else:
                 training_cfg["scheduler"] = scheduler_cfg
 
@@ -95,12 +111,16 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
                         "auto_insert_metric_name",
                     }
                     callbacks_cfg["checkpoint"] = {
-                        k: v for k, v in checkpoint_cfg.items() if k in allowed_checkpoint_keys
+                        k: v
+                        for k, v in checkpoint_cfg.items()
+                        if k in allowed_checkpoint_keys
                     }
                 else:
                     callbacks_cfg["checkpoint"] = checkpoint_cfg
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", mode="w", encoding="utf-8")
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, suffix=".yaml", mode="w", encoding="utf-8"
+    )
     yaml.safe_dump(resolved, tmp, sort_keys=False)
     return tmp.name
 
@@ -118,7 +138,9 @@ def _safe_close_session(grpc_stub: Any, session_id: str, max_retries: int = 3) -
     """
     for attempt in range(max_retries):
         try:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
             logger.debug(f"Successfully closed session {session_id}")
             return True
         except grpc.RpcError as e:
@@ -173,7 +195,9 @@ def trained_pipeline_session(
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
-                pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_response.config_bytes),
+                pipeline=cuvis_ai_pb2.PipelineConfig(
+                    config_bytes=config_response.config_bytes
+                ),
             )
         )
         assert load_response.success
@@ -239,7 +263,9 @@ def session(grpc_stub: Any) -> Generator[Callable[[str], str], None, None]:
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
-                pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_response.config_bytes),
+                pipeline=cuvis_ai_pb2.PipelineConfig(
+                    config_bytes=config_response.config_bytes
+                ),
             )
         )
         assert load_response.success

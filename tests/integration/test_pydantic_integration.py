@@ -1,6 +1,11 @@
 import json
 
-from cuvis_ai_core.training.config import DataConfig, PipelineConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.training.config import (
+    DataConfig,
+    PipelineConfig,
+    TrainingConfig,
+    TrainRunConfig,
+)
 
 
 def test_complete_trainrun_serialization():

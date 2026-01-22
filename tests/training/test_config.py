@@ -139,9 +139,7 @@ class TestUnfreezeNodesByName:
             init_method="uniform",
         )
         trainable = MockStatisticalTrainableNode(
-            name="MockStatisticalTrainableNode",
-            input_dim=3,
-            hidden_dim=5
+            name="MockStatisticalTrainableNode", input_dim=3, hidden_dim=5
         )
 
         # Connect nodes to add them to pipeline (pipeline auto-adds nodes on connect)
@@ -179,14 +177,18 @@ class TestUnfreezeNodesByName:
                 trainable = node
 
         assert selector is not None, "SoftChannelSelector not found in pipeline"
-        assert trainable is not None, "MockStatisticalTrainableNode not found in pipeline"
+        assert trainable is not None, (
+            "MockStatisticalTrainableNode not found in pipeline"
+        )
 
         # After freezing, trainable parameter count should be 0
         assert sum(p.numel() for p in selector.parameters() if p.requires_grad) == 0
         assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) == 0
 
         # Now unfreeze
-        mock_pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "MockStatisticalTrainableNode"])
+        mock_pipeline.unfreeze_nodes_by_name(
+            ["SoftChannelSelector", "MockStatisticalTrainableNode"]
+        )
 
         # After unfreezing, should have trainable parameters again
         assert sum(p.numel() for p in selector.parameters() if p.requires_grad) > 0
@@ -195,7 +197,9 @@ class TestUnfreezeNodesByName:
     def test_unfreeze_missing_nodes_raises_error(self, mock_pipeline):
         """Test that missing node names raise ValueError with helpful message."""
         with pytest.raises(ValueError) as exc_info:
-            mock_pipeline.unfreeze_nodes_by_name(["NonExistentNode", "AnotherMissingNode"])
+            mock_pipeline.unfreeze_nodes_by_name(
+                ["NonExistentNode", "AnotherMissingNode"]
+            )
 
         error_msg = str(exc_info.value)
         assert "Trainable nodes not found in pipeline" in error_msg
@@ -208,7 +212,9 @@ class TestUnfreezeNodesByName:
     def test_unfreeze_partial_missing_nodes_raises_error(self, mock_pipeline):
         """Test that partially missing nodes raise error."""
         with pytest.raises(ValueError) as exc_info:
-            mock_pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "NonExistentNode"])
+            mock_pipeline.unfreeze_nodes_by_name(
+                ["SoftChannelSelector", "NonExistentNode"]
+            )
 
         error_msg = str(exc_info.value)
         assert "NonExistentNode" in error_msg

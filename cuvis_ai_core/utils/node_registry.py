@@ -5,7 +5,12 @@ import inspect
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Type, Union
+from typing import Dict, Optional, Union
+from cuvis_ai_core.utils.plugin_config import (
+    GitPluginConfig,
+    LocalPluginConfig,
+)
+
 
 try:
     import git
@@ -13,7 +18,6 @@ except ImportError:
     git = None  # Git operations will fail gracefully with clear error
 
 from loguru import logger
-from cuvis_ai_core.node.node import Node
 
 
 class NodeRegistry:
@@ -31,10 +35,12 @@ class NodeRegistry:
         custom_class = NodeRegistry.get("my_package.nodes.CustomRXDetector")
     """
 
-    _builtin_registry: Dict[str, type] = {}      # Existing: @register decorated nodes
-    _plugin_registry: Dict[str, type] = {}       # NEW: Plugin nodes by class name
-    _plugin_configs: Dict[str, "PluginConfig"] = {}  # NEW: Track loaded plugins
-    _plugin_class_map: Dict[str, str] = {}       # NEW: class_path → plugin_name
+    _builtin_registry: Dict[str, type] = {}  # Existing: @register decorated nodes
+    _plugin_registry: Dict[str, type] = {}  # NEW: Plugin nodes by class name
+    _plugin_configs: Dict[
+        str, Union[GitPluginConfig, LocalPluginConfig]
+    ] = {}  # NEW: Track loaded plugins
+    _plugin_class_map: Dict[str, str] = {}  # NEW: class_path → plugin_name
     _cache_dir: Path = Path.home() / ".cuvis_plugins"  # NEW: Git cache directory
 
     @classmethod
@@ -333,7 +339,9 @@ class NodeRegistry:
         elif "path" in config:
             if manifest_dir is not None:
                 config = dict(config)
-                config["path"] = str(LocalPluginConfig(**config).resolve_path(manifest_dir))
+                config["path"] = str(
+                    LocalPluginConfig(**config).resolve_path(manifest_dir)
+                )
             plugin_config = LocalPluginConfig.model_validate(config)
             plugin_path = cls._ensure_local_plugin(name, plugin_config)
         else:
@@ -356,7 +364,9 @@ class NodeRegistry:
 
                 logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
             except Exception as e:
-                logger.warning(f"Failed to import '{class_path}' from plugin '{name}': {e}")
+                logger.warning(
+                    f"Failed to import '{class_path}' from plugin '{name}': {e}"
+                )
 
         # Track plugin config
         cls._plugin_configs[name] = plugin_config
@@ -461,7 +471,7 @@ class NodeRegistry:
         return cls._clone_repository(config.repo, cache_dir, config.ref)
 
     @classmethod
-    def _ensure_local_plugin(cls, plugin_name: str, config: "LocalPluginConfig") -> Path:
+    def _ensure_local_plugin(cls, plugin_name: str, config: LocalPluginConfig) -> Path:
         """Resolve and validate local plugin path."""
         plugin_path = Path(config.path)
         if not plugin_path.is_absolute():
@@ -490,7 +500,9 @@ class NodeRegistry:
             # Try as branch
             remote_branches = [ref.name for ref in repo.refs if "origin/" in ref.name]
             if f"origin/{expected_ref}" in remote_branches:
-                return current_commit == repo.commit(f"origin/{expected_ref}").hexsha[:7]
+                return (
+                    current_commit == repo.commit(f"origin/{expected_ref}").hexsha[:7]
+                )
 
             # Try as commit hash
             return current_commit == expected_ref[:7]

@@ -115,7 +115,9 @@ class TestConnectionValidation:
 
         # Connecting incompatible types should raise error
         with pytest.raises(PortCompatibilityError, match=r"(?i)dtype"):
-            pipeline.connect(float_node.outputs.out, int_node.inputs.__getattribute__("in"))
+            pipeline.connect(
+                float_node.outputs.out, int_node.inputs.__getattribute__("in")
+            )
 
     def test_connecting_incompatible_shapes_raises_error(self) -> None:
         """Connecting mismatched shapes should raise PortCompatibilityError."""

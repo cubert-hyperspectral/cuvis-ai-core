@@ -118,7 +118,9 @@ def resolve_and_load_pipeline(
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_response.config_bytes),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=config_response.config_bytes
+            ),
         )
     )
     assert response.success

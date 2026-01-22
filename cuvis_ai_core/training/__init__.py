@@ -7,8 +7,6 @@ This module provides:
 - Internal Lightning module for training orchestration
 """
 
-
-
 from cuvis_ai_core.training.config import (
     CallbacksConfig,
     DataConfig,
@@ -18,7 +16,7 @@ from cuvis_ai_core.training.config import (
     TrainerConfig,
     TrainingConfig,
     TrainRunConfig,
-) 
+)
 from cuvis_ai_core.training.datamodule import CuvisDataModule
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_core.utils.types import Context

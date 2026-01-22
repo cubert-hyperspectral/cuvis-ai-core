@@ -27,14 +27,24 @@ def pipeline_with_connections():
     return {
         "metadata": {"name": "test_pipeline"},
         "nodes": [
-            {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-6}},
+            {
+                "name": "normalizer",
+                "class": "MinMaxNormalizer",
+                "params": {"eps": 1e-6},
+            },
             {
                 "name": "selector",
                 "class": "SoftChannelSelector",
-                "params": {"n_select": 3, "input_channels": 10, "init_method": "variance"},
+                "params": {
+                    "n_select": 3,
+                    "input_channels": 10,
+                    "init_method": "variance",
+                },
             },
         ],
-        "connections": [{"from": "normalizer.outputs.normalized", "to": "selector.inputs.data"}],
+        "connections": [
+            {"from": "normalizer.outputs.normalized", "to": "selector.inputs.data"}
+        ],
     }
 
 
@@ -87,7 +97,11 @@ connections: []
                 {
                     "name": "selector",
                     "class": "SoftChannelSelector",
-                    "params": {"n_select": 3, "input_channels": 61, "init_method": "variance"},
+                    "params": {
+                        "n_select": 3,
+                        "input_channels": 61,
+                        "init_method": "variance",
+                    },
                 }
             ],
             "connections": [],
@@ -115,7 +129,9 @@ connections: []
         """Test that invalid connection format raises error."""
         config = {
             "metadata": {"name": "test"},
-            "nodes": [{"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}],
+            "nodes": [
+                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+            ],
             "connections": [
                 {
                     "from": "invalid_format",  # Missing .outputs.port
@@ -132,8 +148,12 @@ connections: []
         """Test that missing source node raises error."""
         config = {
             "metadata": {"name": "test"},
-            "nodes": [{"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}],
-            "connections": [{"from": "missing_node.outputs.data", "to": "normalizer.inputs.data"}],
+            "nodes": [
+                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+            ],
+            "connections": [
+                {"from": "missing_node.outputs.data", "to": "normalizer.inputs.data"}
+            ],
         }
 
         builder = PipelineBuilder()
@@ -144,9 +164,14 @@ connections: []
         """Test that missing target node raises error."""
         config = {
             "metadata": {"name": "test"},
-            "nodes": [{"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}],
+            "nodes": [
+                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+            ],
             "connections": [
-                {"from": "normalizer.outputs.normalized", "to": "missing_node.inputs.data"}
+                {
+                    "from": "normalizer.outputs.normalized",
+                    "to": "missing_node.inputs.data",
+                }
             ],
         }
 
@@ -159,9 +184,21 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-6}},
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-6}},
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-6}},
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-6},
+                },
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-6},
+                },
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-6},
+                },
             ],
             "connections": [],
         }
@@ -238,9 +275,21 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-6}},
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-7}},
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {"eps": 1e-8}},
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-6},
+                },
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-7},
+                },
+                {
+                    "name": "normalizer",
+                    "class": "MinMaxNormalizer",
+                    "params": {"eps": 1e-8},
+                },
             ],
             "connections": [],
         }
@@ -280,7 +329,9 @@ connections: []
         assert "normalizer-3" in node_names_after_add, (
             "New node should be normalizer-3, not normalizer-1"
         )
-        assert "normalizer-1" not in node_names_after_add, "Gap at counter 1 should be preserved"
+        assert "normalizer-1" not in node_names_after_add, (
+            "Gap at counter 1 should be preserved"
+        )
         assert node_names_after_add == {"normalizer", "normalizer-2", "normalizer-3"}
         assert len(list(pipeline.nodes)) == 3
 

@@ -93,7 +93,9 @@ class TestNodePortAttributes:
 
         class TestNode(Node):
             INPUT_SPECS = {}
-            OUTPUT_SPECS = {"transformed": PortSpec(dtype=torch.float32, shape=(-1, -1))}
+            OUTPUT_SPECS = {
+                "transformed": PortSpec(dtype=torch.float32, shape=(-1, -1))
+            }
 
             def forward(self, **inputs):
                 raise NotImplementedError

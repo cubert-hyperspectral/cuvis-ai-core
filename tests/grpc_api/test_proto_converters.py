@@ -174,7 +174,10 @@ class TestProcessingModeMapping:
         proto_refl = cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE
 
         assert helpers.proto_to_processing_mode(proto_raw) == cuvis.ProcessingMode.Raw
-        assert helpers.proto_to_processing_mode(proto_refl) == cuvis.ProcessingMode.Reflectance
+        assert (
+            helpers.proto_to_processing_mode(proto_refl)
+            == cuvis.ProcessingMode.Reflectance
+        )
 
     def test_processing_mode_invalid(self):
         """Test error handling for invalid processing mode"""

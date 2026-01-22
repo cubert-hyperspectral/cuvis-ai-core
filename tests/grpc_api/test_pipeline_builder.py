@@ -174,7 +174,10 @@ class TestPipelineBuilderYAML:
         # (Pipeline doesn't expose a connections() method, but we can verify it works)
         batch_size = 2
         cube, wavelengths = create_test_cube(
-            batch_size=batch_size, height=3, width=3, num_channels=selector.input_channels
+            batch_size=batch_size,
+            height=3,
+            width=3,
+            num_channels=selector.input_channels,
         )
         outputs = pipeline.forward(batch={"cube": cube, "wavelengths": wavelengths})
         assert len(outputs) > 0  # If connections work, we get outputs

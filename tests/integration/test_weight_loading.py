@@ -20,7 +20,9 @@ class TestWeightLoading:
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/statistical_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session_id, path="pipeline/statistical_based"
+        )
 
         # Create dummy weights file
         weights_file = tmp_path / "test_weights.pt"
@@ -48,7 +50,9 @@ class TestWeightLoading:
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/statistical_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session_id, path="pipeline/statistical_based"
+        )
 
         # Create weights and serialize to bytes
         weights_file = tmp_path / "test_weights.pt"
@@ -77,7 +81,9 @@ class TestWeightLoading:
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/statistical_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session_id, path="pipeline/statistical_based"
+        )
 
         # Create weights with wrong keys (mismatch)
         weights_file = tmp_path / "mismatched_weights.pt"
@@ -107,7 +113,9 @@ class TestWeightLoading:
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/statistical_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session_id, path="pipeline/statistical_based"
+        )
 
         # Try to load non-existent weights
         with pytest.raises(grpc.RpcError) as exc_info:
@@ -159,7 +167,9 @@ class TestWeightLoading:
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/statistical_based")
+        resolve_and_load_pipeline(
+            grpc_stub, session_id, path="pipeline/statistical_based"
+        )
 
         # Check if co-located weights exist
         weights_path = Path("pipeline/statistical_based.pt")  # Relative to configs/

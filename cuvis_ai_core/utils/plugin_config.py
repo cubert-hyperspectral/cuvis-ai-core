@@ -5,12 +5,14 @@ from typing import List, Dict, Union, Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import yaml
 
+
 class _BasePluginConfig(BaseModel):
     """Base plugin configuration with strict validation.
 
     All plugin types inherit from this base class to ensure
     consistent validation and error handling.
     """
+
     model_config = ConfigDict(
         extra="forbid",  # Reject unknown fields (catch typos)
         validate_assignment=True,  # Validate on attribute assignment
@@ -33,6 +35,7 @@ class _BasePluginConfig(BaseModel):
                     "Must be fully-qualified (e.g., 'package.module.ClassName')"
                 )
         return value
+
 
 class GitPluginConfig(_BasePluginConfig):
     """Git repository plugin configuration.
@@ -57,9 +60,11 @@ class GitPluginConfig(_BasePluginConfig):
     @classmethod
     def _validate_repo_url(cls, value: str) -> str:
         """Validate Git repository URL format."""
-        if not (value.startswith("git@") or
-                value.startswith("https://") or
-                value.startswith("http://")):
+        if not (
+            value.startswith("git@")
+            or value.startswith("https://")
+            or value.startswith("http://")
+        ):
             raise ValueError(
                 f"Invalid repo URL '{value}'. "
                 "Must start with 'git@', 'https://', or 'http://'"
@@ -73,6 +78,7 @@ class GitPluginConfig(_BasePluginConfig):
         if not value.strip():
             raise ValueError("Git ref cannot be empty")
         return value.strip()
+
 
 class LocalPluginConfig(_BasePluginConfig):
     """Local filesystem plugin configuration.
@@ -110,21 +116,26 @@ class LocalPluginConfig(_BasePluginConfig):
             plugin_path = (manifest_dir / plugin_path).resolve()
         return plugin_path
 
+
 class PluginManifest(BaseModel):
     """Complete plugin manifest containing all plugin configurations.
 
     This is the root configuration object validated when loading
     a plugins.yaml file or dictionary.
     """
+
     model_config = ConfigDict(
         extra="forbid",
         validate_assignment=True,
     )
 
-    plugins: Dict[str, Annotated[
-        Union[GitPluginConfig, LocalPluginConfig],
-        Field(discriminator=None)  # Pydantic will auto-detect based on fields
-    ]] = Field(
+    plugins: Dict[
+        str,
+        Annotated[
+            Union[GitPluginConfig, LocalPluginConfig],
+            Field(discriminator=None),  # Pydantic will auto-detect based on fields
+        ],
+    ] = Field(
         description="Map of plugin names to their configurations",
         default_factory=dict,
     )
@@ -136,8 +147,7 @@ class PluginManifest(BaseModel):
         for name in value.keys():
             if not name.isidentifier():
                 raise ValueError(
-                    f"Invalid plugin name '{name}'. "
-                    "Must be a valid Python identifier"
+                    f"Invalid plugin name '{name}'. Must be a valid Python identifier"
                 )
         return value
 

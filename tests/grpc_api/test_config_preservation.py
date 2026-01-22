@@ -17,7 +17,9 @@ from tests.fixtures.sessions import materialize_trainrun_config
 class TestConfigPreservationThroughTraining:
     """Test that configs loaded from train run files are preserved through training."""
 
-    def test_max_epochs_preserved_through_statistical_training(self, grpc_stub, tmp_path):
+    def test_max_epochs_preserved_through_statistical_training(
+        self, grpc_stub, tmp_path
+    ):
         """
         Regression test: Verify that max_epochs from train run config is preserved
         when running statistical training.
@@ -79,10 +81,14 @@ class TestConfigPreservationThroughTraining:
             )
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
 
     @pytest.mark.slow
-    def test_max_epochs_used_in_gradient_training(self, grpc_stub, trained_session, tmp_path):
+    def test_max_epochs_used_in_gradient_training(
+        self, grpc_stub, trained_session, tmp_path
+    ):
         """
         Regression test: Verify that gradient training uses max_epochs from loaded config.
 
@@ -121,7 +127,9 @@ class TestConfigPreservationThroughTraining:
             assert max_epoch_seen >= 1, "Should have completed at least 1 epoch"
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
 
     def test_all_training_config_fields_preserved(self, grpc_stub, tmp_path):
         """
@@ -132,7 +140,7 @@ class TestConfigPreservationThroughTraining:
 
         # Resolve and restore
         resolved_path = materialize_trainrun_config(trainrun_path)
-        
+
         # Load resolved config (Hydra-composed)
         with open(resolved_path) as f:
             original_config = yaml.safe_load(f)
@@ -174,11 +182,19 @@ class TestConfigPreservationThroughTraining:
                 saved_training["trainer"]["accelerator"]
                 == original_training["trainer"]["accelerator"]
             )
-            assert saved_training["optimizer"]["name"] == original_training["optimizer"]["name"]
-            assert saved_training["optimizer"]["lr"] == original_training["optimizer"]["lr"]
+            assert (
+                saved_training["optimizer"]["name"]
+                == original_training["optimizer"]["name"]
+            )
+            assert (
+                saved_training["optimizer"]["lr"]
+                == original_training["optimizer"]["lr"]
+            )
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
 
 
 class TestTrainingConfigFromDictConfig:
@@ -269,7 +285,9 @@ class TestTrainingConfigFromDictConfig:
 class TestSessionStateManagement:
     """Test session state management edge cases."""
 
-    def test_session_preserves_trainrun_config_after_training(self, grpc_stub, tmp_path):
+    def test_session_preserves_trainrun_config_after_training(
+        self, grpc_stub, tmp_path
+    ):
         """
         Test that trainrun config (including loss_nodes, metric_nodes) is preserved
         in session state through training operations.
@@ -310,16 +328,28 @@ class TestSessionStateManagement:
 
             # Check that critical trainrun fields are preserved
             if "loss_nodes" in original_trainrun:
-                assert saved_trainrun.get("loss_nodes") == original_trainrun["loss_nodes"]
+                assert (
+                    saved_trainrun.get("loss_nodes") == original_trainrun["loss_nodes"]
+                )
             if "metric_nodes" in original_trainrun:
-                assert saved_trainrun.get("metric_nodes") == original_trainrun["metric_nodes"]
+                assert (
+                    saved_trainrun.get("metric_nodes")
+                    == original_trainrun["metric_nodes"]
+                )
             if "unfreeze_nodes" in original_trainrun:
-                assert saved_trainrun.get("unfreeze_nodes") == original_trainrun["unfreeze_nodes"]
+                assert (
+                    saved_trainrun.get("unfreeze_nodes")
+                    == original_trainrun["unfreeze_nodes"]
+                )
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
+            )
 
-    def test_multiple_sessions_have_independent_configs(self, grpc_stub, mock_cuvis_sdk):
+    def test_multiple_sessions_have_independent_configs(
+        self, grpc_stub, mock_cuvis_sdk
+    ):
         """
         Test that multiple sessions maintain independent training configs.
 
@@ -341,8 +371,12 @@ class TestSessionStateManagement:
 
         try:
             # Both should have max_epochs=20 from the trainrun file
-            config1 = TrainRunConfig.from_proto(response1.trainrun).training.model_dump()
-            config2 = TrainRunConfig.from_proto(response2.trainrun).training.model_dump()
+            config1 = TrainRunConfig.from_proto(
+                response1.trainrun
+            ).training.model_dump()
+            config2 = TrainRunConfig.from_proto(
+                response2.trainrun
+            ).training.model_dump()
 
             assert config1["max_epochs"] == 20
             assert config2["max_epochs"] == 20
@@ -360,5 +394,9 @@ class TestSessionStateManagement:
             # that we can still use session2 is a good sign
 
         finally:
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id1))
-            grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id2))
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id1)
+            )
+            grpc_stub.CloseSession(
+                cuvis_ai_pb2.CloseSessionRequest(session_id=session_id2)
+            )

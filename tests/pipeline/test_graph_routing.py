@@ -250,7 +250,9 @@ class TestGraphEntryInputs:
         }
 
         outputs = pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
-        torch.testing.assert_close(outputs[(c.name, "out")], torch.tensor([1.0 + (2.0 * 3.0)]))
+        torch.testing.assert_close(
+            outputs[(c.name, "out")], torch.tensor([1.0 + (2.0 * 3.0)])
+        )
 
 
 class TestGraphPartialExecution:
@@ -288,7 +290,9 @@ class TestGraphPartialExecution:
         pipeline.connect((n1.outputs.y, n2.x), (n2.outputs.y, n3.x))
 
         batch = {"x": torch.tensor([1.0, 2.0])}
-        outputs = pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE, upto_node=n2)
+        outputs = pipeline.forward(
+            batch=batch, stage=ExecutionStage.INFERENCE, upto_node=n2
+        )
 
         # Only n1 should execute (ancestors of n2)
         assert (n1.name, "y") in outputs

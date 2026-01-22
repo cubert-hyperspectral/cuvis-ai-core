@@ -3,7 +3,11 @@
 import torch
 
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from tests.fixtures import MinMaxNormalizer, MockStatisticalTrainableNode, SoftChannelSelector
+from tests.fixtures import (
+    MinMaxNormalizer,
+    MockStatisticalTrainableNode,
+    SoftChannelSelector,
+)
 
 
 def test_all_nodes_use_state_dict_only():
@@ -25,7 +29,9 @@ def test_all_nodes_use_state_dict_only():
             assert isinstance(state, dict), f"{node_name}.state_dict() must return dict"
 
             # Test load_state_dict works
-            new_node = node_class(**node.hparams) if hasattr(node, "hparams") else node_class()
+            new_node = (
+                node_class(**node.hparams) if hasattr(node, "hparams") else node_class()
+            )
             new_node.load_state_dict(state, strict=False)
 
             # Verify states match
@@ -156,7 +162,6 @@ def test_trainable_node_parameter_conversion():
 
 def test_non_persistent_buffers_not_serialized():
     """Test that non-persistent buffers are excluded from state_dict."""
-    from tests.fixtures import MockStatisticalTrainableNode
 
     node = MockStatisticalTrainableNode(input_dim=5, hidden_dim=3)
 
