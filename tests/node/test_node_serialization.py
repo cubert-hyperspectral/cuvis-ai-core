@@ -3,6 +3,7 @@
 import torch
 
 from cuvis_ai_core.utils.node_registry import NodeRegistry
+from tests.fixtures import MinMaxNormalizer, MockStatisticalTrainableNode, SoftChannelSelector
 
 
 def test_all_nodes_use_state_dict_only():
@@ -39,9 +40,6 @@ def test_all_nodes_use_state_dict_only():
 
 def test_no_custom_serialize_methods_needed():
     """Verify that nodes don't need custom serialize/load methods."""
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-    from cuvis_ai.node.selector import SoftChannelSelector
-
     # Test stateless node with empty state
     normalizer = MinMaxNormalizer()
     state = normalizer.state_dict()
@@ -73,8 +71,6 @@ def test_node_inherits_pytorch_serialization():
     """Test that all nodes inherit state_dict/load_state_dict from nn.Module."""
     from torch import nn
 
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-
     node = MinMaxNormalizer()
 
     # All nodes inherit from nn.Module through Node base class
@@ -93,8 +89,6 @@ def test_node_inherits_pytorch_serialization():
 
 def test_validate_serialization_support_method():
     """Test node validation method works correctly."""
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-
     node = MinMaxNormalizer()
     is_valid, message = node.validate_serialization_support()
 
@@ -104,8 +98,6 @@ def test_validate_serialization_support_method():
 
 def test_buffer_registration_for_statistical_nodes():
     """Test that statistical nodes properly register buffers."""
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-
     node = MinMaxNormalizer()
 
     # Check buffers are registered
@@ -139,8 +131,6 @@ def test_buffer_registration_for_statistical_nodes():
 def test_trainable_node_parameter_conversion():
     """Test that trainable nodes convert buffers to parameters correctly."""
     from torch import nn
-
-    from cuvis_ai.node.selector import SoftChannelSelector
 
     node = SoftChannelSelector(n_select=3, input_channels=10)
 
@@ -181,8 +171,6 @@ def test_non_persistent_buffers_not_serialized():
 
 def test_state_dict_handles_nan_buffers():
     """Test that state_dict correctly handles NaN-initialized buffers."""
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-
     node = MinMaxNormalizer()
 
     # Buffers are initially NaN
@@ -214,8 +202,6 @@ def test_state_dict_handles_nan_buffers():
 
 def test_hparams_separate_from_state():
     """Test that hyperparameters are separate from state_dict."""
-    from cuvis_ai.node.normalization import MinMaxNormalizer
-
     node = MinMaxNormalizer(eps=1e-5, use_running_stats=True)
 
     # Hyperparameters should be in hparams

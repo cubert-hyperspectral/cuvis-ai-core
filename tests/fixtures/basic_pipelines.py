@@ -148,33 +148,6 @@ def data_pipeline(data_node):
 
 
 @pytest.fixture
-def minimal_pipeline_dict():
-    """Create a minimal pipeline configuration dictionary for testing.
-    
-    Returns a dict that can be used for pipeline YAML testing.
-    """
-    return {
-        "version": "1.0",
-        "nodes": {
-            "input": {
-                "class": "cuvis_ai_core.node.node.Node",
-                "params": {},
-            },
-            "output": {
-                "class": "cuvis_ai_core.node.node.Node",
-                "params": {},
-            },
-        },
-        "connections": [
-            {
-                "from": "input.output",
-                "to": "output.input",
-            }
-        ],
-    }
-
-
-@pytest.fixture
 def pipeline_dict_factory():
     """Factory fixture for creating pipeline configuration dictionaries.
     

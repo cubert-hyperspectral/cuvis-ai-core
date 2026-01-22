@@ -296,12 +296,12 @@ class TestBinaryDeciderBug:
 
     def test_binary_decider_returns_bool(self):
         """Test that BinaryDecider now returns bool as specified."""
-        from cuvis_ai.deciders.binary_decider import BinaryDecider
+        from tests.fixtures.registry_test_nodes import MockBinaryDecider
 
         CuvisPipeline("test", strict_runtime_io_validation=True)
 
         DataSourceNode()
-        decider = BinaryDecider(threshold=0.5)
+        decider = MockBinaryDecider(threshold=0.5)
 
         # Note: BinaryDecider expects 4D input but source provides 10 channels
         # We need to adjust or it will fail shape validation
@@ -315,7 +315,7 @@ class TestBinaryDeciderBug:
 
     def test_binary_decider_in_pipeline_with_validation(self):
         """Test that BinaryDecider works in pipeline with validation enabled."""
-        from cuvis_ai.deciders.binary_decider import BinaryDecider
+        from tests.fixtures.registry_test_nodes import MockBinaryDecider
 
         # Create a simple source that outputs 1-channel data
         # (matching BinaryDecider's expected input)
@@ -333,7 +333,7 @@ class TestBinaryDeciderBug:
         pipeline = CuvisPipeline("test", strict_runtime_io_validation=True)
 
         source = SingleChannelSource()
-        decider = BinaryDecider(threshold=0.5)
+        decider = MockBinaryDecider(threshold=0.5)
 
         pipeline.connect(source.scores, decider.logits)
 

@@ -5,12 +5,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-# Skip entire module if cuvis_ai is not available
-pytest.importorskip("cuvis_ai", reason="cuvis_ai package required for these tests")
-
-from cuvis_ai.node.data import LentilsAnomalyDataNode
-from cuvis_ai.node.normalization import MinMaxNormalizer
-from cuvis_ai.node.selector import SoftChannelSelector
+from tests.fixtures.mock_nodes import (
+    LentilsAnomalyDataNode,
+    MinMaxNormalizer,
+    SoftChannelSelector,
+)
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
@@ -30,14 +29,14 @@ def minimal_pipeline_yaml():
         "nodes": [
             {
                 "name": "data",
-                "class": "cuvis_ai.node.data.LentilsAnomalyDataNode",
+                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
                 "params": {
                     "normal_class_ids": [0],
                 },
             },
             {
                 "name": "normalizer",
-                "class": "cuvis_ai.node.normalization.MinMaxNormalizer",
+                "class": "tests.fixtures.mock_nodes.MinMaxNormalizer",
                 "params": {
                     "eps": 1e-6,
                     "use_running_stats": False,
@@ -45,7 +44,7 @@ def minimal_pipeline_yaml():
             },
             {
                 "name": "selector",
-                "class": "cuvis_ai.node.selector.SoftChannelSelector",
+                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
                 "params": {
                     "n_select": 3,
                     "input_channels": 10,

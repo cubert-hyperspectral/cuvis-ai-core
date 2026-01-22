@@ -91,5 +91,7 @@ def test_minimal_pipeline_dict_fixture(minimal_pipeline_dict):
     assert "nodes" in minimal_pipeline_dict
     assert "connections" in minimal_pipeline_dict
     
-    assert "input" in minimal_pipeline_dict["nodes"]
-    assert "output" in minimal_pipeline_dict["nodes"]
+    # Nodes should be a list with name field (YAML format)
+    node_names = [node["name"] for node in minimal_pipeline_dict["nodes"]]
+    assert "data" in node_names
+    assert "selector" in node_names

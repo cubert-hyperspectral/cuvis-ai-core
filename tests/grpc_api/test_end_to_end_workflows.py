@@ -165,7 +165,10 @@ class TestWorkflow3_ResumeTraining:
 
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=setup_session_id))
 
-        exp_path = temp_workspace / "experiments" / "initial_exp.yaml"
+        # Create experiments directory
+        exp_dir = temp_workspace / "experiments"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        exp_path = exp_dir / "initial_exp.yaml"
         exp_config = {
             "name": "initial_experiment",
             "pipeline": {

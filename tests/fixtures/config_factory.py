@@ -102,6 +102,7 @@ def mock_pipeline_dict():
 
     Returns a minimal but valid pipeline structure with nodes and connections
     suitable for testing experiment management functionality.
+    Uses only mock nodes from cuvis-ai-core (no cuvis-ai dependencies).
 
     Returns:
         dict: Pipeline configuration dictionary
@@ -117,21 +118,16 @@ def mock_pipeline_dict():
         "nodes": [
             {
                 "name": "LentilsAnomalyDataNode",
-                "class": "cuvis_ai.node.data.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0]},
-            },
-            {
-                "name": "MinMaxNormalizer",
-                "class": "cuvis_ai.node.normalization.MinMaxNormalizer",
-                "params": {"eps": 1e-06, "use_running_stats": True},
+                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
+                "params": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "SoftChannelSelector",
-                "class": "cuvis_ai.node.selector.SoftChannelSelector",
+                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
                 "params": {
                     "n_select": 3,
                     "input_channels": 61,
-                    "init_method": "uniform",
+                    "init_method": "variance",
                     "temperature_init": 5.0,
                     "temperature_min": 0.1,
                     "temperature_decay": 0.9,
@@ -139,26 +135,19 @@ def mock_pipeline_dict():
                     "eps": 1e-06,
                 },
             },
-            {
-                "name": "TopKIndices",
-                "class": "cuvis_ai.node.selector.TopKIndices",
-                "params": {"k": 3},
-            },
         ],
         "connections": [
-            {"from": "LentilsAnomalyDataNode.outputs.cube", "to": "MinMaxNormalizer.inputs.data"},
-            {
-                "from": "MinMaxNormalizer.outputs.normalized",
-                "to": "SoftChannelSelector.inputs.data",
-            },
-            {"from": "SoftChannelSelector.outputs.weights", "to": "TopKIndices.inputs.weights"},
+            {"from": "LentilsAnomalyDataNode.outputs.cube", "to": "SoftChannelSelector.inputs.data"},
         ],
     }
 
 
 @pytest.fixture
 def minimal_pipeline_dict():
-    """Minimal valid pipeline configuration dictionary for tests."""
+    """Minimal valid pipeline configuration dictionary for tests.
+    
+    Uses only mock nodes from cuvis-ai-core (no cuvis-ai dependencies).
+    """
     return {
         "version": "1.0.0",
         "metadata": {
@@ -170,31 +159,26 @@ def minimal_pipeline_dict():
         "nodes": [
             {
                 "name": "data",
-                "class": "cuvis_ai.node.data.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0]},
-            },
-            {
-                "name": "normalizer",
-                "class": "cuvis_ai.node.normalization.MinMaxNormalizer",
-                "params": {"eps": 1e-6, "use_running_stats": False},
+                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
+                "params": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "selector",
-                "class": "cuvis_ai.node.selector.SoftChannelSelector",
+                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
                 "params": {
                     "n_select": 3,
                     "input_channels": 61,
-                    "init_method": "uniform",
+                    "init_method": "variance",
                     "temperature_init": 5.0,
                     "temperature_min": 0.1,
                     "temperature_decay": 0.9,
                     "hard": False,
+                    "eps": 1e-6,
                 },
             },
         ],
         "connections": [
-            {"from": "data.outputs.cube", "to": "normalizer.inputs.data"},
-            {"from": "normalizer.outputs.normalized", "to": "selector.inputs.data"},
+            {"from": "data.outputs.cube", "to": "selector.inputs.data"},
         ],
     }
 
@@ -294,6 +278,7 @@ def pipeline_yaml_only(tmp_path):
     This fixture creates a valid pipeline configuration file without the .pt weights.
     Useful for testing scenarios where weights are missing or not yet generated,
     such as pipeline structure validation or loading without weights.
+    Uses only mock nodes from cuvis-ai-core (no cuvis-ai dependencies).
 
     Args:
         tmp_path: Temporary directory fixture
@@ -308,43 +293,28 @@ metadata:
   name: "YAML Only Pipeline"
   description: "Pipeline without weights"
   created: "2024-11-27"
-  cuvis_ai_version: "0.1.5"
   tags: ["test"]
 
 nodes:
   - name: LentilsAnomalyDataNode
-    class: cuvis_ai.node.data.LentilsAnomalyDataNode
+    class: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
     params:
-      normal_class_ids: [0]
-      wavelengths: null
-  - name: MinMaxNormalizer
-    class: cuvis_ai.node.normalization.MinMaxNormalizer
-    params:
-      eps: 1.0e-06
-      use_running_stats: true
+      normal_class_ids: [0, 1]
   - name: SoftChannelSelector
-    class: cuvis_ai.node.selector.SoftChannelSelector
+    class: tests.fixtures.mock_nodes.SoftChannelSelector
     params:
       eps: 1.0e-06
       hard: false
-      init_method: uniform
+      init_method: variance
       input_channels: 61
       n_select: 3
       temperature_decay: 0.9
       temperature_init: 5.0
       temperature_min: 0.1
-  - name: TopKIndices
-    class: cuvis_ai.node.selector.TopKIndices
-    params:
-      k: 3
 
 connections:
   - from: LentilsAnomalyDataNode.outputs.cube
-    to: MinMaxNormalizer.inputs.data
-  - from: MinMaxNormalizer.outputs.normalized
     to: SoftChannelSelector.inputs.data
-  - from: SoftChannelSelector.outputs.weights
-    to: TopKIndices.inputs.weights
 """)
 
     return str(pipeline_path)

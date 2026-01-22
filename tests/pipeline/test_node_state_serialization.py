@@ -216,7 +216,7 @@ class TestNodeStateSerialization:
         assert isinstance(loaded_node.linear_weight, nn.Parameter)
         assert isinstance(loaded_node.linear_bias, nn.Parameter)
 
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    @pytest.mark.gpu
     def test_device_and_dtype_handling(self, mock_statistical_trainable_node):
         """Test that serialization handles device and dtype correctly."""
         # Create node on CPU
