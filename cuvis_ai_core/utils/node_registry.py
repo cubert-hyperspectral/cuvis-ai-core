@@ -406,18 +406,13 @@ class NodeRegistry:
 
         # Import and register all provided classes
         for class_path in plugin_config.provides:
-            try:
-                node_class = self._import_from_path(class_path)
-                class_name = node_class.__name__
+            node_class = self._import_from_path(class_path)
+            class_name = node_class.__name__
 
-                # Register in instance plugin registry
-                self.plugin_registry[class_name] = node_class
-                self.plugin_class_map[class_path] = name
-                logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to import '{class_path}' from plugin '{name}': {e}"
-                )
+            # Register in instance plugin registry
+            self.plugin_registry[class_name] = node_class
+            self.plugin_class_map[class_path] = name
+            logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
 
         # Track plugin config
         self.plugin_configs[name] = plugin_config

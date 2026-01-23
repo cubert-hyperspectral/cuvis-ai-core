@@ -197,8 +197,8 @@ class ValidNode(Node):
         # Create session
         session_id = self.session_manager.create_session()
 
-        # Create mock plugin
-        plugin_dir = tmp_path / "test_plugin"
+        # Create mock plugin (unique name to avoid module cache conflicts)
+        plugin_dir = tmp_path / "list_loaded_test_plugin"
         plugin_dir.mkdir()
         (plugin_dir / "__init__.py").write_text("")
         (plugin_dir / "node.py").write_text("""
@@ -218,8 +218,9 @@ class TestNode(Node):
         # Load plugin
         manifest = PluginManifest(
             plugins={
-                "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["test_plugin.node.TestNode"]
+                "list_loaded_test_plugin": LocalPluginConfig(
+                    path=str(plugin_dir),
+                    provides=["list_loaded_test_plugin.node.TestNode"],
                 )
             }
         )
@@ -246,10 +247,10 @@ class TestNode(Node):
             # Verify response
             assert len(response.plugins) == 1
             plugin_info = response.plugins[0]
-            assert plugin_info.name == "test_plugin"
+            assert plugin_info.name == "list_loaded_test_plugin"
             assert plugin_info.type == "local"
             assert plugin_info.source == str(plugin_dir)
-            assert "test_plugin.node.TestNode" in plugin_info.provides
+            assert "list_loaded_test_plugin.node.TestNode" in plugin_info.provides
         finally:
             sys.path.remove(str(tmp_path))
 
@@ -258,8 +259,8 @@ class TestNode(Node):
         # Create session
         session_id = self.session_manager.create_session()
 
-        # Create and load plugin
-        plugin_dir = tmp_path / "test_plugin"
+        # Create and load plugin (unique name to avoid module cache conflicts)
+        plugin_dir = tmp_path / "get_info_test_plugin"
         plugin_dir.mkdir()
         (plugin_dir / "__init__.py").write_text("")
         (plugin_dir / "node.py").write_text("""
@@ -278,8 +279,9 @@ class TestNode(Node):
 
         manifest = PluginManifest(
             plugins={
-                "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["test_plugin.node.TestNode"]
+                "get_info_test_plugin": LocalPluginConfig(
+                    path=str(plugin_dir),
+                    provides=["get_info_test_plugin.node.TestNode"],
                 )
             }
         )
@@ -299,14 +301,14 @@ class TestNode(Node):
 
             # Get plugin info
             info_request = cuvis_ai_pb2.GetPluginInfoRequest(
-                session_id=session_id, plugin_name="test_plugin"
+                session_id=session_id, plugin_name="get_info_test_plugin"
             )
             response = self.plugin_service.get_plugin_info(
                 info_request, self.mock_context
             )
 
             # Verify response
-            assert response.plugin.name == "test_plugin"
+            assert response.plugin.name == "get_info_test_plugin"
             assert response.plugin.type == "local"
             assert response.plugin.source == str(plugin_dir)
         finally:
@@ -445,8 +447,8 @@ class PluginTestNode(Node):
         session1 = self.session_manager.create_session()
         session2 = self.session_manager.create_session()
 
-        # Create plugin
-        plugin_dir = tmp_path / "test_plugin"
+        # Create plugin (unique name to avoid module cache conflicts)
+        plugin_dir = tmp_path / "isolation_test_plugin"
         plugin_dir.mkdir()
         (plugin_dir / "__init__.py").write_text("")
         (plugin_dir / "node.py").write_text("""
@@ -466,8 +468,9 @@ class IsolatedNode(Node):
         # Load plugin only in session1
         manifest = PluginManifest(
             plugins={
-                "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["test_plugin.node.IsolatedNode"]
+                "isolation_test_plugin": LocalPluginConfig(
+                    path=str(plugin_dir),
+                    provides=["isolation_test_plugin.node.IsolatedNode"],
                 )
             }
         )
