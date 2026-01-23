@@ -160,12 +160,13 @@ class NodeRegistry:
         return attr
 
     @classmethod
-    def _import_from_path(cls, import_path: str) -> type:
+    def _import_from_path(cls, import_path: str, clear_cache: bool = False) -> type:
         """
         Import a class from a full module path.
 
         Args:
             import_path: Full import path (e.g., "my_package.nodes.CustomNode")
+            clear_cache: If True, clear module cache before importing (for plugin reloading)
 
         Returns:
             The imported class
@@ -181,6 +182,15 @@ class NodeRegistry:
                 raise ValueError(f"Invalid import path: '{import_path}'")
 
             module_path, class_name = parts
+
+            # Clear module cache if requested (for plugin reloading)
+            if clear_cache:
+                parts_to_clear = module_path.split(".")
+                for i in range(len(parts_to_clear), 0, -1):
+                    partial_path = ".".join(parts_to_clear[:i])
+                    if partial_path in sys.modules:
+                        del sys.modules[partial_path]
+                        logger.debug(f"Cleared cached module: {partial_path}")
 
             # Import the module
             module = importlib.import_module(module_path)
@@ -406,7 +416,8 @@ class NodeRegistry:
 
         # Import and register all provided classes
         for class_path in plugin_config.provides:
-            node_class = self._import_from_path(class_path)
+            # Clear cache for plugins to ensure fresh import
+            node_class = self._import_from_path(class_path, clear_cache=True)
             class_name = node_class.__name__
 
             # Register in instance plugin registry
