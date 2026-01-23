@@ -27,36 +27,6 @@ This separation allows the core framework to evolve independently while the cata
 - **Website:** https://www.cubert-hyperspectral.com/
 - **Support:** http://support.cubert-hyperspectral.com/
 
-## Features
-
-### Core Pipeline Components
-- **Node System**: Abstract base class for creating reusable processing units with typed I/O ports
-- **Pipeline Builder**: Construct complex processing graphs from YAML configurations or Python APIs
-- **Port Validation**: Runtime type checking ensures data compatibility between connected nodes
-- **Graph Visualization**: Generate visual representations of pipeline structure and data flow
-
-### Plugin Architecture
-- **Dynamic Node Loading**: Load nodes from external Git repositories or local paths without modifying dependencies
-- **Version Control**: Pin plugins to specific Git tags, branches, or commit hashes
-- **Session Isolation**: Multi-tenant safe plugin loading with per-session namespaces
-- **Plugin Manifests**: YAML-based or programmatic configuration for managing plugin sources
-
-### Serialization & State Management
-- **Pipeline Serialization**: Save complete pipeline configurations to YAML format
-- **State Restoration**: Reload pipelines with full node state and weights
-- **Configuration Helpers**: Utilities for managing complex nested configurations
-
-### gRPC Service Layer
-- **Pipeline Service**: Remote pipeline creation, execution, and management
-- **Training Service**: Distributed model training via gRPC
-- **Plugin Service**: Remote plugin loading and introspection
-- **Session Management**: Multi-client session isolation and lifecycle management
-
-### Training Infrastructure
-- **DataModule System**: Reusable data loading components for training and inference
-- **Trainer Integration**: Seamless integration with PyTorch Lightning trainers
-- **Optimizer Registry**: Pluggable optimizer configuration system
-
 ## Installation
 
 ### Prerequisites
