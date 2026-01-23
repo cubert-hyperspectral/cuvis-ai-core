@@ -7,6 +7,7 @@ from cuvis_ai_core.grpc import cuvis_ai_pb2
 pytest.importorskip("hydra")
 
 
+@pytest.mark.slow
 def test_config_resolution_and_validation(grpc_stub, tmp_path):
     """Resolve, introspect, and validate configs via new RPCs."""
     config_dir = tmp_path / "configs"

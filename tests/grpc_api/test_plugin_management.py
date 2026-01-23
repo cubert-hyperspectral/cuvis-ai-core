@@ -6,8 +6,9 @@ from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.utils.plugin_config import PluginManifest, LocalPluginConfig
 
 
+@pytest.mark.slow
 class TestPluginManagementIntegration:
-    """Test end-to-end gRPC plugin management workflows."""
+    """Integration tests for plugin management workflows."""
 
     def test_complete_plugin_workflow(self, grpc_stub, tmp_path):
         """Test complete plugin workflow: create session → load plugins → use in pipeline → cleanup."""

@@ -172,6 +172,7 @@ def create_test_graph(n_channels: int = 10) -> tuple[CuvisPipeline, dict]:
     return pipeline, config
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 def test_small_scale():
     """Test with small dataset: 10 samples × 64×64 × 10 channels (~0.3 MB).
@@ -313,6 +314,7 @@ def test_medium_scale():
     print("\n✓ Medium scale test passed")
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 def test_varying_channels():
     """Test with varying number of spectral channels: 10, 50, 100, 200.
@@ -382,6 +384,7 @@ def test_varying_channels():
     print("\nChannel scaling test passed")
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 def test_varying_spatial():
     """Test with varying spatial dimensions: 64×64, 128×128, 256×256.
@@ -454,6 +457,7 @@ def test_varying_spatial():
     print("\n✓ Spatial scaling test passed")
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 def test_forward_pass_latency():
     """Test forward pass latency at different scales.

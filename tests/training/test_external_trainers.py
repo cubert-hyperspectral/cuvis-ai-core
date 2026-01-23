@@ -19,6 +19,7 @@ from tests.fixtures import (
 )
 
 
+@pytest.mark.slow
 class TestGradientTrainer:
     """Test GradientTrainer implementation."""
 

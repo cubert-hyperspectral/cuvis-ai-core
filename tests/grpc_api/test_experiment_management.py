@@ -123,6 +123,7 @@ def shared_saved_trainrun_with_weights(
 # ============================================================================
 
 
+@pytest.mark.slow
 class TestSaveTrainRun:
     """Test the SaveTrainRun RPC method using shared trained session."""
 
@@ -217,6 +218,7 @@ class TestSaveTrainRun:
 # ============================================================================
 
 
+@pytest.mark.slow
 class TestRestoreTrainRun:
     """Test the RestoreTrainRun RPC method using pre-saved artifacts."""
 
@@ -398,6 +400,7 @@ class TestRestoreTrainRun:
 # ============================================================================
 
 
+@pytest.mark.slow
 class TestWeightTransfer:
     """Test that weights are correctly transferred during save/restore."""
 
@@ -538,6 +541,7 @@ class TestWeightTransfer:
 # ============================================================================
 
 
+@pytest.mark.slow
 class TestExperimentWorkflow:
     """Test complete experiment workflows."""
 
@@ -634,7 +638,6 @@ class TestExperimentWorkflow:
             cuvis_ai_pb2.CloseSessionRequest(session_id=restored_session_id)
         )
 
-    @pytest.mark.slow
     def test_experiment_reproducibility(self, grpc_stub, experiment_file):
         """Test that restored experiment config is accessible for re-training."""
         # Restore experiment
@@ -657,7 +660,6 @@ class TestExperimentWorkflow:
         # Cleanup
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 
-    @pytest.mark.slow
     def test_resume_training_workflow(
         self, grpc_stub, shared_saved_trainrun_with_weights
     ):

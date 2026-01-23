@@ -18,6 +18,7 @@ def _pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
     return json.dumps(pipeline_dict).encode("utf-8")
 
 
+@pytest.mark.slow
 class TestSavePipeline:
     """Test the SavePipeline RPC method."""
 
@@ -123,6 +124,7 @@ class TestSavePipeline:
         assert Path(response.weights_path).exists()
 
 
+@pytest.mark.slow
 class TestLoadPipeline:
     """Test the LoadPipeline RPC method."""
 
@@ -303,6 +305,7 @@ class TestLoadPipeline:
         assert len(pipeline_response.input_names) > 0
 
 
+@pytest.mark.slow
 class TestPipelineRoundTrip:
     """Test complete save/load cycles."""
 

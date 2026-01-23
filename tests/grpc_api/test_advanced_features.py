@@ -101,6 +101,7 @@ class TestConfigValidation:
         )
 
 
+@pytest.mark.slow
 class TestComplexInputs:
     """Complex input parsing (bboxes, points, text prompts)."""
 

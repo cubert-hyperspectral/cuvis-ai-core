@@ -14,6 +14,7 @@ from cuvis_ai_core.training.config import TrainingConfig, TrainRunConfig
 from tests.fixtures.sessions import materialize_trainrun_config
 
 
+@pytest.mark.slow
 class TestConfigPreservationThroughTraining:
     """Test that configs loaded from train run files are preserved through training."""
 

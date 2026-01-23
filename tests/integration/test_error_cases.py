@@ -29,6 +29,7 @@ def _load_pipeline(
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 class TestErrorCases:
     """Test error handling across gRPC API."""
 

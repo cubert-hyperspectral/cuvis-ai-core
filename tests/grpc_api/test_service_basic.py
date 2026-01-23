@@ -10,6 +10,7 @@ from tests.fixtures.grpc import resolve_and_load_pipeline
 DEFAULT_CHANNELS = 61
 
 
+@pytest.mark.slow
 class TestCreateAndClose:
     def test_create_session_returns_id(self, grpc_stub):
         """Test creating a session with new four-step workflow."""
@@ -72,6 +73,7 @@ class TestCreateAndClose:
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
 
+@pytest.mark.slow
 class TestInference:
     def test_inference_returns_outputs(
         self, grpc_stub, create_test_cube, trained_pipeline_session

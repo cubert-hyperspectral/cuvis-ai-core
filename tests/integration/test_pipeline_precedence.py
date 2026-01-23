@@ -31,6 +31,7 @@ def _build_pipeline(stub, session_id: str, pipeline_dict: dict) -> None:
     assert response.success
 
 
+@pytest.mark.slow
 def test_pipeline_conflict_rejected(grpc_stub, minimal_pipeline_dict, tmp_path):
     """TrainRun pipeline must match already-built pipeline."""
     session_id = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id
@@ -58,6 +59,7 @@ def test_pipeline_conflict_rejected(grpc_stub, minimal_pipeline_dict, tmp_path):
     assert exc_info.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
 
+@pytest.mark.slow
 def test_pipeline_built_from_trainrun_when_missing(grpc_stub, minimal_pipeline_dict):
     """TrainRunConfig should build pipeline when session has none."""
     session_id = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id

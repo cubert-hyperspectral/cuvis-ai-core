@@ -78,6 +78,7 @@ def pipeline_yaml_file(minimal_pipeline_yaml, tmp_path):
     return yaml_path
 
 
+@pytest.mark.slow
 class TestPipelineBuilderYAML:
     """Tests for YAML-based PipelineBuilder."""
 
@@ -235,6 +236,7 @@ class TestPipelineBuilderYAML:
             builder.build_from_config("nonexistent_file.yaml")
 
 
+@pytest.mark.slow
 class TestPipelineBuilderPathResolution:
     """Tests for pipeline path resolution (short names, etc.)."""
 

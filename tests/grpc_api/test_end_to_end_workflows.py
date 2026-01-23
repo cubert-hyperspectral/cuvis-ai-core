@@ -14,6 +14,7 @@ from tests.fixtures.grpc import load_pipeline_from_file, resolve_and_load_pipeli
 DEFAULT_CHANNELS = 61
 
 
+@pytest.mark.slow
 class TestWorkflow1_TrainFromScratch:
     """Workflow 1: Train from Scratch (as per Phase 4 doc).
 
@@ -25,7 +26,6 @@ class TestWorkflow1_TrainFromScratch:
     5. CloseSession
     """
 
-    @pytest.mark.slow
     def test_complete_workflow(self, grpc_stub, tmp_path):
         """Test the complete train-from-scratch workflow."""
         # Step 1: Create session with pipeline structure (no weights) using new four-step workflow
@@ -75,6 +75,7 @@ class TestWorkflow1_TrainFromScratch:
         assert close_response.success
 
 
+@pytest.mark.slow
 class TestWorkflow2_InferenceWithPretrained:
     """Workflow 2: Inference with Pre-trained Model.
 
@@ -136,6 +137,7 @@ class TestWorkflow2_InferenceWithPretrained:
         assert close_response.success
 
 
+@pytest.mark.slow
 class TestWorkflow3_ResumeTraining:
     """Workflow 3: Resume Training.
 
@@ -146,7 +148,6 @@ class TestWorkflow3_ResumeTraining:
     4. SaveTrainRun as new version
     """
 
-    @pytest.mark.slow
     def test_complete_workflow(self, grpc_stub, temp_workspace, mock_pipeline_dir):
         """Test resuming training from a saved experiment."""
 
@@ -293,6 +294,7 @@ class TestWorkflow4_DiscoverAndInspect:
         )
 
 
+@pytest.mark.slow
 class TestWorkflow5_LoadPipelineWeights:
     """Workflow 5: Load Pipeline Weights.
 
@@ -348,6 +350,7 @@ class TestWorkflow5_LoadPipelineWeights:
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 
 
+@pytest.mark.slow
 class TestWorkflowIntegration:
     """Test combinations and interactions between workflows."""
 

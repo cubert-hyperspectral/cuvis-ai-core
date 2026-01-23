@@ -11,8 +11,9 @@ from tests.fixtures.grpc import resolve_and_load_pipeline
 
 
 @pytest.mark.integration
+@pytest.mark.slow
 class TestWeightLoading:
-    """Test weight loading through gRPC API."""
+    """Test weight loading via gRPC."""
 
     def test_load_weights_from_file_path(self, grpc_stub, tmp_path):
         """Test loading weights from file path via LoadPipelineWeights RPC."""

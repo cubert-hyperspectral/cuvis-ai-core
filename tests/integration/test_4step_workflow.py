@@ -19,6 +19,7 @@ def _write_trainrun_file(path: Path, trainrun_dict: dict) -> None:
     path.write_text(yaml.safe_dump(trainrun_dict, sort_keys=False))
 
 
+@pytest.mark.slow
 def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     """End-to-end happy path for the new explicit workflow."""
     config_dir = tmp_path / "configs"

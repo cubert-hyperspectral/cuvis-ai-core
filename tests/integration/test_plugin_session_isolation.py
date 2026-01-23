@@ -7,6 +7,7 @@ from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 
+@pytest.mark.slow
 class TestPluginSessionIsolation:
     """Test that plugin loading maintains session isolation."""
 

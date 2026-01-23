@@ -160,6 +160,7 @@ def test_batch_config_resolutions(benchmark):
     assert avg_time < 300.0, f"Average resolution time too high: {avg_time:.2f}ms"
 
 
+@pytest.mark.slow
 def test_memory_usage_characteristics():
     """Test memory usage characteristics (basic check)."""
     import os
@@ -188,6 +189,7 @@ def test_memory_usage_characteristics():
     assert memory_increase < 50.0, f"Memory increase too high: {memory_increase:.2f}MB"
 
 
+@pytest.mark.slow
 def test_performance_summary():
     """Generate performance summary for documentation."""
     benchmark = PerformanceBenchmark()

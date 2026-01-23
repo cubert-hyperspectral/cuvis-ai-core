@@ -1,5 +1,6 @@
 """Tests for PluginService gRPC functionality."""
 
+import pytest
 from unittest.mock import Mock
 
 from cuvis_ai_core.grpc.plugin_service import PluginService
@@ -9,6 +10,7 @@ from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_config import PluginManifest, LocalPluginConfig
 
 
+@pytest.mark.slow
 class TestPluginService:
     """Test PluginService functionality."""
 

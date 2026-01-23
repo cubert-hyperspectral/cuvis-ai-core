@@ -3,10 +3,10 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 
 
+@pytest.mark.slow
 class TestGradientTraining:
     """Gradient training workflow tests."""
 
-    @pytest.mark.slow
     def test_gradient_training_comprehensive(self, grpc_stub, trained_session):
         """Comprehensive test that validates all aspects of gradient training in a single run.
 

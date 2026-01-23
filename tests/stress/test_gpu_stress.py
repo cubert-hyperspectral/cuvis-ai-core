@@ -418,6 +418,7 @@ def test_gpu_acceleration():
     print(f"✓ GPU was used (peak reserved {gpu_mem_reserved:.2f} MB)")
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -600,6 +601,7 @@ def test_gpu_batch_size_scaling():
     print("✓ Demonstrates GPU performance scales with batch size")
 
 
+@pytest.mark.slow
 @pytest.mark.stress
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
