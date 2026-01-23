@@ -334,6 +334,13 @@ class NodeRegistry:
         """
         Load a single plugin into THIS INSTANCE.
 
+        IMPORTANT: This is an INSTANCE METHOD - you must create a NodeRegistry instance first!
+
+        Unlike get() which works as both class and instance method, load_plugin() requires
+        an instance for plugin isolation. This is by design from Phase 4's hybrid architecture:
+        - Built-in nodes: accessed via class (NodeRegistry.get("MinMaxNormalizer"))
+        - Plugin nodes: require instance (registry = NodeRegistry(); registry.load_plugin(...))
+
         Args:
             name: Plugin identifier (e.g., "adaclip")
             config: Plugin configuration dict with:
@@ -343,19 +350,25 @@ class NodeRegistry:
             manifest_dir: Optional base directory for resolving local plugin paths
 
         Examples:
-            # Git plugin
+            # ✅ CORRECT: Create instance first
             registry = NodeRegistry()
             registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
                 "ref": "v1.2.3",
                 "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
             })
+            # Then use get() to retrieve the node class
+            AdaCLIPDetector = NodeRegistry.get("cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector")
 
-            # Local plugin
+            # ✅ CORRECT: Local plugin
+            registry = NodeRegistry()
             registry.load_plugin("local_dev", {
                 "path": "../my-plugin",
                 "provides": ["my_plugin.MyNode"]
             })
+
+            # ❌ WRONG: Don't call as class method
+            # NodeRegistry.load_plugin(...)  # TypeError: missing 'self'
         """
         # Check instance mode
         if not hasattr(self, "plugin_registry"):

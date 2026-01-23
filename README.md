@@ -1,17 +1,132 @@
 # Cuvis-AI Core Framework
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Proprietary-blue.svg)](LICENSE)
 
-Cuvis-AI Core Framework provides the foundational abstractions for building hyperspectral image processing pipelines.
+
+![image](https://raw.githubusercontent.com/cubert-hyperspectral/cuvis.sdk/main/branding/logo/banner.png)
+
+[![Python 3.xx+]()]()
+[![License]()](LICENSE)
+
+
+## Overview
+
+**cuvis-ai-core** is the foundational framework that powers the [cuvis-ai](https://github.com/cubert-hyperspectral/cuvis-ai) machine learning pipeline for hyperspectral image analysis. This repository provides the core infrastructure and building blocks that enable flexible, extensible AI workflows for hyperspectral measurements.
+
+While the [cuvis-ai](https://github.com/cubert-hyperspectral/cuvis-ai) repository contains domain-specific nodes and pre-built models for tasks like anomaly detection and classification, **cuvis-ai-core** provides the essential framework components:
+
+- **Node System**: Base classes for creating processing nodes with typed input/output ports
+- **Pipeline Infrastructure**: Graph-based pipeline orchestration, execution, and visualization
+- **Plugin System**: Dynamic node loading from Git repositories or local filesystem paths
+- **Serialization & Restoration**: Save and restore complete pipeline states and configurations
+- **Type Safety**: Strongly-typed port system with runtime validation
+- **gRPC Services**: Remote pipeline management, training, and inference APIs
+- **Training Framework**: Integration with PyTorch Lightning for model training workflows
+
+This separation allows the core framework to evolve independently while the catalog of domain-specific nodes grows through a plugin architecture.
+
+- **Website:** https://www.cubert-hyperspectral.com/
+- **Support:** http://support.cubert-hyperspectral.com/
 
 ## Features
 
-- **Node System**: Base classes and port system for pipeline components
-- **Pipeline Orchestration**: Factory-based pipeline construction and execution
-- **Training Infrastructure**: Complete training framework with PyTorch Lightning integration
-- **gRPC Services**: Remote procedure calls for distributed processing
-- **Plugin Management**: Dynamic loading of external node plugins from Git repositories
+### Core Pipeline Components
+- **Node System**: Abstract base class for creating reusable processing units with typed I/O ports
+- **Pipeline Builder**: Construct complex processing graphs from YAML configurations or Python APIs
+- **Port Validation**: Runtime type checking ensures data compatibility between connected nodes
+- **Graph Visualization**: Generate visual representations of pipeline structure and data flow
+
+### Plugin Architecture
+- **Dynamic Node Loading**: Load nodes from external Git repositories or local paths without modifying dependencies
+- **Version Control**: Pin plugins to specific Git tags, branches, or commit hashes
+- **Session Isolation**: Multi-tenant safe plugin loading with per-session namespaces
+- **Plugin Manifests**: YAML-based or programmatic configuration for managing plugin sources
+
+### Serialization & State Management
+- **Pipeline Serialization**: Save complete pipeline configurations to YAML format
+- **State Restoration**: Reload pipelines with full node state and weights
+- **Configuration Helpers**: Utilities for managing complex nested configurations
+
+### gRPC Service Layer
+- **Pipeline Service**: Remote pipeline creation, execution, and management
+- **Training Service**: Distributed model training via gRPC
+- **Plugin Service**: Remote plugin loading and introspection
+- **Session Management**: Multi-client session isolation and lifecycle management
+
+### Training Infrastructure
+- **DataModule System**: Reusable data loading components for training and inference
+- **Trainer Integration**: Seamless integration with PyTorch Lightning trainers
+- **Optimizer Registry**: Pluggable optimizer configuration system
 
 ## Installation
 
+### Prerequisites
+
+If you want to directly work with cubert session files (.cu3s), you need to install cuvis C SDK from 
+[here](https://cloud.cubert-gmbh.de/s/qpxkyWkycrmBK9m).
+
+Local development now relies on [uv](https://docs.astral.sh/uv/) for Python and dependency management.  
+If `uv` is not already available on your system you can install it following their installation instructions.
+
+### Local development with uv
+
+Create or refresh a development environment at the repository root with:
+
+```bash
+uv sync --all-extras --dev
+```
+
+This installs the runtime dependencies declared in `pyproject.toml`. `uv` automatically provisions the Python version declared in the project metadata, so no manual interpreter management is required.
+
+#### Enable Git Hooks (Required)
+
+After cloning the repository, enable the git hooks for code quality enforcement:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This configures Git to use the version-controlled hooks in `.githooks/` which automatically enforce code formatting, linting, and testing standards before commits and pushes. See [docs/development/git-hooks.md](docs/development/git-hooks.md) for details.
+
+#### Advanced environment setup
+
+When you need the reproducible development toolchain (JupyterLab, TensorBoard, etc.) from the lock file, run:
+
+```bash
+uv sync --locked --extra dev
+```
+
+Use `uv run` to execute project tooling without manually activating virtual environments, for example:
+
+```bash
+uv run pytest
+```
+
+Collect coverage details (the `dev` extra installs `pytest-cov`) with:
+
+```bash
+uv run pytest --cov=cuvis_ai --cov-report=term-missing
+```
+
+Ruff handles both formatting and linting. Format sources and check style with:
+
+```bash
+uv run ruff format .
+uv run ruff check .
+```
+
+The configuration enforces import ordering, newline hygiene, modern string formatting, safe exception chaining, and practical return type annotations while avoiding noisy `Any` policing.
+
+Validate packaging metadata and build artifacts before publishing:
+
+```bash
+uv build
+```
+
+
+To build the documentation, add the `docs` extra:
+
+```bash
+uv sync --locked --extra docs
+```
+
+Combine extras as needed (e.g. `uv sync --locked --extra dev --extra docs`). Whenever the `pyproject.toml` or `uv.lock` changes, rerun `uv sync --locked` with the extras you need to stay up to date.
