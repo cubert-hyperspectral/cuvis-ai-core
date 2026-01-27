@@ -38,6 +38,7 @@ class NodeRegistry:
 
     # ========== CLASS-LEVEL: Built-in nodes (singleton) ==========
     _builtin_registry: Dict[str, type] = {}
+    _cache_dir: Path = Path.home() / ".cuvis_plugins"
 
     def __init__(self):
         """Create instance for plugin support."""
@@ -133,15 +134,42 @@ class NodeRegistry:
         if "." in class_identifier:
             return cls._import_from_path(class_identifier)
 
-        # Not found
+        # Not found - provide helpful error
         available = cls.list_builtin_nodes()
         if instance is not None:
             available = available + sorted(instance.plugin_registry.keys())
-        raise KeyError(
-            f"Node '{class_identifier}' not found in registry.\n"
-            f"For custom nodes, provide full import path (e.g., 'my_package.MyNode').\n"
-            f"Available nodes: {available}"
+
+        # Check if it looks like a plugin node (has multiple dots or known plugin pattern)
+        looks_like_plugin = class_identifier.count(".") >= 2 or any(
+            pkg in class_identifier.lower()
+            for pkg in ["plugin", "adaclip", "cuvis_ai_"]
         )
+
+        error_msg = f"Node '{class_identifier}' not found in registry.\n"
+
+        if looks_like_plugin and instance is None:
+            error_msg += (
+                "\n⚠️  This appears to be an external plugin node!\n"
+                "   Did you forget to load plugins?\n\n"
+                "   For CLI usage:\n"
+                "     uv run restore-pipeline --pipeline-path <path> --plugins-path examples/adaclip/plugins.yaml\n\n"
+                "   For Python usage:\n"
+                "     registry = NodeRegistry()\n"
+                "     registry.load_plugins('path/to/plugins.yaml')\n"
+                "     pipeline = CuvisPipeline.load_pipeline(..., node_registry=registry)\n\n"
+            )
+        elif looks_like_plugin and len(instance.plugin_configs) == 0:
+            error_msg += (
+                "\n⚠️  This appears to be an external plugin node, but no plugins are loaded!\n"
+                "   Load plugins before building pipeline:\n"
+                "     registry.load_plugins('path/to/plugins.yaml')\n\n"
+            )
+        else:
+            error_msg += "For custom nodes, provide full import path (e.g., 'my_package.MyNode').\n"
+
+        error_msg += f"Available nodes: {available}"
+
+        raise KeyError(error_msg)
 
     def __getattribute__(self, name: str):
         """
@@ -411,6 +439,9 @@ class NodeRegistry:
                 f"Plugin '{name}' must have either 'repo' (Git) or 'path' (local)"
             )
 
+        # Install plugin dependencies automatically
+        self._install_plugin_dependencies(plugin_path, name)
+
         # Add to sys.path
         self._add_to_sys_path(plugin_path)
 
@@ -610,6 +641,125 @@ class NodeRegistry:
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
             logger.debug(f"Added to sys.path: {path_str}")
+
+    @classmethod
+    def _install_plugin_dependencies(cls, plugin_path: Path, plugin_name: str) -> None:
+        """
+        Detect and install plugin dependencies from pyproject.toml.
+
+        This method enforces PEP 621 compliance by requiring plugins to have
+        a pyproject.toml file with proper dependency specifications.
+
+        Args:
+            plugin_path: Path to the plugin directory
+            plugin_name: Name of the plugin (for logging)
+
+        Raises:
+            FileNotFoundError: If pyproject.toml is not found
+            RuntimeError: If dependency installation fails
+        """
+        pyproject_file = plugin_path / "pyproject.toml"
+
+        # Require pyproject.toml (PEP 621)
+        if not pyproject_file.exists():
+            raise FileNotFoundError(
+                f"Plugin '{plugin_name}' must have a pyproject.toml file.\n"
+                f"PEP 621 (https://peps.python.org/pep-0621/) specifies pyproject.toml "
+                f"as the standard for Python project metadata and dependencies.\n"
+                f"Expected location: {pyproject_file}"
+            )
+
+        # Extract dependencies
+        deps = cls._extract_deps_from_pyproject(pyproject_file)
+
+        if not deps:
+            logger.debug(f"No dependencies found for plugin '{plugin_name}'")
+            return
+
+        # Install with uv pip install (let uv handle conflicts)
+        logger.info(
+            f"Installing {len(deps)} dependencies for plugin '{plugin_name}'..."
+        )
+        cls._install_dependencies_with_uv(deps, plugin_name)
+
+    @classmethod
+    def _extract_deps_from_pyproject(cls, pyproject_path: Path) -> list[str]:
+        """
+        Extract dependencies from pyproject.toml using tomllib (Python 3.11+).
+
+        Args:
+            pyproject_path: Path to pyproject.toml file
+
+        Returns:
+            List of dependency specifiers
+        """
+        import tomllib  # stdlib in Python 3.11+
+
+        with pyproject_path.open("rb") as f:
+            data = tomllib.load(f)
+
+        deps = data.get("project", {}).get("dependencies", [])
+
+        # Filter out comments and empty strings
+        filtered_deps = [
+            dep.strip()
+            for dep in deps
+            if dep and dep.strip() and not dep.strip().startswith("#")
+        ]
+
+        logger.debug(
+            f"Extracted {len(filtered_deps)} dependencies from {pyproject_path}"
+        )
+        return filtered_deps
+
+    @classmethod
+    def _install_dependencies_with_uv(cls, deps: list[str], plugin_name: str) -> None:
+        """
+        Install dependencies using 'uv pip install'.
+
+        This uses runtime-only installation that doesn't modify the project's
+        pyproject.toml. Dependency conflicts are delegated to uv for resolution.
+
+        Args:
+            deps: List of dependency specifiers
+            plugin_name: Name of the plugin (for logging)
+
+        Raises:
+            RuntimeError: If installation fails or times out
+        """
+        import subprocess
+
+        logger.info(f"Dependencies to install: {', '.join(deps)}")
+
+        # Use uv pip install (runtime only, doesn't modify pyproject.toml)
+        cmd = ["uv", "pip", "install"] + deps
+
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 min timeout
+            )
+            logger.info(f"✓ Plugin '{plugin_name}' dependencies installed successfully")
+
+            if result.stdout:
+                logger.debug(f"uv output: {result.stdout}")
+
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Plugin '{plugin_name}' dependency installation timed out (>5 min). "
+                f"This may indicate a network issue or very large dependencies."
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to install dependencies for plugin '{plugin_name}'.\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"Error: {e.stderr}\n\n"
+                f"This may indicate version conflicts or missing packages. "
+                f"uv could not resolve the dependency tree."
+            ) from e
 
     @classmethod
     def clear(cls):

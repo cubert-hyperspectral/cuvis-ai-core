@@ -1,5 +1,6 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +21,21 @@ from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.types import Context, ExecutionStage
 
 
+class PipelineVisFormat(str, Enum):
+    """Pipeline visualization export formats.
+
+    Attributes
+    ----------
+    PNG : str
+        Render pipeline as PNG image using Graphviz
+    MD : str
+        Export pipeline as Markdown with Mermaid diagram
+    """
+
+    PNG = "png"
+    MD = "md"
+
+
 def restore_pipeline(
     pipeline_path: str | Path,
     weights_path: str | Path | None = None,
@@ -27,6 +43,8 @@ def restore_pipeline(
     cu3s_file_path: str | Path | None = None,
     processing_mode: str = "Reflectance",
     config_overrides: list[str] | None = None,
+    plugins_path: str | Path | None = None,
+    pipeline_vis_ext: PipelineVisFormat | None = None,
 ) -> CuvisPipeline:
     """Restore pipeline from configuration and weights for inference.
 
@@ -44,6 +62,13 @@ def restore_pipeline(
         Cuvis processing mode string ("Raw", "Reflectance")
     config_overrides : list[str] | None
         Optional list of config overrides in dot notation (e.g., ["nodes.10.params.output_dir=outputs/my_tb"])
+    plugins_path : str | Path | None
+        Optional path to plugins manifest YAML file for loading external plugin nodes
+    pipeline_vis_ext : PipelineVisFormat | None
+        Optional pipeline visualization export format.
+        If provided, saves visualization next to the pipeline YAML file.
+        PipelineVisFormat.PNG for rendered image, PipelineVisFormat.MD for Mermaid markdown.
+        Default: None (no visualization)
 
     Returns
     -------
@@ -58,13 +83,39 @@ def restore_pipeline(
 
     logger.info(f"Loading pipeline from {pipeline_path}")
 
+    # Load plugins if specified
+    registry = None
+    if plugins_path:
+        from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+        registry = NodeRegistry()
+        plugins_path = Path(plugins_path)
+        if not plugins_path.exists():
+            raise FileNotFoundError(f"Plugins manifest not found: {plugins_path}")
+        registry.load_plugins(plugins_path)
+        logger.info(f"Loaded plugins from: {plugins_path}")
+
     load_device = device if device != "auto" else None
     pipeline = CuvisPipeline.load_pipeline(
         str(pipeline_path),
         weights_path=str(weights_path) if weights_path.exists() else None,
         device=load_device,
         config_overrides=config_overrides,
+        node_registry=registry,
     )
+
+    # Generate pipeline visualization if requested
+    if pipeline_vis_ext is not None:
+        pipeline_path_obj = Path(pipeline_path)
+
+        if pipeline_vis_ext == PipelineVisFormat.PNG:
+            vis_output = pipeline_path_obj.with_suffix(".png")
+            pipeline.visualize(format="render", output_path=vis_output)
+            logger.info(f"Pipeline visualization (PNG) saved to: {vis_output}")
+        elif pipeline_vis_ext == PipelineVisFormat.MD:
+            vis_output = pipeline_path_obj.with_suffix(".md")
+            pipeline.visualize(format="render_mermaid", output_path=vis_output)
+            logger.info(f"Pipeline visualization (Markdown) saved to: {vis_output}")
 
     # If cu3s_file_path provided, setup data and run inference
     if cu3s_file_path:
@@ -459,8 +510,26 @@ Examples:
         action="append",
         help="Override config values in dot notation. Can be specified multiple times.",
     )
+    parser.add_argument(
+        "--plugins-path",
+        type=str,
+        default=None,
+        help="Path to plugins manifest YAML file for loading external plugin nodes",
+    )
+    parser.add_argument(
+        "--pipeline-vis-ext",
+        type=str,
+        choices=["png", "md"],
+        default=None,
+        help="Export pipeline visualization: 'png' (rendered image) or 'md' (Mermaid markdown)",
+    )
 
     args = parser.parse_args()
+
+    # Convert string argument to enum if provided
+    vis_ext = None
+    if args.pipeline_vis_ext is not None:
+        vis_ext = PipelineVisFormat(args.pipeline_vis_ext)
 
     restore_pipeline(
         pipeline_path=args.pipeline_path,
@@ -469,6 +538,8 @@ Examples:
         cu3s_file_path=args.cu3s_file_path,
         processing_mode=args.processing_mode,
         config_overrides=args.override,
+        plugins_path=args.plugins_path,
+        pipeline_vis_ext=vis_ext,
     )
 
 

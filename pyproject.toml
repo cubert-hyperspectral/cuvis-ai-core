@@ -68,6 +68,10 @@ test = [
 Homepage = "https://gitlab.cubert.local/cubert/cuvis-ai-core"
 Repository = "https://gitlab.cubert.local/cubert/cuvis-ai-core.git"
 
+[project.scripts]
+restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
+restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cuvis_ai_core"]
