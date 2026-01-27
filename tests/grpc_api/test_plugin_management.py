@@ -10,7 +10,9 @@ from cuvis_ai_core.utils.plugin_config import PluginManifest, LocalPluginConfig
 class TestPluginManagementIntegration:
     """Integration tests for plugin management workflows."""
 
-    def test_complete_plugin_workflow(self, grpc_stub, tmp_path):
+    def test_complete_plugin_workflow(
+        self, grpc_stub, tmp_path, create_plugin_pyproject
+    ):
         """Test complete plugin workflow: create session → load plugins → use in pipeline → cleanup."""
         # Step 1: Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
@@ -27,13 +29,14 @@ from cuvis_ai_core.node import Node
 class WorkflowTestNode(Node):
     INPUT_SPECS = {"input": {"dtype": "float32", "shape": (-1,)}}
     OUTPUT_SPECS = {"output": {"dtype": "float32", "shape": (-1,)}}
-    
+
     def forward(self, input):
         return {"output": input}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Step 3: Load plugin via gRPC
         manifest = PluginManifest(
@@ -93,7 +96,7 @@ class WorkflowTestNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_load_multiple_plugins(self, grpc_stub, tmp_path):
+    def test_load_multiple_plugins(self, grpc_stub, tmp_path, create_plugin_pyproject):
         """Test loading multiple plugins in single request."""
         # Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
@@ -109,13 +112,14 @@ from cuvis_ai_core.node import Node
 class Plugin1Node(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin1_dir)
 
         plugin2_dir = tmp_path / "plugin2"
         plugin2_dir.mkdir()
@@ -126,13 +130,14 @@ from cuvis_ai_core.node import Node
 class Plugin2Node(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin2_dir)
 
         # Create manifest with both plugins
         manifest = PluginManifest(
@@ -181,7 +186,9 @@ class Plugin2Node(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_plugin_not_available_in_other_session(self, grpc_stub, tmp_path):
+    def test_plugin_not_available_in_other_session(
+        self, grpc_stub, tmp_path, create_plugin_pyproject
+    ):
         """Test that plugin loaded in one session is not available in another."""
         # Create two sessions
         session1_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
@@ -200,13 +207,14 @@ from cuvis_ai_core.node import Node
 class IsolatedNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Load plugin only in session1
         manifest = PluginManifest(
@@ -266,7 +274,9 @@ class IsolatedNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_session_cleanup_removes_plugins(self, grpc_stub, tmp_path):
+    def test_session_cleanup_removes_plugins(
+        self, grpc_stub, tmp_path, create_plugin_pyproject
+    ):
         """Test that closing session removes plugin references."""
         # Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
@@ -282,13 +292,14 @@ from cuvis_ai_core.node import Node
 class CleanupNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         manifest = PluginManifest(
             plugins={
@@ -327,7 +338,9 @@ class CleanupNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_plugin_provides_multiple_nodes(self, grpc_stub, tmp_path):
+    def test_plugin_provides_multiple_nodes(
+        self, grpc_stub, tmp_path, create_plugin_pyproject
+    ):
         """Test plugin that provides multiple node classes."""
         # Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
@@ -343,33 +356,34 @@ from cuvis_ai_core.node import Node
 class NodeA(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 
 class NodeB(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 
 class NodeC(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Create manifest
         manifest = PluginManifest(
@@ -489,7 +503,7 @@ class NodeC(Node):
             )
 
     def test_list_available_nodes_includes_builtins_and_plugins(
-        self, grpc_stub, tmp_path
+        self, grpc_stub, tmp_path, create_plugin_pyproject
     ):
         """Test that ListAvailableNodes returns both builtin and plugin nodes."""
         # Create session
@@ -506,13 +520,14 @@ from cuvis_ai_core.node import Node
 class PluginNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         manifest = PluginManifest(
             plugins={

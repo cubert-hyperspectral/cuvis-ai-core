@@ -20,7 +20,8 @@ except ImportError:  # pragma: no cover - optional dependency
     git = None
 
 
-def _write_local_plugin(plugin_root: Path) -> Path:
+def _write_local_plugin(plugin_root: Path, create_pyproject_toml) -> Path:
+    """Create a minimal test plugin with PEP 621 compliant structure."""
     plugin_root.mkdir(parents=True, exist_ok=True)
     (plugin_root / "__init__.py").write_text("")
     (plugin_root / "simple_node.py").write_text(
@@ -34,6 +35,8 @@ def _write_local_plugin(plugin_root: Path) -> Path:
         "    def forward(self, **inputs):\n"
         '        return {"result": self.test_value}\n'
     )
+    # Create PEP 621 compliant pyproject.toml
+    create_pyproject_toml(plugin_root)
     return plugin_root
 
 
@@ -99,8 +102,10 @@ def test_plugin_manifest_validation(tmp_path: Path):
     assert "test_git" in loaded_manifest.plugins
 
 
-def test_local_plugin_loading(tmp_path: Path):
-    plugin_root = _write_local_plugin(tmp_path / "simple_plugin")
+def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject):
+    plugin_root = _write_local_plugin(
+        tmp_path / "simple_plugin", create_plugin_pyproject
+    )
     registry = NodeRegistry()
 
     registry.load_plugin(
@@ -116,9 +121,9 @@ def test_local_plugin_loading(tmp_path: Path):
     assert instance.test_value == "Hello from plugin!"
 
 
-def test_manifest_relative_path_resolution(tmp_path: Path):
+def test_manifest_relative_path_resolution(tmp_path: Path, create_plugin_pyproject):
     plugins_dir = tmp_path / "plugins"
-    _write_local_plugin(plugins_dir / "rel_plugin")
+    _write_local_plugin(plugins_dir / "rel_plugin", create_plugin_pyproject)
     manifest_data = {
         "plugins": {
             "rel_test": {
@@ -137,8 +142,10 @@ def test_manifest_relative_path_resolution(tmp_path: Path):
     assert "SimpleTestNode" in registry.plugin_registry
 
 
-def test_pipeline_integration_with_plugin(tmp_path: Path):
-    plugin_root = _write_local_plugin(tmp_path / "simple_plugin")
+def test_pipeline_integration_with_plugin(tmp_path: Path, create_plugin_pyproject):
+    plugin_root = _write_local_plugin(
+        tmp_path / "simple_plugin", create_plugin_pyproject
+    )
     registry = NodeRegistry()
 
     registry.load_plugin(
