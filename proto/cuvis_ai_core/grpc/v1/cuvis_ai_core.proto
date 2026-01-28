@@ -480,7 +480,7 @@ message PluginInfo {
   string name = 1;
   string type = 2;  // "git" or "local"
   string source = 3;  // repo URL or filesystem path
-  string ref = 4;  // Git ref (if applicable)
+  string tag = 4;  // Git tag (if applicable)
   repeated string provides = 5;  // Class paths provided
 }
 

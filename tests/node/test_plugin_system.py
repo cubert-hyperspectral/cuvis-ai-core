@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_config import (
@@ -13,11 +14,6 @@ from cuvis_ai_core.utils.plugin_config import (
     LocalPluginConfig,
     PluginManifest,
 )
-
-try:
-    import git
-except ImportError:  # pragma: no cover - optional dependency
-    git = None
 
 
 def _write_local_plugin(plugin_root: Path, create_pyproject_toml) -> Path:
@@ -43,11 +39,11 @@ def _write_local_plugin(plugin_root: Path, create_pyproject_toml) -> Path:
 def test_plugin_config_validation():
     git_config = GitPluginConfig(
         repo="git@gitlab.cubert.local:cubert/test-plugin.git",
-        ref="v1.2.3",
+        tag="v1.2.3",
         provides=["test_plugin.TestNode"],
     )
     assert git_config.repo.endswith("test-plugin.git")
-    assert git_config.ref == "v1.2.3"
+    assert git_config.tag == "v1.2.3"
 
     local_config = LocalPluginConfig(
         path="/path/to/plugin",
@@ -56,19 +52,19 @@ def test_plugin_config_validation():
     assert local_config.path == "/path/to/plugin"
 
     with pytest.raises(Exception):
-        GitPluginConfig(repo="invalid-url", ref="v1.0.0", provides=["test.Node"])
+        GitPluginConfig(repo="invalid-url", tag="v1.0.0", provides=["test.Node"])
 
     with pytest.raises(Exception):
         GitPluginConfig(
             repo="git@gitlab.com:user/repo.git",
-            ref="v1.0.0",
+            tag="v1.0.0",
             provides=["InvalidPath"],
         )
 
     with pytest.raises(Exception):
         GitPluginConfig(
             repo="git@gitlab.com:user/repo.git",
-            ref="v1.0.0",
+            tag="v1.0.0",
             provides=[],
         )
 
@@ -78,7 +74,7 @@ def test_plugin_manifest_validation(tmp_path: Path):
         "plugins": {
             "test_git": {
                 "repo": "git@gitlab.com:user/repo.git",
-                "ref": "v1.0.0",
+                "tag": "v1.0.0",
                 "provides": ["repo.TestNode"],
             },
             "test_local": {"path": "../my-plugin", "provides": ["my_plugin.MyNode"]},
@@ -178,7 +174,7 @@ def test_pipeline_integration_with_plugin(tmp_path: Path, create_plugin_pyprojec
 #             "git_test",
 #             {
 #                 "repo": f"file://{repo_root}",
-#                 "ref": commit_2,
+#                 "tag": commit_2,
 #                 "provides": ["node_impl.GitTestNode"],
 #             },
 #         )

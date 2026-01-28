@@ -2,22 +2,16 @@
 
 import importlib
 import inspect
-import shutil
-import sys
 from pathlib import Path
 from typing import Dict, Optional, Union
+
+from loguru import logger
+
+import cuvis_ai_core.utils.git_and_os as git_os
 from cuvis_ai_core.utils.plugin_config import (
     GitPluginConfig,
     LocalPluginConfig,
 )
-
-
-try:
-    import git
-except ImportError:
-    git = None  # Git operations will fail gracefully with clear error
-
-from loguru import logger
 
 
 class NodeRegistry:
@@ -189,63 +183,8 @@ class NodeRegistry:
 
     @classmethod
     def _import_from_path(cls, import_path: str, clear_cache: bool = False) -> type:
-        """
-        Import a class from a full module path.
-
-        Args:
-            import_path: Full import path (e.g., "my_package.nodes.CustomNode")
-            clear_cache: If True, clear module cache before importing (for plugin reloading)
-
-        Returns:
-            The imported class
-
-        Raises:
-            ImportError: If module cannot be imported
-            AttributeError: If class doesn't exist in module
-        """
-        try:
-            # Split into module path and class name
-            parts = import_path.rsplit(".", 1)
-            if len(parts) != 2:
-                raise ValueError(f"Invalid import path: '{import_path}'")
-
-            module_path, class_name = parts
-
-            # Clear module cache if requested (for plugin reloading)
-            if clear_cache:
-                parts_to_clear = module_path.split(".")
-                for i in range(len(parts_to_clear), 0, -1):
-                    partial_path = ".".join(parts_to_clear[:i])
-                    if partial_path in sys.modules:
-                        del sys.modules[partial_path]
-                        logger.debug(f"Cleared cached module: {partial_path}")
-
-            # Import the module
-            module = importlib.import_module(module_path)
-
-            # Get the class
-            if not hasattr(module, class_name):
-                raise AttributeError(
-                    f"Module '{module_path}' has no class '{class_name}'. Available: {dir(module)}"
-                )
-
-            node_class = getattr(module, class_name)
-
-            # Verify it's a class
-            if not inspect.isclass(node_class):
-                raise TypeError(
-                    f"'{import_path}' is not a class, got {type(node_class)}"
-                )
-
-            return node_class
-
-        except ImportError as e:
-            raise ImportError(
-                f"Failed to import module for '{import_path}': {e}\n"
-                f"Ensure the module is installed and the path is correct."
-            ) from e
-        except AttributeError as e:
-            raise AttributeError(f"Failed to load class '{import_path}': {e}") from e
+        """Import a class from a full module path."""
+        return git_os._import_from_path(import_path, clear_cache=clear_cache)
 
     @classmethod
     def list_builtin_nodes(cls) -> list[str]:
@@ -392,7 +331,7 @@ class NodeRegistry:
             registry = NodeRegistry()
             registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
-                "ref": "v1.2.3",
+                "tag": "v1.2.3",
                 "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
             })
             # Then use get() to retrieve the node class
@@ -530,11 +469,11 @@ class NodeRegistry:
         if plugin_name:
             for cache_entry in cls._cache_dir.glob(f"{plugin_name}@*"):
                 logger.info(f"Removing cache: {cache_entry}")
-                shutil.rmtree(cache_entry)
+                git_os.safe_rmtree(cache_entry)
         else:
             if cls._cache_dir.exists():
                 logger.info(f"Clearing all plugin caches in {cls._cache_dir}")
-                shutil.rmtree(cls._cache_dir)
+                git_os.safe_rmtree(cls._cache_dir)
 
     @classmethod
     def set_cache_dir(cls, path: Union[str, Path]) -> None:
@@ -552,23 +491,24 @@ class NodeRegistry:
     @classmethod
     def _ensure_git_plugin(cls, plugin_name: str, config: "GitPluginConfig") -> Path:
         """Clone or reuse cached Git repository."""
-        if git is None:
-            raise ImportError(
-                "GitPython is required for Git plugins. "
-                "Install with: uv add gitpython>=3.1.40"
-            )
-
-        cache_dir = cls._cache_dir / f"{plugin_name}@{config.ref}"
+        cache_dir = cls._cache_dir / f"{plugin_name}@{config.tag}"
 
         if cache_dir.exists():
-            if cls._verify_ref_matches(cache_dir, config.ref):
+            if cls._verify_tag_matches(cache_dir, config.tag):
                 logger.info(f"Using cached plugin '{plugin_name}' at {cache_dir}")
                 return cache_dir
             else:
                 logger.warning(f"Cache mismatch for '{plugin_name}', re-cloning...")
-                shutil.rmtree(cache_dir)
+                try:
+                    git_os.safe_rmtree(cache_dir)
+                except PermissionError as exc:
+                    raise PermissionError(
+                        f"Failed to remove cached plugin '{plugin_name}' at {cache_dir}. "
+                        "A file is likely locked or marked read-only. Close any process "
+                        "using the cache or delete it manually, then retry."
+                    ) from exc
 
-        return cls._clone_repository(config.repo, cache_dir, config.ref)
+        return cls._clone_repository(config.repo, cache_dir, config.tag)
 
     @classmethod
     def _ensure_local_plugin(cls, plugin_name: str, config: LocalPluginConfig) -> Path:
@@ -587,179 +527,34 @@ class NodeRegistry:
         return plugin_path
 
     @classmethod
-    def _verify_ref_matches(cls, repo_path: Path, expected_ref: str) -> bool:
-        """Verify that cached repository is at the expected ref."""
-        try:
-            repo = git.Repo(repo_path)
-            current_commit = repo.head.commit.hexsha[:7]
-
-            # Try as tag
-            if expected_ref in [tag.name for tag in repo.tags]:
-                return current_commit == repo.tags[expected_ref].commit.hexsha[:7]
-
-            # Try as branch
-            remote_branches = [ref.name for ref in repo.refs if "origin/" in ref.name]
-            if f"origin/{expected_ref}" in remote_branches:
-                return (
-                    current_commit == repo.commit(f"origin/{expected_ref}").hexsha[:7]
-                )
-
-            # Try as commit hash
-            return current_commit == expected_ref[:7]
-        except Exception as e:
-            logger.warning(f"Cache verification failed for {repo_path}: {e}")
-            return False
+    def _verify_tag_matches(cls, repo_path: Path, expected_tag: str) -> bool:
+        """Verify that cached repository is at the expected tag."""
+        return git_os._verify_tag_matches(repo_path, expected_tag)
 
     @classmethod
-    def _clone_repository(cls, repo_url: str, dest_path: Path, ref: str) -> Path:
-        """Clone Git repository and checkout specific ref."""
-        logger.info(f"Cloning {repo_url} (ref: {ref}) to {dest_path}")
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            repo = git.Repo.clone_from(repo_url, dest_path, branch=None, depth=1)
-            try:
-                repo.git.checkout(ref)
-            except git.GitCommandError:
-                logger.info(f"Ref '{ref}' not in shallow clone, fetching...")
-                repo.git.fetch("origin", ref, depth=1)
-                repo.git.checkout(ref)
-
-            logger.info(f"Successfully cloned and checked out {ref}")
-            return dest_path
-        except git.GitCommandError as e:
-            if dest_path.exists():
-                shutil.rmtree(dest_path)
-            raise RuntimeError(
-                f"Failed to clone repository '{repo_url}' at ref '{ref}': {e}"
-            ) from e
+    def _clone_repository(cls, repo_url: str, dest_path: Path, tag: str) -> Path:
+        """Clone Git repository and checkout specific tag."""
+        return git_os._clone_repository(repo_url, dest_path, tag)
 
     @classmethod
     def _add_to_sys_path(cls, path: Path) -> None:
         """Add path to sys.path if not already present."""
-        path_str = str(path)
-        if path_str not in sys.path:
-            sys.path.insert(0, path_str)
-            logger.debug(f"Added to sys.path: {path_str}")
+        git_os._add_to_sys_path(path)
 
     @classmethod
     def _install_plugin_dependencies(cls, plugin_path: Path, plugin_name: str) -> None:
-        """
-        Detect and install plugin dependencies from pyproject.toml.
-
-        This method enforces PEP 621 compliance by requiring plugins to have
-        a pyproject.toml file with proper dependency specifications.
-
-        Args:
-            plugin_path: Path to the plugin directory
-            plugin_name: Name of the plugin (for logging)
-
-        Raises:
-            FileNotFoundError: If pyproject.toml is not found
-            RuntimeError: If dependency installation fails
-        """
-        pyproject_file = plugin_path / "pyproject.toml"
-
-        # Require pyproject.toml (PEP 621)
-        if not pyproject_file.exists():
-            raise FileNotFoundError(
-                f"Plugin '{plugin_name}' must have a pyproject.toml file.\n"
-                f"PEP 621 (https://peps.python.org/pep-0621/) specifies pyproject.toml "
-                f"as the standard for Python project metadata and dependencies.\n"
-                f"Expected location: {pyproject_file}"
-            )
-
-        # Extract dependencies
-        deps = cls._extract_deps_from_pyproject(pyproject_file)
-
-        if not deps:
-            logger.debug(f"No dependencies found for plugin '{plugin_name}'")
-            return
-
-        # Install with uv pip install (let uv handle conflicts)
-        logger.info(
-            f"Installing {len(deps)} dependencies for plugin '{plugin_name}'..."
-        )
-        cls._install_dependencies_with_uv(deps, plugin_name)
+        """Detect and install plugin dependencies from pyproject.toml."""
+        git_os._install_plugin_dependencies(plugin_path, plugin_name)
 
     @classmethod
     def _extract_deps_from_pyproject(cls, pyproject_path: Path) -> list[str]:
-        """
-        Extract dependencies from pyproject.toml using tomllib (Python 3.11+).
-
-        Args:
-            pyproject_path: Path to pyproject.toml file
-
-        Returns:
-            List of dependency specifiers
-        """
-        import tomllib  # stdlib in Python 3.11+
-
-        with pyproject_path.open("rb") as f:
-            data = tomllib.load(f)
-
-        deps = data.get("project", {}).get("dependencies", [])
-
-        # Filter out comments and empty strings
-        filtered_deps = [
-            dep.strip()
-            for dep in deps
-            if dep and dep.strip() and not dep.strip().startswith("#")
-        ]
-
-        logger.debug(
-            f"Extracted {len(filtered_deps)} dependencies from {pyproject_path}"
-        )
-        return filtered_deps
+        """Extract dependencies from pyproject.toml using tomllib (Python 3.11+)."""
+        return git_os._extract_deps_from_pyproject(pyproject_path)
 
     @classmethod
     def _install_dependencies_with_uv(cls, deps: list[str], plugin_name: str) -> None:
-        """
-        Install dependencies using 'uv pip install'.
-
-        This uses runtime-only installation that doesn't modify the project's
-        pyproject.toml. Dependency conflicts are delegated to uv for resolution.
-
-        Args:
-            deps: List of dependency specifiers
-            plugin_name: Name of the plugin (for logging)
-
-        Raises:
-            RuntimeError: If installation fails or times out
-        """
-        import subprocess
-
-        logger.info(f"Dependencies to install: {', '.join(deps)}")
-
-        # Use uv pip install (runtime only, doesn't modify pyproject.toml)
-        cmd = ["uv", "pip", "install"] + deps
-
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 min timeout
-            )
-            logger.info(f"✓ Plugin '{plugin_name}' dependencies installed successfully")
-
-            if result.stdout:
-                logger.debug(f"uv output: {result.stdout}")
-
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(
-                f"Plugin '{plugin_name}' dependency installation timed out (>5 min). "
-                f"This may indicate a network issue or very large dependencies."
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Failed to install dependencies for plugin '{plugin_name}'.\n"
-                f"Command: {' '.join(cmd)}\n"
-                f"Error: {e.stderr}\n\n"
-                f"This may indicate version conflicts or missing packages. "
-                f"uv could not resolve the dependency tree."
-            ) from e
+        """Install dependencies using 'uv pip install'."""
+        git_os._install_dependencies_with_uv(deps, plugin_name)
 
     @classmethod
     def clear(cls):
