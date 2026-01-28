@@ -951,23 +951,23 @@ class PluginManifest(_message.Message):
     def __init__(self, config_bytes: _Optional[bytes] = ...) -> None: ...
 
 class PluginInfo(_message.Message):
-    __slots__ = ("name", "type", "source", "ref", "provides")
+    __slots__ = ("name", "type", "source", "tag", "provides")
     NAME_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
-    REF_FIELD_NUMBER: _ClassVar[int]
+    TAG_FIELD_NUMBER: _ClassVar[int]
     PROVIDES_FIELD_NUMBER: _ClassVar[int]
     name: str
     type: str
     source: str
-    ref: str
+    tag: str
     provides: _containers.RepeatedScalarFieldContainer[str]
     def __init__(
         self,
         name: _Optional[str] = ...,
         type: _Optional[str] = ...,
         source: _Optional[str] = ...,
-        ref: _Optional[str] = ...,
+        tag: _Optional[str] = ...,
         provides: _Optional[_Iterable[str]] = ...,
     ) -> None: ...
 

@@ -199,3 +199,4 @@ experiments/
 /.venv-adaclip-test/
 .history/
 configs/
+.claude/

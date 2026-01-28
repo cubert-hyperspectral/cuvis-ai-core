@@ -121,6 +121,39 @@ def mock_pipeline_dir(tmp_path):
 
 
 @pytest.fixture
+def create_plugin_pyproject():
+    """Fixture providing a helper to create PEP 621 compliant pyproject.toml for test plugins.
+
+    Returns:
+        Callable that takes a plugin directory Path and creates a minimal pyproject.toml
+
+    Example:
+        def test_my_plugin(tmp_path, create_plugin_pyproject):
+            plugin_dir = tmp_path / "my_plugin"
+            plugin_dir.mkdir()
+            create_plugin_pyproject(plugin_dir)
+    """
+    from pathlib import Path
+
+    def _create_pyproject_toml(plugin_dir: Path) -> None:
+        """Create PEP 621 compliant pyproject.toml for test plugin.
+
+        Args:
+            plugin_dir: Directory where the plugin is located
+        """
+        (plugin_dir / "pyproject.toml").write_text(
+            "[project]\n"
+            f'name = "{plugin_dir.name}"\n'
+            'version = "0.1.0"\n'
+            'description = "Test plugin"\n'
+            'requires-python = ">=3.11"\n'
+            "dependencies = []\n"
+        )
+
+    return _create_pyproject_toml
+
+
+@pytest.fixture
 def mock_statistical_trainable_node():
     """Fixture providing MockStatisticalTrainableNode class for tests.
 

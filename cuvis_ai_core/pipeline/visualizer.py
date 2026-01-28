@@ -242,13 +242,7 @@ class PipelineVisualizer:
     ) -> Path:
         """Render the Graphviz output to an image file."""
 
-        try:
-            from graphviz import Source
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError(
-                "graphviz package is required for rendering. "
-                "Install it with `pip install graphviz` and ensure Graphviz binaries are available."
-            ) from exc
+        from graphviz import Source
 
         dot_source = self.to_graphviz(
             rankdir=rankdir,

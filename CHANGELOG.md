@@ -1,4 +1,10 @@
 # Changelog
+## V0.1.1
+- Fix for plugin installation by automatically installing plugin dependencies from pyproject.toml
+- New visualization-extension input parameter for restore pipeline (supports PNG and Markdown formats)
+- Enhanced plugin support in pipeline loading with optional node registry parameter
+- Improved error messaging for plugin-related issues with usage examples
+
 ## V0.1.0
 - Initial repository creation with framework-only architecture extracted from cuvis-ai monolith
 - Core framework components: Base Node class, Pipeline infrastructure, Training framework, gRPC services, NodeRegistry

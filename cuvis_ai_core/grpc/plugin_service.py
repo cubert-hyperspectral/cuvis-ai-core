@@ -90,7 +90,7 @@ class PluginService:
         for name, config in session.loaded_plugins.items():
             plugin_type = "git" if "repo" in config else "local"
             source = config.get("repo") or config.get("path", "")
-            ref = config.get("ref", "")
+            tag = config.get("tag", "")
             provides = config.get("provides", [])
 
             plugins.append(
@@ -98,7 +98,7 @@ class PluginService:
                     name=name,
                     type=plugin_type,
                     source=source,
-                    ref=ref,
+                    tag=tag,
                     provides=provides,
                 )
             )
@@ -126,7 +126,7 @@ class PluginService:
         config = session.loaded_plugins[request.plugin_name]
         plugin_type = "git" if "repo" in config else "local"
         source = config.get("repo") or config.get("path", "")
-        ref = config.get("ref", "")
+        tag = config.get("tag", "")
         provides = config.get("provides", [])
 
         return cuvis_ai_pb2.GetPluginInfoResponse(
@@ -134,7 +134,7 @@ class PluginService:
                 name=request.plugin_name,
                 type=plugin_type,
                 source=source,
-                ref=ref,
+                tag=tag,
                 provides=provides,
             )
         )
