@@ -49,19 +49,28 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
     # Handle torch.Tensor as a generic tensor type (use UNSPECIFIED)
     elif spec.dtype is torch.Tensor:
         proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    # Handle Python built-in types (dict, str, list, etc.) as UNSPECIFIED
+    elif isinstance(spec.dtype, type):
+        # Python types like dict, str, list, tuple, etc.
+        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
     else:
         raise ValueError(f"Unsupported dtype type: {type(spec.dtype)}")
 
-    # Convert shape tuple to list of int64 (only ints allowed)
+    # Convert shape tuple to list of int64
+    # Symbolic dimensions (strings like "output_channels") are converted to -1 (dynamic)
     shape_list = []
     for dim in spec.shape:
         if isinstance(dim, int):
             shape_list.append(dim)
+        elif isinstance(dim, str):
+            # Symbolic dimension referring to a hyperparameter (e.g., "output_channels")
+            # Convert to -1 to indicate dynamic/runtime-determined dimension
+            shape_list.append(-1)
         else:
-            # Non-int shapes (like symbolic strings) are not supported in proto
+            # Invalid dimension type
             raise ValueError(
-                f"Port '{name}' has non-int shape dimension '{dim}'. "
-                f"Shape specifications must contain only integers."
+                f"Port '{name}' has invalid shape dimension type '{type(dim)}'. "
+                f"Expected int or str, got: {dim}"
             )
 
     return cuvis_ai_pb2.PortSpec(
@@ -223,7 +232,8 @@ class PluginService:
                 input_specs, output_specs = self._extract_port_specs(node_class)
             except Exception as e:
                 logger.warning(
-                    f"Failed to extract port specs for builtin node '{class_name}': {e}"
+                    f"Failed to extract port specs for builtin node '{class_name}': {e}",
+                    exc_info=True,  # Include full traceback
                 )
                 input_specs = {}
                 output_specs = {}
@@ -263,7 +273,8 @@ class PluginService:
                 input_specs, output_specs = self._extract_port_specs(node_class)
             except Exception as e:
                 logger.warning(
-                    f"Failed to extract port specs for plugin node '{class_name}': {e}"
+                    f"Failed to extract port specs for plugin node '{class_name}': {e}",
+                    exc_info=True,  # Include full traceback
                 )
                 input_specs = {}
                 output_specs = {}
