@@ -971,22 +971,88 @@ class PluginInfo(_message.Message):
         provides: _Optional[_Iterable[str]] = ...,
     ) -> None: ...
 
+class PortSpec(_message.Message):
+    __slots__ = ("name", "dtype", "shape", "optional", "description")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DTYPE_FIELD_NUMBER: _ClassVar[int]
+    SHAPE_FIELD_NUMBER: _ClassVar[int]
+    OPTIONAL_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    dtype: DType
+    shape: _containers.RepeatedScalarFieldContainer[int]
+    optional: bool
+    description: str
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        dtype: _Optional[_Union[DType, str]] = ...,
+        shape: _Optional[_Iterable[int]] = ...,
+        optional: _Optional[bool] = ...,
+        description: _Optional[str] = ...,
+    ) -> None: ...
+
+class PortSpecList(_message.Message):
+    __slots__ = ("specs",)
+    SPECS_FIELD_NUMBER: _ClassVar[int]
+    specs: _containers.RepeatedCompositeFieldContainer[PortSpec]
+    def __init__(
+        self, specs: _Optional[_Iterable[_Union[PortSpec, _Mapping]]] = ...
+    ) -> None: ...
+
 class NodeInfo(_message.Message):
-    __slots__ = ("class_name", "full_path", "source", "plugin_name")
+    __slots__ = (
+        "class_name",
+        "full_path",
+        "source",
+        "plugin_name",
+        "input_specs",
+        "output_specs",
+    )
+    class InputSpecsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: PortSpecList
+        def __init__(
+            self,
+            key: _Optional[str] = ...,
+            value: _Optional[_Union[PortSpecList, _Mapping]] = ...,
+        ) -> None: ...
+
+    class OutputSpecsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: PortSpecList
+        def __init__(
+            self,
+            key: _Optional[str] = ...,
+            value: _Optional[_Union[PortSpecList, _Mapping]] = ...,
+        ) -> None: ...
+
     CLASS_NAME_FIELD_NUMBER: _ClassVar[int]
     FULL_PATH_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     PLUGIN_NAME_FIELD_NUMBER: _ClassVar[int]
+    INPUT_SPECS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_SPECS_FIELD_NUMBER: _ClassVar[int]
     class_name: str
     full_path: str
     source: str
     plugin_name: str
+    input_specs: _containers.MessageMap[str, PortSpecList]
+    output_specs: _containers.MessageMap[str, PortSpecList]
     def __init__(
         self,
         class_name: _Optional[str] = ...,
         full_path: _Optional[str] = ...,
         source: _Optional[str] = ...,
         plugin_name: _Optional[str] = ...,
+        input_specs: _Optional[_Mapping[str, PortSpecList]] = ...,
+        output_specs: _Optional[_Mapping[str, PortSpecList]] = ...,
     ) -> None: ...
 
 class LoadPluginsRequest(_message.Message):

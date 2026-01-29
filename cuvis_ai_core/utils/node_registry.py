@@ -197,6 +197,27 @@ class NodeRegistry:
         return sorted(cls._builtin_registry.keys())
 
     @classmethod
+    def get_builtin_class(cls, class_name: str) -> type:
+        """
+        Get a built-in node class by name.
+
+        Args:
+            class_name: Name of the built-in node class
+
+        Returns:
+            The node class
+
+        Raises:
+            KeyError: If node not found in builtin registry
+        """
+        if class_name not in cls._builtin_registry:
+            raise KeyError(
+                f"Builtin node '{class_name}' not found. "
+                f"Available: {sorted(cls._builtin_registry.keys())}"
+            )
+        return cls._builtin_registry[class_name]
+
+    @classmethod
     def auto_register_package(
         cls, package_name: str, base_class_path: str = "cuvis_ai_core.node.node.Node"
     ) -> int:
@@ -354,29 +375,15 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
-
-        # Check if already loaded in this instance
+        # Early exit if already loaded in this instance
         if name in self.plugin_configs:
             logger.debug(f"Plugin '{name}' already loaded, skipping")
             return
 
-        # Validate and parse config
-        if "repo" in config:
-            plugin_config = GitPluginConfig.model_validate(config)
-            plugin_path = self._ensure_git_plugin(name, plugin_config)
-        elif "path" in config:
-            if manifest_dir is not None:
-                config = dict(config)
-                config["path"] = str(
-                    LocalPluginConfig(**config).resolve_path(manifest_dir)
-                )
-            plugin_config = LocalPluginConfig.model_validate(config)
-            plugin_path = self._ensure_local_plugin(name, plugin_config)
-        else:
-            raise ValueError(
-                f"Plugin '{name}' must have either 'repo' (Git) or 'path' (local)"
-            )
+        # Parse and validate config, get plugin path
+        plugin_config, plugin_path = git_os.parse_plugin_config(
+            name, config, manifest_dir
+        )
 
         # Install plugin dependencies automatically
         self._install_plugin_dependencies(plugin_path, name)
@@ -384,15 +391,25 @@ class NodeRegistry:
         # Add to sys.path
         self._add_to_sys_path(plugin_path)
 
-        # Import and register all provided classes
-        for class_path in plugin_config.provides:
-            # Clear cache for plugins to ensure fresh import
-            node_class = self._import_from_path(class_path, clear_cache=True)
-            class_name = node_class.__name__
+        # Extract package prefixes and clear module cache
+        package_prefixes = git_os.extract_package_prefixes(plugin_config.provides)
+        git_os.clear_package_modules(package_prefixes)
 
-            # Register in instance plugin registry
+        # Import all provided node classes
+        imported_nodes = git_os.import_plugin_nodes(
+            plugin_config.provides, clear_cache=True
+        )
+
+        # Register all imported nodes in instance registries
+        for class_name, node_class in imported_nodes.items():
             self.plugin_registry[class_name] = node_class
-            self.plugin_class_map[class_path] = name
+            # Find the original class_path for this class_name
+            for class_path in plugin_config.provides:
+                if class_path.endswith(f".{class_name}") or class_path.endswith(
+                    class_name
+                ):
+                    self.plugin_class_map[class_path] = name
+                    break
             logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
 
         # Track plugin config

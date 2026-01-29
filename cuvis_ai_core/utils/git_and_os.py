@@ -299,6 +299,140 @@ def _install_dependencies_with_uv(deps: list[str], plugin_name: str) -> None:
         ) from exc
 
 
+def parse_plugin_config(
+    name: str, config: dict, manifest_dir: Optional[Path] = None
+) -> tuple:
+    """Parse and validate plugin config, resolving paths and ensuring plugin exists.
+
+    Args:
+        name: Plugin identifier
+        config: Plugin configuration dict with repo+tag or path+provides
+        manifest_dir: Optional base directory for resolving local plugin paths
+
+    Returns:
+        Tuple of (plugin_config, plugin_path) where:
+        - plugin_config: Validated GitPluginConfig or LocalPluginConfig
+        - plugin_path: Path to the plugin directory
+
+    Raises:
+        ValueError: If config missing repo/path or plugin validation fails
+        FileNotFoundError: If local plugin path doesn't exist
+    """
+    from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+
+    # Validate and parse config
+    if "repo" in config:
+        plugin_config = GitPluginConfig.model_validate(config)
+        # For Git plugins, we need to ensure it's cloned/cached
+        from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+        plugin_path = NodeRegistry._ensure_git_plugin(name, plugin_config)
+    elif "path" in config:
+        if manifest_dir is not None:
+            # Resolve local paths relative to manifest directory
+            config = dict(config)
+            config["path"] = str(LocalPluginConfig(**config).resolve_path(manifest_dir))
+        plugin_config = LocalPluginConfig.model_validate(config)
+        # For local plugins, validate the path exists
+        from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+        plugin_path = NodeRegistry._ensure_local_plugin(name, plugin_config)
+    else:
+        raise ValueError(
+            f"Plugin '{name}' must have either 'repo' (Git) or 'path' (local)"
+        )
+
+    return plugin_config, plugin_path
+
+
+def extract_package_prefixes(class_paths: list[str]) -> set[str]:
+    """Extract top-level package prefixes from class paths.
+
+    Args:
+        class_paths: List of fully qualified class paths
+                    (e.g., ["cuvis_ai.node.MyNode", "foo.bar.Baz"])
+
+    Returns:
+        Set of top-level package names (e.g., {"cuvis_ai", "foo"})
+
+    Example:
+        >>> extract_package_prefixes(["cuvis_ai.node.MyNode", "foo.bar.Baz"])
+        {'cuvis_ai', 'foo'}
+    """
+    package_prefixes = set()
+    for class_path in class_paths:
+        # Extract top-level package name
+        top_package = class_path.split(".")[0]
+        package_prefixes.add(top_package)
+    return package_prefixes
+
+
+def clear_package_modules(prefixes: set[str]) -> None:
+    """Clear all modules with given package prefixes from sys.modules.
+
+    This is critical when loading plugins that may conflict with already-imported
+    packages. For example, if cuvis_ai is installed in the environment and we're
+    loading it as a plugin from a different path, we need to clear ALL cuvis_ai.*
+    modules to ensure Python reimports from the plugin path.
+
+    Args:
+        prefixes: Set of top-level package names to clear (e.g., {"cuvis_ai"})
+
+    Example:
+        >>> clear_package_modules({"cuvis_ai"})
+        # Clears sys.modules["cuvis_ai"], sys.modules["cuvis_ai.node"], etc.
+    """
+    modules_to_clear = []
+    for module_name in list(sys.modules.keys()):
+        for prefix in prefixes:
+            if module_name == prefix or module_name.startswith(f"{prefix}."):
+                modules_to_clear.append(module_name)
+                break
+
+    for module_name in modules_to_clear:
+        del sys.modules[module_name]
+        logger.debug(f"Cleared cached module: {module_name}")
+
+    if modules_to_clear:
+        logger.info(
+            f"Cleared {len(modules_to_clear)} cached modules for packages: {prefixes}"
+        )
+
+
+def import_plugin_nodes(
+    class_paths: list[str], clear_cache: bool = True
+) -> dict[str, type]:
+    """Import node classes from fully qualified paths.
+
+    Args:
+        class_paths: List of fully qualified class paths to import
+                    (e.g., ["cuvis_ai.node.MyNode"])
+        clear_cache: Whether to clear module cache before importing (default: True)
+
+    Returns:
+        Dict mapping class names to node classes
+        (e.g., {"MyNode": <class 'cuvis_ai.node.MyNode'>})
+
+    Raises:
+        ImportError: If module import fails
+        AttributeError: If class not found in module
+
+    Example:
+        >>> nodes = import_plugin_nodes(["cuvis_ai.node.MyNode"])
+        >>> nodes["MyNode"]
+        <class 'cuvis_ai.node.MyNode'>
+    """
+    imported_nodes = {}
+    for class_path in class_paths:
+        # Import the class with cache clearing if requested
+        node_class = _import_from_path(class_path, clear_cache=clear_cache)
+        class_name = node_class.__name__
+        imported_nodes[class_name] = node_class
+        logger.debug(f"Imported plugin node '{class_name}' from '{class_path}'")
+
+    return imported_nodes
+
+
 __all__ = [
     "safe_rmtree",
     "resolve_tag_commit",
@@ -309,4 +443,8 @@ __all__ = [
     "_install_plugin_dependencies",
     "_extract_deps_from_pyproject",
     "_install_dependencies_with_uv",
+    "parse_plugin_config",
+    "extract_package_prefixes",
+    "clear_package_modules",
+    "import_plugin_nodes",
 ]

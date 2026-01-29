@@ -200,3 +200,4 @@ experiments/
 .history/
 configs/
 .claude/
+cuvis-ai-core.code-workspace
