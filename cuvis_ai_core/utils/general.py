@@ -31,7 +31,7 @@ def _resolve_measurement_indices(
     indices: Sequence[int] | Iterable[int] | None, max_index: int = None
 ) -> list[int]:
     """Coerce, validate and store  indices."""
-    print("indices:", indices, "max_index:", max_index)
+    # print("indices:", indices, "max_index:", max_index)
     if indices is None and max_index is not None:
         resolved = list(range(max_index))
     elif isinstance(indices, range):

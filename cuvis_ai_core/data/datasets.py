@@ -17,6 +17,9 @@ from cuvis_ai_core.utils.general import _resolve_measurement_indices
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
+# cuvis.General.init(global_loglevel="Fatal")
+# cuvis.General.set_log_level("Fatal")
+
 
 class SingleCu3sDataset(Dataset):
     """Load cube frames from .cu3s sessions with optional COCO-derived masks."""

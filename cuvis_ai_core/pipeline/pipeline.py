@@ -1342,7 +1342,7 @@ class CuvisPipeline:
 
         Examples
         --------
-        >>> pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "RXLogitHead"])
+        >>> pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "ScoreToLogit"])
         """
         if not node_names:
             return
