@@ -99,7 +99,7 @@ class ConfigService:
 
             # Add training-specific validation for training config type
             if request.config_type == "training" and valid:
-                from cuvis_ai_core.training.config import TrainingConfig
+                from cuvis_ai_schemas.training import TrainingConfig
                 from cuvis_ai_core.training.optimizer_registry import (
                     get_supported_optimizers,
                     get_supported_schedulers,

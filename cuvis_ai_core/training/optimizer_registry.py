@@ -8,7 +8,7 @@ import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from cuvis_ai_core.training.config import OptimizerConfig, SchedulerConfig
+from cuvis_ai_schemas.training import OptimizerConfig, SchedulerConfig
 
 
 # -----------------------------------------------------------------------------

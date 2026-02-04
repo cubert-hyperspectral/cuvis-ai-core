@@ -6,6 +6,13 @@ set -e
 
 echo "Running pre-push checks..."
 
+# Sync dev dependencies first
+echo "→ Syncing dev dependencies..."
+if ! uv sync --dev; then
+    echo "✗ Dev dependency sync failed. Please check your environment."
+    exit 1
+fi
+
 # Run Ruff formatting first
 echo "→ Running Ruff formatting..."
 if ! uv run ruff format .; then

@@ -13,9 +13,9 @@ from torch.utils.data import DataLoader
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.training.datamodule import CuvisDataModule
 from cuvis_ai_core.training.trainers import StatisticalTrainer
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 from tests.fixtures.mock_nodes import (
     MockStatisticalTrainableNode,

@@ -1,8 +1,8 @@
 import json
 
-from cuvis_ai_core.training.config import (
+from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.training import (
     DataConfig,
-    PipelineConfig,
     TrainingConfig,
     TrainRunConfig,
 )
@@ -44,7 +44,7 @@ def test_yaml_to_pydantic():
         "weight_decay": 0.01,
     }
 
-    from cuvis_ai_core.training.config import OptimizerConfig
+    from cuvis_ai_schemas.training import OptimizerConfig
 
     config = OptimizerConfig(**yaml_dict)
 

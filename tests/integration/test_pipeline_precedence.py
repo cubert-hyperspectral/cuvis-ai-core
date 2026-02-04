@@ -4,9 +4,9 @@ import grpc
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
-from cuvis_ai_core.training.config import (
+from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.training import (
     DataConfig,
-    PipelineConfig,
     TrainingConfig,
     TrainRunConfig,
 )

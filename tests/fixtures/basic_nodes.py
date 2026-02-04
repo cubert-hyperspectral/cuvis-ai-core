@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.ports import PortSpec
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 @pytest.fixture

@@ -374,6 +374,7 @@ name = "cuvis-ai-core"
 source = { editable = "." }
 dependencies = [
     { name = "cuvis" },
+    { name = "cuvis-ai-schemas" },
     { name = "dataclass-wizard" },
     { name = "dotenv" },
     { name = "gdown" },
@@ -419,6 +420,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "cuvis", specifier = "==3.5.0" },
+    { name = "cuvis-ai-schemas", editable = "../../cuvis-ai-schemas" },
     { name = "dataclass-wizard" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "gdown", specifier = ">=5.2.1" },
@@ -455,6 +457,33 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.0.0" },
 ]
 provides-extras = ["dev", "test"]
+
+[[package]]
+name = "cuvis-ai-schemas"
+source = { editable = "../../cuvis-ai-schemas" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cuvis-ai-schemas", extras = ["lightning", "numpy", "proto", "torch"], marker = "extra == 'full'" },
+    { name = "grpcio", marker = "extra == 'proto'", specifier = ">=1.56.0" },
+    { name = "grpcio-tools", marker = "extra == 'proto'", specifier = ">=1.56.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
+    { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.21.0" },
+    { name = "protobuf", marker = "extra == 'proto'", specifier = ">=4.25.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytorch-lightning", marker = "extra == 'lightning'", specifier = ">=2.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torchvision", marker = "extra == 'torch'", index = "https://download.pytorch.org/whl/cu128" },
+]
+provides-extras = ["proto", "torch", "numpy", "lightning", "full", "dev"]
 
 [[package]]
 name = "cuvis-il"

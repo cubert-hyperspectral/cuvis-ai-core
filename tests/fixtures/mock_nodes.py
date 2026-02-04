@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.ports import PortSpec
-from cuvis_ai_core.utils.types import InputStream
+from cuvis_ai_schemas.execution import InputStream
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class MockStatisticalTrainableNode(Node):
@@ -422,7 +422,7 @@ class SimpleLossNode(Node):
     }
 
     def __init__(self, weight: float = 1.0, **kwargs):
-        from cuvis_ai_core.utils.types import ExecutionStage
+        from cuvis_ai_schemas.enums import ExecutionStage
 
         self.weight = weight
         super().__init__(weight=weight, **kwargs)

@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from cuvis_ai_core.grpc.helpers import find_weights_file, resolve_pipeline_path
-from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import (
     apply_config_overrides,
     generate_json_schema,
@@ -12,6 +11,7 @@ from cuvis_ai_core.utils.config_helpers import (
     resolve_config_with_hydra,
     validate_config_dict,
 )
+from cuvis_ai_schemas.training import DataConfig, TrainingConfig, TrainRunConfig
 
 
 class TestPipelinePathResolution:

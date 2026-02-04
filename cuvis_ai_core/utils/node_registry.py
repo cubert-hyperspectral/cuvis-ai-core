@@ -8,7 +8,7 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 import cuvis_ai_core.utils.git_and_os as git_os
-from cuvis_ai_core.utils.plugin_config import (
+from cuvis_ai_schemas.plugin import (
     GitPluginConfig,
     LocalPluginConfig,
 )
@@ -307,7 +307,7 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        from cuvis_ai_core.utils.plugin_config import PluginManifest
+        from cuvis_ai_schemas.plugin import PluginManifest
 
         manifest_path = Path(manifest_path)
         manifest = PluginManifest.from_yaml(manifest_path)

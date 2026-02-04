@@ -17,8 +17,8 @@ import torch
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortSpec
-from cuvis_ai_core.utils.types import ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 from tests.fixtures import MockStatisticalTrainableNode, SimpleLossNode
 
 
@@ -198,7 +198,7 @@ class TestOptionalPortHandling:
         node = NodeWithOptionalInput()
 
         # Only provide required input
-        from cuvis_ai_core.utils.types import Context
+        from cuvis_ai_schemas.execution import Context
 
         context = Context(stage="inference")
         result = node.forward(required=torch.tensor([1.0, 2.0, 3.0]), context=context)
@@ -227,7 +227,7 @@ class TestOptionalPortHandling:
         node = NodeWithOptionalInput()
 
         # Provide both inputs
-        from cuvis_ai_core.utils.types import Context
+        from cuvis_ai_schemas.execution import Context
 
         context = Context(stage="inference")
         result = node.forward(
@@ -260,7 +260,7 @@ class TestBatchDataKeyMapping:
 
         # Test that the node processes data correctly
         test_data = torch.randn(4, 10)
-        from cuvis_ai_core.utils.types import Context
+        from cuvis_ai_schemas.execution import Context
 
         context = Context(stage="inference")
         result = node.forward(data=test_data, context=context)

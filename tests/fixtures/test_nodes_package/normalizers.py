@@ -1,7 +1,7 @@
 """Mock normalizer nodes for testing auto-registration."""
 
 from cuvis_ai_core.node import Node
-from cuvis_ai_core.pipeline.ports import PortSpec
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 import torch
 
 

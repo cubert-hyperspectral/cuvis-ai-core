@@ -5,7 +5,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training.config import (
+from cuvis_ai_schemas.training import (
     OptimizerConfig,
     TrainerConfig,
     TrainingConfig,

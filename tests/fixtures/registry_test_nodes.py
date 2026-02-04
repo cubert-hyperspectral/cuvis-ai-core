@@ -5,8 +5,9 @@ They provide minimal implementations for testing registry operations.
 """
 
 from cuvis_ai_core.node import Node
-from cuvis_ai_core.pipeline.ports import PortSpec
-from cuvis_ai_core.utils.types import Context, ExecutionStage, Metric
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context, Metric
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 import torch
 
 

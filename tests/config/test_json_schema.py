@@ -1,10 +1,10 @@
 import pytest
 
-from cuvis_ai_core.training.config import OptimizerConfig, TrainingConfig
 from cuvis_ai_core.utils.config_helpers import (
     CONFIG_TYPE_REGISTRY,
     generate_json_schema,
 )
+from cuvis_ai_schemas.training import OptimizerConfig, TrainingConfig
 
 
 def test_optimizer_schema_generation():

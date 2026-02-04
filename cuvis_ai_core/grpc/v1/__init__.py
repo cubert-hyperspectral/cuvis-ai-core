@@ -1,12 +1,15 @@
-"""Versioned gRPC stubs for cuvis_ai_core."""
+"""Versioned gRPC stubs - now sourced from cuvis-ai-schemas package."""
 
-from . import cuvis_ai_core_pb2, cuvis_ai_core_pb2_grpc
-from . import cuvis_ai_core_pb2 as cuvis_ai_pb2
-from . import cuvis_ai_core_pb2_grpc as cuvis_ai_pb2_grpc
+# Import from external package
+from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
+
+# Maintain backward compatibility aliases (deprecated)
+cuvis_ai_core_pb2 = cuvis_ai_pb2
+cuvis_ai_core_pb2_grpc = cuvis_ai_pb2_grpc
 
 __all__ = [
-    "cuvis_ai_core_pb2",
-    "cuvis_ai_core_pb2_grpc",
+    "cuvis_ai_core_pb2",  # Deprecated - use cuvis_ai_pb2
+    "cuvis_ai_core_pb2_grpc",  # Deprecated - use cuvis_ai_pb2_grpc
     "cuvis_ai_pb2",
     "cuvis_ai_pb2_grpc",
 ]

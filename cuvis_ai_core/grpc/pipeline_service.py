@@ -10,7 +10,7 @@ import grpc
 import torch
 from pydantic import ValidationError
 
-from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_schemas.training import TrainRunConfig
 
 from . import helpers
 from .session_manager import SessionManager
@@ -176,7 +176,7 @@ class PipelineService:
         try:
             from datetime import datetime
 
-            from cuvis_ai_core.training.config import PipelineMetadata
+            from cuvis_ai_schemas.pipeline import PipelineMetadata
 
             # Use resolve_pipeline_save_path for consistent path resolution
             pipeline_path = helpers.resolve_pipeline_save_path(request.pipeline_path)
@@ -245,7 +245,7 @@ class PipelineService:
 
         try:
             from cuvis_ai_core.pipeline.factory import PipelineBuilder
-            from cuvis_ai_core.training.config import PipelineConfig
+            from cuvis_ai_schemas.pipeline import PipelineConfig
 
             config_dict = json.loads(request.pipeline.config_bytes)
             # Some YAML sources include a top-level version field that is not part of the schema.

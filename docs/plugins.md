@@ -114,7 +114,7 @@ NodeRegistry.clear_plugin_cache("adaclip")  # Clear specific plugin
 ### Git Plugin Configuration
 
 ```python
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig
 
 config = GitPluginConfig(
     repo="git@gitlab.cubert.local:cubert/test-plugin.git",
@@ -126,7 +126,7 @@ config = GitPluginConfig(
 ### Local Plugin Configuration
 
 ```python
-from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+from cuvis_ai_schemas.plugin import LocalPluginConfig
 
 config = LocalPluginConfig(
     path="/path/to/plugin",  # Absolute or relative path
@@ -137,7 +137,7 @@ config = LocalPluginConfig(
 ### Plugin Manifest
 
 ```python
-from cuvis_ai_core.utils.plugin_config import PluginManifest
+from cuvis_ai_schemas.plugin import PluginManifest
 
 # Load from YAML
 manifest = PluginManifest.from_yaml("plugins.yaml")

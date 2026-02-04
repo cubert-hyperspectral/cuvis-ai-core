@@ -18,7 +18,7 @@ import grpc
 from loguru import logger
 
 from cuvis_ai_core.grpc.v1 import cuvis_ai_core_pb2, cuvis_ai_core_pb2_grpc
-from cuvis_ai_core.utils.plugin_config import (
+from cuvis_ai_schemas.plugin import (
     GitPluginConfig,
     LocalPluginConfig,
     PluginManifest,

@@ -318,7 +318,7 @@ def parse_plugin_config(
         ValueError: If config missing repo/path or plugin validation fails
         FileNotFoundError: If local plugin path doesn't exist
     """
-    from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+    from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
     # Validate and parse config
     if "repo" in config:

@@ -29,7 +29,7 @@ def create_pipeline_config_proto(
         >>> config = create_pipeline_config_proto("gradient_based", load_weights=True)
     """
     from cuvis_ai_core.grpc.helpers import resolve_pipeline_path
-    from cuvis_ai_core.training.config import PipelineConfig
+    from cuvis_ai_schemas.pipeline import PipelineConfig
 
     # When loading weights, provide the identifier directly without validation
     # This allows the service to handle path resolution and error handling

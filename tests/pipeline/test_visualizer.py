@@ -4,9 +4,9 @@ import torch
 
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
-from cuvis_ai_core.utils.types import ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class ProducerNode(Node):

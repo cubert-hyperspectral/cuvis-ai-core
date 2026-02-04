@@ -10,11 +10,11 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, ValidationError
 
-from cuvis_ai_core.training.config import (
+from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.training import (
     CallbacksConfig,
     DataConfig,
     OptimizerConfig,
-    PipelineConfig,
     SchedulerConfig,
     TrainingConfig,
     TrainRunConfig,

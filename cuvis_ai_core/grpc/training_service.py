@@ -10,14 +10,15 @@ from typing import TYPE_CHECKING, Any
 import grpc
 
 from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback
-from cuvis_ai_core.training.config import (
+from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
+from cuvis_ai_schemas.training import (
     DataConfig,
     TrainingConfig,
     TrainRunConfig,
-    create_callbacks_from_config,
 )
-from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.utils.types import Context, ExecutionStage
+from cuvis_ai_core.training.callback_factory import create_callbacks_from_config
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
 
 from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2

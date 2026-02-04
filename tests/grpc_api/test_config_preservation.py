@@ -10,7 +10,7 @@ import yaml
 from omegaconf import OmegaConf
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
-from cuvis_ai_core.training.config import TrainingConfig, TrainRunConfig
+from cuvis_ai_schemas.training import TrainingConfig, TrainRunConfig
 from tests.fixtures.sessions import materialize_trainrun_config
 
 
@@ -251,7 +251,7 @@ class TestTrainingConfigFromDictConfig:
 
         This verifies the refactored implementation is lossless.
         """
-        from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
+        from cuvis_ai_schemas.training import OptimizerConfig, TrainerConfig
 
         original = TrainingConfig(
             seed=123,

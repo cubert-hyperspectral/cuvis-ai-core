@@ -16,9 +16,10 @@ from cuvis_ai_core.data.datasets import SingleCu3sDataModule
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.training.config import TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
-from cuvis_ai_core.utils.types import Context, ExecutionStage
+from cuvis_ai_schemas.training import TrainRunConfig
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
 
 
 class PipelineVisFormat(str, Enum):

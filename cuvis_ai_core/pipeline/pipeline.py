@@ -20,19 +20,20 @@ from cuvis_ai_core.pipeline.ports import (
     InputPort,
     OutputPort,
     PortCompatibilityError,
-    PortSpec,
 )
-from cuvis_ai_core.utils.types import Context, ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 if TYPE_CHECKING:
-    from cuvis_ai_core.training.config import PipelineConfig, PipelineMetadata
+    from cuvis_ai_schemas.pipeline import PipelineConfig, PipelineMetadata
 
 
 class CuvisPipeline:
     """Main class for connecting nodes in a CUVIS.AI processing graph"""
 
     def __init__(self, name: str, strict_runtime_io_validation: bool = True) -> None:
-        from cuvis_ai_core.training.config import PipelineMetadata
+        from cuvis_ai_schemas.pipeline import PipelineMetadata
 
         self._graph = nx.MultiDiGraph()
         self._metadata = PipelineMetadata(name=name)
@@ -290,7 +291,7 @@ class CuvisPipeline:
                 - nodes: List of node configurations
                 - connections: List of connection specifications
         """
-        from cuvis_ai_core.training.config import PipelineConfig
+        from cuvis_ai_schemas.pipeline import PipelineConfig
 
         node_configs: list[dict[str, Any]] = []
         for node in self.nodes:
@@ -363,7 +364,7 @@ class CuvisPipeline:
             RuntimeError: If validate_nodes=True and any node doesn't support serialization
 
         Example:
-            >>> from cuvis_ai_core.training.config import PipelineMetadata
+            >>> from cuvis_ai_schemas.pipeline import PipelineMetadata
             >>> pipeline.save_to_file(
             ...     "outputs/trained_pipeline.yaml",
             ...     validate_nodes=True,
@@ -568,7 +569,7 @@ class CuvisPipeline:
                 f"Failed to build pipeline from config.\nError: {e}"
             ) from e
 
-        from cuvis_ai_core.training.config import PipelineMetadata
+        from cuvis_ai_schemas.pipeline import PipelineMetadata
 
         metadata_dict = config.get("metadata", {})
         if metadata_dict:

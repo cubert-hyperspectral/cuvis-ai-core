@@ -11,13 +11,13 @@ from typing import Any
 from loguru import logger
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training.config import (
+from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.training import (
     DataConfig,
-    PipelineConfig,
     TrainingConfig,
     TrainRunConfig,
 )
-from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 
 @dataclass

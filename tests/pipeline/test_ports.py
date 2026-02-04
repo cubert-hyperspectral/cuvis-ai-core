@@ -10,8 +10,8 @@ from cuvis_ai_core.pipeline.ports import (
     DimensionResolver,
     InputPort,
     OutputPort,
-    PortSpec,
 )
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class TestPortSpec:

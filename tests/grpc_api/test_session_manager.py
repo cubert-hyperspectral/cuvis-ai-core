@@ -123,7 +123,7 @@ class TestSessionManager:
     def test_session_state_with_optional_data_config(self):
         """Test that session state properly handles optional trainrun_config."""
         manager = SessionManager()
-        from cuvis_ai_core.training.config import (
+        from cuvis_ai_schemas.training import (
             DataConfig,
             TrainingConfig,
             TrainRunConfig,

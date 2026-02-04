@@ -7,7 +7,8 @@ from __future__ import annotations
 import torch
 
 from cuvis_ai_core.node import Node
-from cuvis_ai_core.pipeline.ports import InputPort, OutputPort, PortSpec
+from cuvis_ai_core.pipeline.ports import InputPort, OutputPort
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class TestNodePortCreation:

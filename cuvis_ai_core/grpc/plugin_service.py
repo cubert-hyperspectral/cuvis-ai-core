@@ -11,9 +11,9 @@ from loguru import logger
 from cuvis_ai_core.grpc.helpers import DTYPE_NUMPY_TO_PROTO, DTYPE_TORCH_TO_PROTO
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_config import PluginManifest
+from cuvis_ai_schemas.pipeline.ports import PortSpec
+from cuvis_ai_schemas.plugin import PluginManifest
 
 
 def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortSpec:

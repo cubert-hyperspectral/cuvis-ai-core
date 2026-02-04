@@ -4,7 +4,7 @@ import grpc
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig, TrainingConfig
+from cuvis_ai_schemas.training import OptimizerConfig, TrainerConfig, TrainingConfig
 
 
 class TestCheckpointManagement:

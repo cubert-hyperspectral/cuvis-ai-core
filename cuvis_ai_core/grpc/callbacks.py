@@ -7,7 +7,8 @@ from typing import Any
 
 from pytorch_lightning import Callback, LightningModule, Trainer
 
-from cuvis_ai_core.utils.types import Context, ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
 
 
 class ProgressStreamCallback(Callback):

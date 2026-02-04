@@ -9,8 +9,8 @@ import pytest
 import torch
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig, TrainingConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
+from cuvis_ai_schemas.training import OptimizerConfig, TrainerConfig, TrainingConfig
 
 from tests.fixtures.mock_nodes import (
     MockStatisticalTrainableNode,

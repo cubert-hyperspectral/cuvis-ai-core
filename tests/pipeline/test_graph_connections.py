@@ -10,7 +10,8 @@ import torch
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortCompatibilityError, PortSpec
+from cuvis_ai_core.pipeline.ports import PortCompatibilityError
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class TestGraphConnectionBasics:

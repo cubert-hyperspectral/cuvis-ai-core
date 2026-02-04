@@ -7,9 +7,11 @@ from typing import Any
 
 from torch import nn
 
-from cuvis_ai_core.pipeline.ports import InputPort, OutputPort, PortSpec
+from cuvis_ai_core.pipeline.ports import InputPort, OutputPort
 from cuvis_ai_core.utils.serializer import Serializable
-from cuvis_ai_core.utils.types import ExecutionStage, InputStream
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import InputStream
+from cuvis_ai_schemas.pipeline.ports import PortSpec
 
 
 class Node(nn.Module, ABC, Serializable):

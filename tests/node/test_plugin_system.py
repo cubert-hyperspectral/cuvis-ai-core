@@ -9,7 +9,7 @@ import pytest
 
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_config import (
+from cuvis_ai_schemas.plugin import (
     GitPluginConfig,
     LocalPluginConfig,
     PluginManifest,

@@ -8,7 +8,7 @@ import grpc
 import torch
 import yaml
 
-from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_schemas.training import DataConfig, TrainingConfig, TrainRunConfig
 
 from . import helpers
 from .session_manager import SessionManager

@@ -13,7 +13,7 @@ import torch
 import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
-from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_schemas.training import TrainRunConfig
 
 DEFAULT_CHANNELS = 61
 
@@ -40,7 +40,7 @@ def shared_trained_session(grpc_server, test_data_files_cached):
     Uses grpc_server directly and creates its own stub to match session scope.
     """
     from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
-    from cuvis_ai_core.training.config import TrainRunConfig
+    from cuvis_ai_schemas.training import TrainRunConfig
     from tests.fixtures.sessions import materialize_trainrun_config
 
     cu3s_file, json_file = test_data_files_cached

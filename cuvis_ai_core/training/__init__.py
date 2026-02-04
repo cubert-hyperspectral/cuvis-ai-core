@@ -7,19 +7,20 @@ This module provides:
 - Internal Lightning module for training orchestration
 """
 
-from cuvis_ai_core.training.config import (
+from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.training import (
     CallbacksConfig,
     DataConfig,
     OptimizerConfig,
-    PipelineConfig,
     SchedulerConfig,
     TrainerConfig,
     TrainingConfig,
     TrainRunConfig,
 )
-from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_core.training.callback_factory import create_callbacks_from_config
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.utils.types import Context
+from cuvis_ai_schemas.execution import Context
 
 __all__ = [
     # Configuration
@@ -35,6 +36,8 @@ __all__ = [
     "CuvisDataModule",
     # Context
     "Context",
+    # Helpers
+    "create_callbacks_from_config",
     # External Trainers (Phase 4.7)
     "GradientTrainer",
     "StatisticalTrainer",
