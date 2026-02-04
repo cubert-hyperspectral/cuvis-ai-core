@@ -198,6 +198,6 @@ experiments/
 *.pt
 /.venv-adaclip-test/
 .history/
-configs/
+
 .claude/
 cuvis-ai-core.code-workspace
