@@ -118,10 +118,11 @@ class CuvisPipeline:
             if target_node not in self._graph:
                 self._assign_counter_and_add_node(target_node)
 
-            # Add edge between Node objects (not IDs)
+            # Add edge between Node objects with unique key based on port pair
             self._graph.add_edge(
                 source_node,
                 target_node,
+                key=(source_port.name, target_port.name),  # Edge key ensures uniqueness
                 from_port=source_port.name,
                 to_port=target_port.name,
             )
