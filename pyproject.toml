@@ -7,7 +7,7 @@ name = "cuvis_ai_core"
 dynamic = ["version"]
 description = "Cuvis-AI Core Framework"
 authors = [
-    {name = "Cubert GmbH", email = "sdk@cubert-gmbh.com"}
+    {name = "Cubert GmbH", email = "cuvis.ai@cubert-gmbh.com"}
 ]
 readme = "README.md"
 license = { text = "Apache License 2.0" }
@@ -15,7 +15,7 @@ requires-python = ">=3.11,<3.12"
 
 dependencies = [
     "cuvis==3.5.0",
-    "cuvis-ai-schemas>=0.1.0",
+    "cuvis-ai-schemas",
     # Core framework dependencies
     "torch>=2.9.1",
     "torchvision",

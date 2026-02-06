@@ -471,6 +471,7 @@ requires-dist = [
     { name = "cuvis-ai-schemas", extras = ["lightning", "numpy", "proto", "torch"], marker = "extra == 'full'" },
     { name = "grpcio", marker = "extra == 'proto'", specifier = ">=1.56.0" },
     { name = "grpcio-tools", marker = "extra == 'proto'", specifier = ">=1.56.0" },
+    { name = "interrogate", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.21.0" },
     { name = "protobuf", marker = "extra == 'proto'", specifier = ">=4.25.0" },
@@ -480,10 +481,16 @@ requires-dist = [
     { name = "pytorch-lightning", marker = "extra == 'lightning'", specifier = ">=2.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "torchvision", marker = "extra == 'torch'", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.0.0" },
+    { name = "torchvision", marker = "extra == 'torch'" },
+    { name = "types-grpcio", marker = "extra == 'dev'" },
+    { name = "types-protobuf", marker = "extra == 'dev'" },
+    { name = "types-pyyaml", marker = "extra == 'dev'" },
 ]
 provides-extras = ["proto", "torch", "numpy", "lightning", "full", "dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "twine", specifier = ">=6.2.0" }]
 
 [[package]]
 name = "cuvis-il"
