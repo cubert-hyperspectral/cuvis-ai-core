@@ -10,6 +10,8 @@ jobs:
   test:
     name: Run tests with coverage
     runs-on: ubuntu-latest
+    container:
+      image: cubertgmbh/cuvis_pyil:3.5.0-ubuntu24.04
     steps:
       - uses: actions/checkout@v4
 
