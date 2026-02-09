@@ -4,8 +4,11 @@
 
 ![image](https://raw.githubusercontent.com/cubert-hyperspectral/cuvis.sdk/main/branding/logo/banner.png)
 
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![PyPI version](https://img.shields.io/pypi/v/cuvis-ai-core.svg)](https://pypi.org/project/cuvis-ai-core/)
+[![CI Status](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml/badge.svg)](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/cubert-hyperspectral/cuvis-ai-core/branch/main/graph/badge.svg)](https://codecov.io/gh/cubert-hyperspectral/cuvis-ai-core)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 
 
 
@@ -35,8 +38,17 @@ This separation allows the core framework to evolve independently while the cata
 If you want to directly work with cubert session files (.cu3s), you need to install cuvis C SDK from 
 [here](https://cloud.cubert-gmbh.de/s/qpxkyWkycrmBK9m).
 
-Local development now relies on [uv](https://docs.astral.sh/uv/) for Python and dependency management.  
+Local development now relies on [uv](https://docs.astral.sh/uv/) for Python and dependency management.
 If `uv` is not already available on your system you can install it following their installation instructions.
+
+### Install from PyPI (Recommended)
+
+```bash
+# Install cuvis-ai-core from PyPI
+uv add cuvis-ai-core
+```
+
+PyTorch will be installed automatically with CUDA support if available on your system.
 
 ### Local development with uv
 
