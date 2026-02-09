@@ -11,7 +11,10 @@ import stat
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
 
 import git
 from loguru import logger
@@ -301,7 +304,7 @@ def _install_dependencies_with_uv(deps: list[str], plugin_name: str) -> None:
 
 def parse_plugin_config(
     name: str, config: dict, manifest_dir: Optional[Path] = None
-) -> tuple:
+) -> tuple[GitPluginConfig | LocalPluginConfig, Path]:
     """Parse and validate plugin config, resolving paths and ensuring plugin exists.
 
     Args:
@@ -319,6 +322,9 @@ def parse_plugin_config(
         FileNotFoundError: If local plugin path doesn't exist
     """
     from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+
+    plugin_config: GitPluginConfig | LocalPluginConfig
+    plugin_path: Path
 
     # Validate and parse config
     if "repo" in config:
