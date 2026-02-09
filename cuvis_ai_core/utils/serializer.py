@@ -3,6 +3,8 @@ import inspect
 
 
 class Serializable:
+    _original_init_signature: inspect.Signature
+
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
         # Store the original __init__ signature before it gets wrapped
