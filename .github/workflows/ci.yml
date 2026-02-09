@@ -35,7 +35,7 @@ jobs:
             --cov=cuvis_ai_core \
             --cov-report=xml \
             --cov-report=term-missing \
-            -m "not slow and not gpu and not stress" \
+            -m "not slow and not gpu and not stress and not requires_data" \
             -v
 
       - name: Upload coverage to Codecov
