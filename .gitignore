@@ -196,8 +196,8 @@ tensorboard/
 .clinerules
 experiments/
 *.pt
+!configs/**/*.pt
 /.venv-adaclip-test/
 .history/
-configs/
 .claude/
 cuvis-ai-core.code-workspace
