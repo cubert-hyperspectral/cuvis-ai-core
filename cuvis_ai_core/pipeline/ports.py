@@ -195,7 +195,7 @@ class PortSpec:
 class OutputPort:
     """Proxy object representing a node's output port."""
 
-    def __init__(self, node: Node, name: str, spec: PortSpec) -> None:
+    def __init__(self, node: Node, name: str, spec: PortSpec | list[PortSpec]) -> None:
         self.node = node
         self.name = name
         self.spec = spec
@@ -208,7 +208,7 @@ class OutputPort:
 class InputPort:
     """Proxy object representing a node's input port."""
 
-    def __init__(self, node: Node, name: str, spec: PortSpec) -> None:
+    def __init__(self, node: Node, name: str, spec: PortSpec | list[PortSpec]) -> None:
         self.node = node
         self.name = name
         self.spec = spec

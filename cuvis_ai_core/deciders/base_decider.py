@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any
 
 from torch import Tensor
@@ -6,7 +6,12 @@ from torch import Tensor
 from cuvis_ai_core.node.node import Node
 
 
-class BaseDecider(Node, ABC):
+import torch
+from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_schemas.execution.context import Context
+
+
+class BinaryDecider(Node):
     """
     Abstract class for Decision Making Nodes.
 
@@ -14,34 +19,42 @@ class BaseDecider(Node, ABC):
     based on the task that needs to be accomplished.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
+    INPUT_SPECS = {
+        "logits": PortSpec(
+            dtype=torch.float32,
+            shape=(-1, -1, -1, -1),
+            description="Input logits to threshold (BHWC format)",
+        )
+    }
+
+    OUTPUT_SPECS = {
+        "decisions": PortSpec(
+            dtype=torch.bool,
+            shape=(-1, -1, -1, 1),
+            description="Binary decision mask (BHWC format)",
+        )
+    }
+
+    def __init__(self, threshold: float = 0.5, **kwargs) -> None:
+        self.threshold = threshold
         # Accept arbitrary args/kwargs so subclasses can forward their init
         # parameters to the Serializable base for automatic hparam capture.
-        super().__init__(*args, **kwargs)
-
-    def fit(self, x, *args, **kwargs) -> None:
-        # TODO refactor the thing with the empty fits
-        pass
+        super().__init__(threshold=threshold, **kwargs)
 
     @abstractmethod
-    def forward(
+    def forward(  # type: ignore[override]
         self,
-        x: Tensor,
-        y: Tensor | None = None,
-        m: Any = None,
-        **kwargs: Any,
-    ) -> Tensor:
-        """
-        Predict labels based on the input labels.
+        logits: Tensor,
+        context: Context,
+        **_: Any,
+    ) -> dict[str, Tensor]:
+        """Apply decisioning on channels-last data.
 
-        Parameters
-        ----------
-        x : array-like
-            Input data.
+        Args:
+            logits: Tensor shaped (B, H, W, C) containing logits.
 
-        Returns
-        -------
-        Any
-            Transformed data.
+        Returns:
+            Dictionary with "decisions" key containing (B, H, W, 1) decision mask.
         """
+
         pass

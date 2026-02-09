@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from abc import ABC, abstractmethod
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 from torch import nn
 
@@ -282,16 +282,16 @@ class Node(nn.Module, ABC, Serializable):
                 raise AttributeError(
                     f"Cannot create input port '{port_name}'; attribute already exists."
                 )
-            port = InputPort(self, port_name, port_spec)
-            self._input_ports[port_name] = port
+            input_port = InputPort(self, port_name, port_spec)
+            self._input_ports[port_name] = input_port
 
         for port_name, port_spec in self.OUTPUT_SPECS.items():
             if port_name in self._output_ports:
                 raise AttributeError(
                     f"Cannot create output port '{port_name}'; attribute already exists."
                 )
-            port = OutputPort(self, port_name, port_spec)
-            self._output_ports[port_name] = port
+            output_port = OutputPort(self, port_name, port_spec)
+            self._output_ports[port_name] = output_port
 
     @property
     def inputs(self) -> SimpleNamespace:
@@ -378,8 +378,10 @@ class Node(nn.Module, ABC, Serializable):
             # Not a port or parameter, let normal AttributeError propagate
             raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
-    def load_state_dict(self, state_dict, strict: bool = True) -> Any:
-        result = super().load_state_dict(state_dict, strict=strict)
+    def load_state_dict(
+        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
+    ) -> Any:
+        result = super().load_state_dict(state_dict, strict=strict, assign=assign)
         self._infer_fitted_state_from_loaded_weights(state_dict)
         return result
 
