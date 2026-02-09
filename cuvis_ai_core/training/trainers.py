@@ -257,7 +257,7 @@ class GradientTrainer(pl.LightningModule):
             Sum of all losses for backpropagation
         """
         all_losses = []
-        loss_name_counter = {}  # Track duplicate names
+        loss_name_counter: dict[str, int] = {}  # Track duplicate names
 
         for loss_node in self.loss_nodes:
             # O(1) lookup instead of O(n_outputs) iteration
@@ -313,7 +313,7 @@ class GradientTrainer(pl.LightningModule):
         if not self.metric_nodes:
             return
 
-        metric_name_counter = {}  # Track duplicate names
+        metric_name_counter: dict[str, int] = {}  # Track duplicate names
 
         for metric_node in self.metric_nodes:
             # O(1) lookup instead of O(n_outputs) iteration

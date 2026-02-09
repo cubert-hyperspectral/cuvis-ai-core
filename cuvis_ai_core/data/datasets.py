@@ -93,8 +93,9 @@ class SingleCu3sDataset(Dataset):
                     f"Could not load annotation for {annotation_json_path}:", e
                 )
                 self.has_labels = False
-            logger.info(f"Category map: {self._coco.category_id_to_name}")
-            self.class_labels = self._coco.category_id_to_name
+            if self._coco is not None:
+                logger.info(f"Category map: {self._coco.category_id_to_name}")
+                self.class_labels = self._coco.category_id_to_name
 
     def __len__(self) -> int:
         return len(self.measurement_indices)

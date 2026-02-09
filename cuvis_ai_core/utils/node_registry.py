@@ -152,7 +152,11 @@ class NodeRegistry:
                 "     registry.load_plugins('path/to/plugins.yaml')\n"
                 "     pipeline = CuvisPipeline.load_pipeline(..., node_registry=registry)\n\n"
             )
-        elif looks_like_plugin and len(instance.plugin_configs) == 0:
+        elif (
+            looks_like_plugin
+            and instance is not None
+            and len(instance.plugin_configs) == 0
+        ):
             error_msg += (
                 "\n⚠️  This appears to be an external plugin node, but no plugins are loaded!\n"
                 "   Load plugins before building pipeline:\n"

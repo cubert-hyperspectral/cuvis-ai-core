@@ -155,7 +155,8 @@ class Annotation(SafeWizard):
             out.segmentation = Mask(torch.from_numpy(mask_np))
 
         if self.mask is not None:
-            mask_np = RLE2mask(self.mask["counts"], self.mask["size"])
+            size = self.mask["size"]
+            mask_np = RLE2mask(self.mask["counts"], size[0], size[1])
             out.mask = Mask(torch.from_numpy(mask_np))
 
         return out.to_dict_safe()
