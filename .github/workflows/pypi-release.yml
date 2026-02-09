@@ -12,6 +12,8 @@ jobs:
   test-and-typecheck:
     name: Quality gate (tests & typecheck)
     runs-on: ubuntu-latest
+    container:
+      image: cubertgmbh/cuvis_pyil:3.5.0-ubuntu24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +34,7 @@ jobs:
       - name: Run tests
         run: |
           uv run pytest tests/ \
-            -m "not slow and not gpu and not stress" \
+            -m "not slow and not gpu and not stress and not requires_data" \
             -v
 
       - name: Run mypy
