@@ -43,7 +43,9 @@ class GitPluginConfig(_BasePluginConfig):
     Supports:
     - SSH URLs: git@gitlab.com:user/repo.git
     - HTTPS URLs: https://github.com/user/repo.git
-    - Git refs: tags (v1.2.3), branches (main), commits (abc123)
+    - Git tags only: v1.2.3, v0.1.0-alpha, etc.
+
+    Note: Branches and commit hashes are NOT supported for reproducibility.
     """
 
     repo: str = Field(
@@ -51,8 +53,8 @@ class GitPluginConfig(_BasePluginConfig):
         min_length=1,
     )
 
-    ref: str = Field(
-        description="Git reference: tag (v1.2.3), branch (main), or commit hash (abc123)",
+    tag: str = Field(
+        description="Git tag (e.g., v1.2.3, v0.1.0-alpha). Branches and commit hashes are not supported.",
         min_length=1,
     )
 
@@ -71,12 +73,12 @@ class GitPluginConfig(_BasePluginConfig):
             )
         return value
 
-    @field_validator("ref")
+    @field_validator("tag")
     @classmethod
-    def _validate_ref(cls, value: str) -> str:
-        """Validate Git ref is not empty."""
+    def _validate_tag(cls, value: str) -> str:
+        """Validate Git tag is not empty."""
         if not value.strip():
-            raise ValueError("Git ref cannot be empty")
+            raise ValueError("Git tag cannot be empty")
         return value.strip()
 
 

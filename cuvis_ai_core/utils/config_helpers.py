@@ -128,12 +128,8 @@ def resolve_config_with_hydra(
     overrides: list[str] | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve configuration using Hydra composition and validate with Pydantic."""
-    try:
-        from hydra import compose, initialize_config_dir
-    except ImportError as exc:  # pragma: no cover - environment safeguard
-        raise ImportError(
-            "Hydra is required for config resolution. Install hydra-core to use ResolveConfig."
-        ) from exc
+    from hydra import compose, initialize_config_dir
+
     logger.info(f"Resolving {config_type} config: {config_path}")
     logger.debug(f"Search paths: {search_paths}")
     logger.debug(f"Overrides: {overrides}")

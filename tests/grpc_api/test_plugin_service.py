@@ -28,7 +28,7 @@ class TestPluginService:
             self.session_manager.close_session(session_id)
         NodeRegistry.clear()
 
-    def test_load_plugins_success(self, tmp_path):
+    def test_load_plugins_success(self, tmp_path, create_plugin_pyproject):
         """Test successful plugin loading."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -43,13 +43,14 @@ from cuvis_ai_core.node import Node
 class TestPluginNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Create manifest
         manifest = PluginManifest(
@@ -89,7 +90,7 @@ class TestPluginNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_load_plugins_partial_failure(self, tmp_path):
+    def test_load_plugins_partial_failure(self, tmp_path, create_plugin_pyproject):
         """Test plugin loading with some failures."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -104,13 +105,14 @@ from cuvis_ai_core.node import Node
 class ValidNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(valid_plugin_dir)
 
         # Create manifest with valid and invalid plugins
         manifest = PluginManifest(
@@ -194,7 +196,7 @@ class ValidNode(Node):
         # Verify empty list
         assert len(response.plugins) == 0
 
-    def test_list_loaded_plugins_with_plugins(self, tmp_path):
+    def test_list_loaded_plugins_with_plugins(self, tmp_path, create_plugin_pyproject):
         """Test listing loaded plugins."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -209,13 +211,14 @@ from cuvis_ai_core.node import Node
 class TestNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Load plugin
         manifest = PluginManifest(
@@ -256,7 +259,7 @@ class TestNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_get_plugin_info_success(self, tmp_path):
+    def test_get_plugin_info_success(self, tmp_path, create_plugin_pyproject):
         """Test getting info for specific plugin."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -271,13 +274,14 @@ from cuvis_ai_core.node import Node
 class TestNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         manifest = PluginManifest(
             plugins={
@@ -364,7 +368,7 @@ class TestNode(Node):
         assert builtin_node.source == "builtin"
         assert builtin_node.plugin_name == ""
 
-    def test_list_available_nodes_with_plugins(self, tmp_path):
+    def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
         """Test listing nodes includes session plugin nodes."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -379,13 +383,14 @@ from cuvis_ai_core.node import Node
 class PluginTestNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         manifest = PluginManifest(
             plugins={
@@ -443,7 +448,7 @@ class PluginTestNode(Node):
         assert isinstance(response.cleared_count, int)
         assert response.cleared_count >= 0
 
-    def test_session_isolation(self, tmp_path):
+    def test_session_isolation(self, tmp_path, create_plugin_pyproject):
         """Test that plugin loading in one session doesn't affect another."""
         # Create two sessions
         session1 = self.session_manager.create_session()
@@ -459,13 +464,14 @@ from cuvis_ai_core.node import Node
 class IsolatedNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         # Load plugin only in session1
         manifest = PluginManifest(

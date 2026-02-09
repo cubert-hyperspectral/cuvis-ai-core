@@ -76,7 +76,7 @@ NodeRegistry.load_plugins("plugins.yaml")
 # Git plugin
 NodeRegistry.load_plugin("adaclip", {
     "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
-    "ref": "v1.2.3",
+    "tag": "v1.2.3",
     "provides": ["cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector"]
 })
 
@@ -223,7 +223,7 @@ The plugin system provides clear error messages for common issues:
 try:
     NodeRegistry.load_plugin("invalid", {
         "repo": "invalid-url",
-        "ref": "v1.0.0",
+        "tag": "v1.0.0",
         "provides": ["test.Node"]
     })
 except ValidationError as e:

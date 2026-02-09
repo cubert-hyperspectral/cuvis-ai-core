@@ -1,0 +1,26 @@
+# @package _global_
+
+# Minimal trainrun configuration for cuvis-ai-core testing
+# Uses only basic mock nodes (no cuvis-ai dependencies)
+
+defaults:
+  - /pipeline@pipeline: gradient_based
+  - /data@data: lentils
+  - /training@training: default
+  - _self_
+
+name: gradient_based
+
+# Optional fields for compatibility (empty since we don't have these nodes in basic mock setup)
+unfreeze_nodes:
+- SoftChannelSelector
+
+freeze_nodes: []
+
+loss_nodes:
+- SimpleLossNode
+
+metric_nodes:
+- MockMetricNode
+
+output_dir: outputs/gradient_based

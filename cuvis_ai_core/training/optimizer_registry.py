@@ -6,13 +6,9 @@ from typing import Any
 
 import torch
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
 from cuvis_ai_core.training.config import OptimizerConfig, SchedulerConfig
-
-try:  # PyTorch < 2.0 compatibility
-    from torch.optim.lr_scheduler import LRScheduler
-except ImportError:  # pragma: no cover - older PyTorch fallback
-    from torch.optim.lr_scheduler import _LRScheduler as LRScheduler  # type: ignore
 
 
 # -----------------------------------------------------------------------------

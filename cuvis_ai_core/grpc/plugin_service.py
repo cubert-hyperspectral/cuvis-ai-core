@@ -4,12 +4,82 @@ from __future__ import annotations
 
 
 import grpc
+import numpy as np
+import torch
 from loguru import logger
 
+from cuvis_ai_core.grpc.helpers import DTYPE_NUMPY_TO_PROTO, DTYPE_TORCH_TO_PROTO
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
+from cuvis_ai_core.pipeline.ports import PortSpec
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_config import PluginManifest
+
+
+def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortSpec:
+    """Convert Python PortSpec to proto PortSpec message.
+
+    Args:
+        spec: Python PortSpec from node class
+        name: Port name from INPUT_SPECS/OUTPUT_SPECS dict key
+
+    Returns:
+        Proto PortSpec message
+
+    Raises:
+        ValueError: If dtype cannot be mapped or shape contains non-int values
+    """
+    # Map Python dtype to proto DType enum
+    proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    # Try torch dtype mapping first
+    if isinstance(spec.dtype, torch.dtype):
+        if spec.dtype in DTYPE_TORCH_TO_PROTO:
+            proto_dtype = DTYPE_TORCH_TO_PROTO[spec.dtype]
+        else:
+            raise ValueError(f"Unsupported torch dtype: {spec.dtype}")
+    # Try numpy dtype mapping
+    elif hasattr(spec.dtype, "dtype"):
+        # Handle numpy scalar types (np.int32, np.float32, etc.)
+        np_dtype = np.dtype(spec.dtype)
+        if np_dtype in DTYPE_NUMPY_TO_PROTO:
+            proto_dtype = DTYPE_NUMPY_TO_PROTO[np_dtype]
+        else:
+            raise ValueError(f"Unsupported numpy dtype: {spec.dtype}")
+    # Handle torch.Tensor as a generic tensor type (use UNSPECIFIED)
+    elif spec.dtype is torch.Tensor:
+        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    # Handle Python built-in types (dict, str, list, etc.) as UNSPECIFIED
+    elif isinstance(spec.dtype, type):
+        # Python types like dict, str, list, tuple, etc.
+        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    else:
+        raise ValueError(f"Unsupported dtype type: {type(spec.dtype)}")
+
+    # Convert shape tuple to list of int64
+    # Symbolic dimensions (strings like "output_channels") are converted to -1 (dynamic)
+    shape_list = []
+    for dim in spec.shape:
+        if isinstance(dim, int):
+            shape_list.append(dim)
+        elif isinstance(dim, str):
+            # Symbolic dimension referring to a hyperparameter (e.g., "output_channels")
+            # Convert to -1 to indicate dynamic/runtime-determined dimension
+            shape_list.append(-1)
+        else:
+            # Invalid dimension type
+            raise ValueError(
+                f"Port '{name}' has invalid shape dimension type '{type(dim)}'. "
+                f"Expected int or str, got: {dim}"
+            )
+
+    return cuvis_ai_pb2.PortSpec(
+        name=name,
+        dtype=proto_dtype,
+        shape=shape_list,
+        optional=spec.optional,
+        description=spec.description,
+    )
 
 
 class PluginService:
@@ -90,7 +160,7 @@ class PluginService:
         for name, config in session.loaded_plugins.items():
             plugin_type = "git" if "repo" in config else "local"
             source = config.get("repo") or config.get("path", "")
-            ref = config.get("ref", "")
+            tag = config.get("tag", "")
             provides = config.get("provides", [])
 
             plugins.append(
@@ -98,7 +168,7 @@ class PluginService:
                     name=name,
                     type=plugin_type,
                     source=source,
-                    ref=ref,
+                    tag=tag,
                     provides=provides,
                 )
             )
@@ -126,7 +196,7 @@ class PluginService:
         config = session.loaded_plugins[request.plugin_name]
         plugin_type = "git" if "repo" in config else "local"
         source = config.get("repo") or config.get("path", "")
-        ref = config.get("ref", "")
+        tag = config.get("tag", "")
         provides = config.get("provides", [])
 
         return cuvis_ai_pb2.GetPluginInfoResponse(
@@ -134,7 +204,7 @@ class PluginService:
                 name=request.plugin_name,
                 type=plugin_type,
                 source=source,
-                ref=ref,
+                tag=tag,
                 provides=provides,
             )
         )
@@ -156,12 +226,26 @@ class PluginService:
 
         # Built-in nodes
         for class_name in NodeRegistry.list_builtin_nodes():
+            # Get the node class to extract port specs
+            try:
+                node_class = NodeRegistry.get_builtin_class(class_name)
+                input_specs, output_specs = self._extract_port_specs(node_class)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to extract port specs for builtin node '{class_name}': {e}",
+                    exc_info=True,  # Include full traceback
+                )
+                input_specs = {}
+                output_specs = {}
+
             nodes.append(
                 cuvis_ai_pb2.NodeInfo(
                     class_name=class_name,
                     full_path=class_name,  # Builtin nodes use short names
                     source="builtin",
                     plugin_name="",
+                    input_specs=input_specs,
+                    output_specs=output_specs,
                 )
             )
 
@@ -183,16 +267,86 @@ class PluginService:
                 if plugin_name:
                     break
 
+            # Get the node class to extract port specs
+            try:
+                node_class = session.node_registry.plugin_registry[class_name]
+                input_specs, output_specs = self._extract_port_specs(node_class)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to extract port specs for plugin node '{class_name}': {e}",
+                    exc_info=True,  # Include full traceback
+                )
+                input_specs = {}
+                output_specs = {}
+
             nodes.append(
                 cuvis_ai_pb2.NodeInfo(
                     class_name=class_name,
                     full_path=full_path,
                     source="plugin",
                     plugin_name=plugin_name,
+                    input_specs=input_specs,
+                    output_specs=output_specs,
                 )
             )
 
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)
+
+    def _extract_port_specs(
+        self, node_class: type
+    ) -> tuple[
+        dict[str, cuvis_ai_pb2.PortSpecList], dict[str, cuvis_ai_pb2.PortSpecList]
+    ]:
+        """Extract INPUT_SPECS and OUTPUT_SPECS from node class and convert to proto.
+
+        Args:
+            node_class: Node class to extract specs from
+
+        Returns:
+            Tuple of (input_specs_map, output_specs_map) as proto PortSpecList maps
+        """
+        input_specs_map = {}
+        output_specs_map = {}
+
+        # Extract INPUT_SPECS
+        if hasattr(node_class, "INPUT_SPECS"):
+            input_specs_dict = getattr(node_class, "INPUT_SPECS")
+            for port_name, spec in input_specs_dict.items():
+                # Handle variadic ports (list of PortSpec)
+                if isinstance(spec, list):
+                    proto_specs = []
+                    for s in spec:
+                        proto_specs.append(_convert_port_spec_to_proto(s, port_name))
+                    input_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
+                        specs=proto_specs
+                    )
+                else:
+                    # Single PortSpec
+                    proto_spec = _convert_port_spec_to_proto(spec, port_name)
+                    input_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
+                        specs=[proto_spec]
+                    )
+
+        # Extract OUTPUT_SPECS
+        if hasattr(node_class, "OUTPUT_SPECS"):
+            output_specs_dict = getattr(node_class, "OUTPUT_SPECS")
+            for port_name, spec in output_specs_dict.items():
+                # Handle variadic ports (list of PortSpec)
+                if isinstance(spec, list):
+                    proto_specs = []
+                    for s in spec:
+                        proto_specs.append(_convert_port_spec_to_proto(s, port_name))
+                    output_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
+                        specs=proto_specs
+                    )
+                else:
+                    # Single PortSpec
+                    proto_spec = _convert_port_spec_to_proto(spec, port_name)
+                    output_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
+                        specs=[proto_spec]
+                    )
+
+        return input_specs_map, output_specs_map
 
     def clear_plugin_cache(
         self,

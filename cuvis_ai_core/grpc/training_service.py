@@ -366,14 +366,7 @@ class TrainingService:
         data_config: DataConfig,
     ) -> SingleCu3sDataModule:
         """Create SingleCu3sDataModule from parsed DataConfig."""
-        try:
-            from cuvis_ai_core.data.datasets import SingleCu3sDataModule
-
-        except ImportError as exc:  # pragma: no cover - environment dependency
-            raise ValueError(
-                "SingleCu3sDataModule dependencies are missing. "
-                "Install scikit-image and related optional deps to enable training."
-            ) from exc
+        from cuvis_ai_core.data.datasets import SingleCu3sDataModule
 
         annotation_json_path = data_config.annotation_json_path or None
 

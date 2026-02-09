@@ -23,7 +23,7 @@ class TestPluginSessionIsolation:
             self.session_manager.close_session(session_id)
         NodeRegistry.clear()
 
-    def test_session_scoped_pipeline_building(self, tmp_path):
+    def test_session_scoped_pipeline_building(self, tmp_path, create_plugin_pyproject):
         """Test that pipelines built with session_id use session plugins."""
         # Create two sessions
         session1 = self.session_manager.create_session()
@@ -40,13 +40,14 @@ class CustomNode(Node):
     """Version from plugin1."""
     INPUT_SPECS = {"input": {"dtype": "float32", "shape": (-1,)}}
     OUTPUT_SPECS = {"output": {"dtype": "float32", "shape": (-1,)}}
-    
+
     def forward(self, input):
         return {"output": input * 1.0}
-    
+
     def load(self, params, serial_dir):
         pass
 ''')
+        create_plugin_pyproject(plugin1_dir)
 
         plugin2_dir = tmp_path / "plugin2"
         plugin2_dir.mkdir()
@@ -58,13 +59,14 @@ class CustomNode(Node):
     """Version from plugin2."""
     INPUT_SPECS = {"input": {"dtype": "float32", "shape": (-1,)}}
     OUTPUT_SPECS = {"output": {"dtype": "float32", "shape": (-1,)}}
-    
+
     def forward(self, input):
         return {"output": input * 2.0}
-    
+
     def load(self, params, serial_dir):
         pass
 ''')
+        create_plugin_pyproject(plugin2_dir)
 
         import sys
 
@@ -114,7 +116,7 @@ class CustomNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_session_cleanup_releases_plugins(self, tmp_path):
+    def test_session_cleanup_releases_plugins(self, tmp_path, create_plugin_pyproject):
         """Test that closing session releases plugin references."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -129,13 +131,14 @@ from cuvis_ai_core.node import Node
 class CleanupTestNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         import sys
 
@@ -163,7 +166,9 @@ class CleanupTestNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_multiple_sessions_concurrent_different_plugins(self, tmp_path):
+    def test_multiple_sessions_concurrent_different_plugins(
+        self, tmp_path, create_plugin_pyproject
+    ):
         """Test multiple sessions with different plugins running concurrently."""
         # Create three sessions
         sessions = [
@@ -184,13 +189,14 @@ from cuvis_ai_core.node import Node
 class PluginNode{i}(Node):
     INPUT_SPECS = {{}}
     OUTPUT_SPECS = {{}}
-    
+
     def forward(self, **inputs):
         return {{"result": {i}}}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+            create_plugin_pyproject(plugin_dir)
             plugins.append(plugin_dir)
 
         import sys
@@ -239,7 +245,9 @@ class PluginNode{i}(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_session_without_plugins_uses_builtins(self, tmp_path):
+    def test_session_without_plugins_uses_builtins(
+        self, tmp_path, create_plugin_pyproject
+    ):
         """Test that session without plugins can still use builtin nodes."""
         # Register a builtin node
         from cuvis_ai_core.node import Node
@@ -271,13 +279,14 @@ from cuvis_ai_core.node import Node
 class PluginNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         import sys
 
@@ -311,7 +320,9 @@ class PluginNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_plugin_override_builtin_in_session_only(self, tmp_path):
+    def test_plugin_override_builtin_in_session_only(
+        self, tmp_path, create_plugin_pyproject
+    ):
         """Test that plugin can override builtin in session without affecting other sessions."""
         # Register builtin node
         from cuvis_ai_core.node import Node
@@ -344,13 +355,14 @@ class SharedNode(Node):
     """Plugin version."""
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {"version": "plugin"}
-    
+
     def load(self, params, serial_dir):
         pass
 ''')
+        create_plugin_pyproject(plugin_dir)
 
         import sys
 
@@ -382,7 +394,9 @@ class SharedNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_session_state_tracks_loaded_plugins(self, tmp_path):
+    def test_session_state_tracks_loaded_plugins(
+        self, tmp_path, create_plugin_pyproject
+    ):
         """Test that SessionState correctly tracks loaded plugins."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -398,13 +412,14 @@ from cuvis_ai_core.node import Node
 class TrackedNode1(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin1_dir)
 
         plugin2_dir = tmp_path / "tracked_plugin2"
         plugin2_dir.mkdir()
@@ -415,13 +430,14 @@ from cuvis_ai_core.node import Node
 class TrackedNode2(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin2_dir)
 
         import sys
 
@@ -459,7 +475,9 @@ class TrackedNode2(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_pipeline_builder_without_session_id_uses_global_registry(self, tmp_path):
+    def test_pipeline_builder_without_session_id_uses_global_registry(
+        self, tmp_path, create_plugin_pyproject
+    ):
         """Test that PipelineBuilder without session_id uses global registry."""
         # Register builtin node
         from cuvis_ai_core.node import Node
@@ -489,13 +507,14 @@ from cuvis_ai_core.node import Node
 class SessionOnlyNode(Node):
     INPUT_SPECS = {}
     OUTPUT_SPECS = {}
-    
+
     def forward(self, **inputs):
         return {}
-    
+
     def load(self, params, serial_dir):
         pass
 """)
+        create_plugin_pyproject(plugin_dir)
 
         import sys
 

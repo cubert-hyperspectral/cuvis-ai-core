@@ -17,6 +17,9 @@ from cuvis_ai_core.utils.general import _resolve_measurement_indices
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
+# cuvis.General.init(global_loglevel="Fatal")
+# cuvis.General.set_log_level("Fatal")
+
 
 class SingleCu3sDataset(Dataset):
     """Load cube frames from .cu3s sessions with optional COCO-derived masks."""
@@ -90,8 +93,9 @@ class SingleCu3sDataset(Dataset):
                     f"Could not load annotation for {annotation_json_path}:", e
                 )
                 self.has_labels = False
-            logger.info(f"Category map: {self._coco.category_id_to_name}")
-            self.class_labels = self._coco.category_id_to_name
+            if self._coco is not None:
+                logger.info(f"Category map: {self._coco.category_id_to_name}")
+                self.class_labels = self._coco.category_id_to_name
 
     def __len__(self) -> int:
         return len(self.measurement_indices)

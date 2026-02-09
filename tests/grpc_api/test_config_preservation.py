@@ -286,6 +286,7 @@ class TestTrainingConfigFromDictConfig:
 class TestSessionStateManagement:
     """Test session state management edge cases."""
 
+    @pytest.mark.requires_data
     def test_session_preserves_trainrun_config_after_training(
         self, grpc_stub, tmp_path
     ):
@@ -348,6 +349,7 @@ class TestSessionStateManagement:
                 cuvis_ai_pb2.CloseSessionRequest(session_id=session_id)
             )
 
+    @pytest.mark.requires_data
     def test_multiple_sessions_have_independent_configs(
         self, grpc_stub, mock_cuvis_sdk
     ):
