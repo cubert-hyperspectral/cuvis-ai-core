@@ -292,7 +292,7 @@ if __name__ == "__main__":
     import contextlib
     import io
 
-    ann_file = "..\data\Lentils\Lentils_000.json"
+    ann_file = r"..\data\Lentils\Lentils_000.json"
 
     # with contextlib.redirect_stdout(io.StringIO()):
 
