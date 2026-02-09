@@ -66,6 +66,7 @@ dev = [
     "ipykernel",
     "jupyterlab",
     "ruff",
+    "mypy>=1.0.0",
     "pytest",
     "pytest-cov",
     "ipympl>=0.9.8",
