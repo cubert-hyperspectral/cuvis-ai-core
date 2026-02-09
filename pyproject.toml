@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "cuvis==3.5.0",
+    "cuvis==3.5.0.2",
     # Core framework dependencies
     "torch>=2.9.1",
     "torchvision",
