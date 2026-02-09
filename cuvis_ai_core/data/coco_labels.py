@@ -193,11 +193,11 @@ class QueryableList:
 class COCOData:
     def __init__(self, coco: COCO) -> None:
         self._coco = coco
-        self._image_ids = None
-        self._categories = None
-        self._category_id_to_name = None
-        self._annotations = None
-        self._images = None
+        self._image_ids: list[int] | None = None
+        self._categories: list[Category] | None = None
+        self._category_id_to_name: dict[int, str] | None = None
+        self._annotations: QueryableList | None = None
+        self._images: list[Image] | None = None
 
     @classmethod
     def from_path(cls, path: Path | str):
@@ -225,7 +225,7 @@ class COCOData:
 
     @property
     def license(self) -> License:
-        return Info.from_dict(self._coco.dataset["licenses"])
+        return License.from_dict(self._coco.dataset["licenses"])
 
     @property
     def annotations(self) -> QueryableList:
@@ -262,6 +262,17 @@ class COCOData:
         compliance with standard COCO structure.
         """
         path = str(path)
+        annotations_list: list[dict[str, Any]] = []
+
+        ann: Annotation | dict[str, Any]
+        for ann in self.annotations:
+            if isinstance(ann, Annotation):
+                annotations_list.append(ann.to_dict_safe())
+            elif isinstance(ann, dict):
+                annotations_list.append(ann)
+            else:
+                raise TypeError(f"Unsupported annotation type: {type(ann)}")
+
         dataset = {
             "info": self.info.to_dict() if hasattr(self, "info") else {},
             "licenses": [
@@ -270,17 +281,9 @@ class COCOData:
             if "licenses" in self._coco.dataset
             else [],
             "images": [img.to_dict() for img in self.images],
-            "annotations": [],
+            "annotations": annotations_list,
             "categories": [cat.to_dict() for cat in self.categories],
         }
-
-        for ann in self.annotations:
-            if isinstance(ann, Annotation):
-                dataset["annotations"].append(ann.to_dict_safe())
-            elif isinstance(ann, dict):
-                dataset["annotations"].append(ann)
-            else:
-                raise TypeError(f"Unsupported annotation type: {type(ann)}")
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(dataset, f, indent=2)
