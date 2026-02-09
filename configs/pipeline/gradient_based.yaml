@@ -1,0 +1,56 @@
+metadata:
+  name: gradient_based
+  description: Simplified channel selector pipeline for cuvis-ai-core testing
+  created: ''
+  tags:
+  - test
+  - gradient_based
+  - statistical
+  - gradient
+  author: Cubert GmbH
+  cuvis_ai_version: ''
+
+nodes:
+- name: LentilsAnomalyDataNode
+  class: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+  params:
+    normal_class_ids:
+    - 0
+    - 1
+
+- name: SoftChannelSelector
+  class: tests.fixtures.mock_nodes.SoftChannelSelector
+  params:
+    n_select: 3
+    input_channels: 61
+    init_method: variance
+    temperature_init: 5.0
+    temperature_min: 0.1
+    temperature_decay: 0.9
+    hard: false
+    eps: 1.0e-06
+
+- name: SimpleLossNode
+  class: tests.fixtures.mock_nodes.SimpleLossNode
+  params:
+    weight: 1.0
+
+- name: MockMetricNode
+  class: tests.fixtures.registry_test_nodes.MockMetricNode
+  params: {}
+
+connections:
+- from: LentilsAnomalyDataNode.outputs.cube
+  to: SoftChannelSelector.inputs.data
+
+# Loss node connections (predictions + targets for testing)
+- from: SoftChannelSelector.outputs.selected
+  to: SimpleLossNode.inputs.predictions
+- from: LentilsAnomalyDataNode.outputs.cube
+  to: SimpleLossNode.inputs.targets
+
+# Metric node connections (same inputs as loss)
+- from: SoftChannelSelector.outputs.selected
+  to: MockMetricNode.inputs.predictions
+- from: LentilsAnomalyDataNode.outputs.cube
+  to: MockMetricNode.inputs.targets

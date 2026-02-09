@@ -189,7 +189,12 @@ class PipelineBuilder:
                 )
 
             # Get node class from registry (unified call - works for both class and instance!)
-            node_class = self.node_registry.get(resolved_cfg["class"])
+            if hasattr(self.node_registry, "get"):
+                node_class = self.node_registry.get(resolved_cfg["class"])
+            else:
+                raise TypeError(
+                    f"node_registry must be NodeRegistry class or instance, got {type(self.node_registry)}"
+                )
 
             # Extract parameters
             params = resolved_cfg.get("params", {})

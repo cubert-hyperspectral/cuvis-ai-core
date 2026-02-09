@@ -46,7 +46,7 @@ def example_1_basic_plugin_loading():
             plugins={
                 "my_custom_plugin": GitPluginConfig(
                     repo="git@example.com:org/my-plugin.git",
-                    ref="v1.0.0",
+                    tag="v1.0.0",
                     provides=["my_plugin.nodes.CustomDetector"],
                 )
             }
@@ -183,7 +183,7 @@ def example_3_plugin_introspection():
             plugins={
                 "plugin_a": GitPluginConfig(
                     repo="git@example.com:org/plugin-a.git",
-                    ref="main",
+                    tag="v1.0.0",
                     provides=["plugin_a.NodeA", "plugin_a.NodeB"],
                 ),
                 "plugin_b": LocalPluginConfig(
@@ -211,8 +211,8 @@ def example_3_plugin_introspection():
             logger.info(f"\n  Plugin: {plugin.name}")
             logger.info(f"    Type: {plugin.type}")
             logger.info(f"    Source: {plugin.source}")
-            if plugin.ref:
-                logger.info(f"    Ref: {plugin.ref}")
+            if plugin.tag:
+                logger.info(f"    Tag: {plugin.tag}")
             logger.info("    Provides:")
             for class_path in plugin.provides:
                 logger.info(f"      • {class_path}")
@@ -376,7 +376,7 @@ def example_6_error_handling():
                 ),
                 "invalid_plugin": GitPluginConfig(
                     repo="git@invalid-repo.git",  # Invalid repo
-                    ref="nonexistent-branch",
+                    tag="v0.0.0",
                     provides=["invalid.Node"],
                 ),
             }

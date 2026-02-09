@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /pipeline@pipeline: statistical_based
+  - /data@data: lentils
+  - _self_
+
+
+name: statistical_based
+
+
+output_dir: outputs/statistical_based
+
+# NO TRAINABLE NODES - statistical only
+unfreeze_nodes: []
+freeze_nodes: []
+metric_nodes: []
+loss_nodes: []

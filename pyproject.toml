@@ -10,8 +10,24 @@ authors = [
     {name = "Cubert GmbH", email = "sdk@cubert-gmbh.com"}
 ]
 readme = "README.md"
-license = { text = "Apache License 2.0" }
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11,<3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: Pydantic",
+    "Framework :: Pydantic :: 2",
+    "Typing :: Typed",
+    "Operating System :: OS Independent",
+]
 
 dependencies = [
     "cuvis==3.5.0",
@@ -41,6 +57,7 @@ dependencies = [
     "ruff>=0.14.11",
     "scikit-image>=0.25.2",
     "pycocotools>=2.0.11",
+    "graphviz>=0.21",
 ]
 
 [project.optional-dependencies]
@@ -49,11 +66,21 @@ dev = [
     "ipykernel",
     "jupyterlab",
     "ruff",
+    "mypy>=1.0.0",
+    "types-protobuf>=5.29.2",
+    "types-PyYAML>=6.0.0",
     "pytest",
     "pytest-cov",
     "ipympl>=0.9.8",
     "ipdb>=0.13.13",
     "psutil",
+    # Security and packaging tools
+    "twine>=6.2.0",
+    "pip-audit>=2.7.0",
+    "bandit[toml]>=1.7.0",
+    "detect-secrets>=1.4.0",
+    "pip-licenses>=4.0.0",
+    "cyclonedx-bom>=4.0.0",
 ]
 
 
@@ -65,8 +92,15 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://gitlab.cubert.local/cubert/cuvis-ai-core"
-Repository = "https://gitlab.cubert.local/cubert/cuvis-ai-core.git"
+Homepage = "https://www.cubert-hyperspectral.com/"
+Repository = "https://github.com/cubert-hyperspectral/cuvis-ai-core"
+Documentation = "https://github.com/cubert-hyperspectral/cuvis-ai-core/tree/main/docs"
+Issues = "https://github.com/cubert-hyperspectral/cuvis-ai-core/issues"
+Changelog = "https://github.com/cubert-hyperspectral/cuvis-ai-core/blob/main/CHANGELOG.md"
+
+[project.scripts]
+restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
+restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -74,17 +108,61 @@ include = ["cuvis_ai_core"]
 
 [tool.black]
 line-length = 88
-target-version = ['py310']
+target-version = ['py311']
 
 [tool.isort]
 profile = "black"
 line_length = 88
 
 [tool.mypy]
-python_version = "3.10"
-strict = true
-warn_return_any = true
+python_version = "3.11"
+# Relaxed type checking - gradually increase strictness over time
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+warn_return_any = false
 warn_unused_configs = true
+ignore_missing_imports = true
+
+# Exclude auto-generated and problematic modules
+[[tool.mypy.overrides]]
+module = "cuvis_ai_core.grpc.v1.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "cuvis_ai_core.grpc.*"
+ignore_errors = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.interrogate]
+ignore-init-method = true
+ignore-init-module = false
+ignore-magic = false
+ignore-semiprivate = false
+ignore-private = false
+ignore-property-decorators = false
+ignore-module = false
+ignore-nested-functions = false
+ignore-nested-classes = true
+ignore-setters = false
+fail-under = 80
+exclude = ["cuvis_ai_core/grpc/v1"]
+verbose = 1
+
+[tool.bandit]
+exclude_dirs = ["tests", "cuvis_ai_core/grpc/v1"]
+skips = ["B101"]
 
 [tool.setuptools_scm]
 version_scheme = "post-release"

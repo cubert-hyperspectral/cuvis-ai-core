@@ -335,7 +335,7 @@ class TrainingConfig(_BaseConfig):
     @model_validator(mode="after")
     def _sync_trainer_fields(self) -> TrainingConfig:
         """Keep top-level hyperparameters in sync with trainer config."""
-        fields_set = getattr(self, "model_fields_set", set())
+        fields_set: set[str] = getattr(self, "model_fields_set", set())
 
         # max_epochs: prefer explicit trainer value when top-level not provided
         if "max_epochs" not in fields_set and self.trainer.max_epochs is not None:

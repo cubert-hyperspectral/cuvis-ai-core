@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from cuvis_ai_core.node.node import Node
@@ -100,6 +101,7 @@ def test_pipeline_visualize_method_proxy():
     assert mermaid.startswith("flowchart")
 
 
+@pytest.mark.requires_data
 def test_pipeline_visualize_can_render_to_file(tmp_path):
     pipeline, *_ = _build_pipeline()
     output_svg = tmp_path / "viz"

@@ -1,3 +1,4 @@
+import contextlib
 import json
 from collections.abc import Iterator
 from copy import copy
@@ -11,6 +12,10 @@ from dataclass_wizard import JSONWizard
 from pycocotools.coco import COCO
 from skimage.draw import polygon2mask
 from torchvision.tv_tensors import BoundingBoxes, Mask
+
+import io
+
+# from contextlib import contextmanager
 
 
 def RLE2mask(rle: list, mask_width: int, mask_height: int) -> np.ndarray:
@@ -150,7 +155,8 @@ class Annotation(SafeWizard):
             out.segmentation = Mask(torch.from_numpy(mask_np))
 
         if self.mask is not None:
-            mask_np = RLE2mask(self.mask["counts"], self.mask["size"])
+            size = self.mask["size"]
+            mask_np = RLE2mask(self.mask["counts"], size[0], size[1])
             out.mask = Mask(torch.from_numpy(mask_np))
 
         return out.to_dict_safe()
@@ -195,7 +201,17 @@ class COCOData:
 
     @classmethod
     def from_path(cls, path: Path | str):
-        return cls(COCO(path))
+        with contextlib.redirect_stdout(io.StringIO()):
+            return cls(COCO(path))
+
+    # @classmethod
+    # def from_path(cls, path):
+    #     old_print = builtins.print
+    #     builtins.print = lambda *a, **k: None
+    #     try:
+    #         return cls(COCO(str(path)))
+    #     finally:
+    #         builtins.print = old_print
 
     @property
     def image_ids(self) -> list[int]:
@@ -273,22 +289,13 @@ class COCOData:
 
 
 if __name__ == "__main__":
-    import os
-    from pathlib import Path
+    from pycocotools.coco import COCO
+    import contextlib
+    import io
 
-    import cuvis
+    ann_file = r"..\data\Lentils\Lentils_000.json"
 
-    session_file_path = "C:\\Users\\nima.ghorbani\\code-repos\\cuvis.ai.examples\\data\\Lentils\\Lentils_000.cu3s"
-    session = cuvis.SessionFile(session_file_path)
-    measurement = session.get_measurement(0)
-    labelpath = Path(session_file_path).with_suffix(".json")
-    assert os.path.exists(labelpath), f"Label file not found: {labelpath}"
+    # with contextlib.redirect_stdout(io.StringIO()):
 
-    pipeline_size = measurement.cube.width, measurement.cube.height
-    coco = COCOData.from_path(str(labelpath))
-    print("Categories:", coco.category_id_to_name)
-
-    anns = coco.annotations.where(image_id=coco.image_ids[0])[0]
-    labels = anns.to_torchvision(pipeline_size)
-
-    print(labels["segmentation"])
+    # coco = COCO(ann_file)
+    coco_data = COCOData.from_path(ann_file)

@@ -1,0 +1,29 @@
+metadata:
+  name: statistical_based
+  description: RX anomaly detection with statistical training for cuvis-ai-core testing
+  created: ''
+  tags:
+  - statistical
+  - gradient
+  - rx
+  - anomaly
+  author: Cubert GmbH
+  cuvis_ai_version: ''
+
+nodes:
+- name: LentilsAnomalyDataNode
+  class: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+  params:
+    normal_class_ids:
+    - 0
+    - 1
+
+- name: MinMaxNormalizer
+  class: tests.fixtures.mock_nodes.MinMaxNormalizer
+  params:
+    eps: 1.0e-06
+    use_running_stats: true
+
+connections:
+- from: LentilsAnomalyDataNode.outputs.cube
+  to: MinMaxNormalizer.inputs.data

@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  test:
+    name: Run tests with coverage
+    runs-on: ubuntu-latest
+    container:
+      image: cubertgmbh/cuvis_pyil:3.5.0-ubuntu24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest tests/ \
+            --cov=cuvis_ai_core \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            -m "not slow and not gpu and not stress and not requires_data" \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  typecheck:
+    name: Type checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run mypy
+        run: |
+          uv run mypy cuvis_ai_core/ || true
+
+  lint:
+    name: Linting and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run ruff check
+        run: |
+          uv run ruff check cuvis_ai_core/
+
+      - name: Run ruff format check
+        run: |
+          uv run ruff format --check cuvis_ai_core/
+
+  security:
+    name: Security scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run pip-audit
+        run: |
+          uv run pip-audit --strict --desc on || true
+
+      - name: Run detect-secrets
+        run: |
+          uv run detect-secrets scan --baseline .secrets.baseline
+
+      - name: Run bandit
+        run: |
+          uv run bandit -r cuvis_ai_core/ || true

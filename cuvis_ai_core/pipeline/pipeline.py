@@ -13,6 +13,7 @@ import yaml
 from loguru import logger
 from networkx.classes.reportviews import NodeView
 from torch import nn
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.ports import (
@@ -513,8 +514,22 @@ class CuvisPipeline:
         strict_weight_loading: bool = True,
         device: str | None = None,
         config_overrides: list[str] | dict[str, Any] | None = None,
+        node_registry: NodeRegistry | None = None,
     ) -> CuvisPipeline:
-        """Load pipeline from YAML configuration and optionally restore weights."""
+        """Load pipeline from YAML configuration and optionally restore weights.
+
+        Args:
+            config_path: Path to pipeline YAML configuration file
+            weights_path: Optional path to weights checkpoint file
+            strict_weight_loading: Whether to enforce strict weight loading
+            device: Device to load pipeline to ('cpu', 'cuda', etc.)
+            config_overrides: Optional config overrides (list or dict)
+            node_registry: Optional NodeRegistry instance with loaded plugins.
+                          If None, uses class-level registry (built-ins only).
+
+        Returns:
+            Loaded CuvisPipeline instance
+        """
         config_path = Path(config_path)
 
         with config_path.open(encoding="utf-8") as f:
@@ -533,7 +548,7 @@ class CuvisPipeline:
         try:
             from cuvis_ai_core.pipeline.factory import PipelineBuilder
 
-            builder = PipelineBuilder()
+            builder = PipelineBuilder(node_registry=node_registry)
             pipeline = builder.build_from_config(config)
         except (ImportError, KeyError) as e:
             raise RuntimeError(
@@ -1327,7 +1342,7 @@ class CuvisPipeline:
 
         Examples
         --------
-        >>> pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "RXLogitHead"])
+        >>> pipeline.unfreeze_nodes_by_name(["SoftChannelSelector", "ScoreToLogit"])
         """
         if not node_names:
             return
