@@ -36,7 +36,7 @@ def restructure_output_to_node_dict(
     >>> # Access loss: node_dict["loss_node_123"]["loss"]
     >>> # O(1) instead of filtering entire outputs dict
     """
-    structured = {}
+    structured: dict[str, dict[str, Any]] = {}
     for (node_id, port_name), value in outputs.items():
         if node_id not in structured:
             structured[node_id] = {}

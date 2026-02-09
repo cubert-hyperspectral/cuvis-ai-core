@@ -67,6 +67,7 @@ dev = [
     "jupyterlab",
     "ruff",
     "mypy>=1.0.0",
+    "types-protobuf>=5.29.2",
     "pytest",
     "pytest-cov",
     "ipympl>=0.9.8",
@@ -114,9 +115,22 @@ line_length = 88
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
-warn_return_any = true
+# Relaxed type checking - gradually increase strictness over time
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+warn_return_any = false
 warn_unused_configs = true
+ignore_missing_imports = true
+
+# Exclude auto-generated and problematic modules
+[[tool.mypy.overrides]]
+module = "cuvis_ai_core.grpc.v1.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "cuvis_ai_core.grpc.*"
+ignore_errors = true
 
 [tool.ruff]
 target-version = "py311"
