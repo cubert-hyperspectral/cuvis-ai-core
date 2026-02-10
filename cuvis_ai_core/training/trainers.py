@@ -16,7 +16,8 @@ from cuvis_ai_core.training.config import (
     TrainerConfig,
     create_callbacks_from_config,
 )
-from cuvis_ai_core.utils.types import ExecutionStage, InputStream
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context, InputStream
 
 
 class GradientTrainer(pl.LightningModule):
@@ -337,7 +338,6 @@ class GradientTrainer(pl.LightningModule):
     def training_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses for training."""
         from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
-        from cuvis_ai_core.utils.types import Context
 
         context = Context(
             stage=ExecutionStage.TRAIN,
@@ -366,7 +366,6 @@ class GradientTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses + metrics for validation."""
         from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
-        from cuvis_ai_core.utils.types import Context
 
         context = Context(
             stage=ExecutionStage.VAL,
@@ -396,7 +395,6 @@ class GradientTrainer(pl.LightningModule):
     def test_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses + metrics for testing."""
         from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
-        from cuvis_ai_core.utils.types import Context
 
         context = Context(
             stage=ExecutionStage.TEST,
@@ -532,8 +530,6 @@ class StatisticalTrainer:
             List of output dictionaries (one per batch), where each dict maps
             (node_id, port_name) tuples to output tensors
         """
-        from cuvis_ai_core.utils.types import Context
-
         self.datamodule.setup(stage="val")
         val_loader = self.datamodule.val_dataloader()
 
@@ -556,8 +552,6 @@ class StatisticalTrainer:
             List of output dictionaries (one per batch), where each dict maps
             (node_id, port_name) tuples to output tensors
         """
-        from cuvis_ai_core.utils.types import Context
-
         self.datamodule.setup(stage="test")
         test_loader = self.datamodule.test_dataloader()
 

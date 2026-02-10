@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.ports import InputPort, OutputPort, PortSpec
+from cuvis_ai_schemas.pipeline import InputPort, OutputPort, PortSpec
 from tests.fixtures import SoftChannelSelector
 
 
@@ -57,7 +57,7 @@ def test_real_node_has_annotations_selector():
 
 def test_runtime_ports_still_created():
     """Verify runtime behavior unchanged - ports are still created at init."""
-    from cuvis_ai_core.pipeline.ports import InputPort, OutputPort
+    from cuvis_ai_schemas.pipeline import InputPort, OutputPort
 
     class TestNode(Node):
         INPUT_SPECS = {"test_input": PortSpec(dtype=torch.float32, shape=(-1,))}

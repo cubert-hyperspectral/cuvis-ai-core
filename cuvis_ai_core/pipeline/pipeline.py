@@ -16,13 +16,14 @@ from torch import nn
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.ports import (
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.pipeline import (
     InputPort,
     OutputPort,
     PortCompatibilityError,
     PortSpec,
 )
-from cuvis_ai_core.utils.types import Context, ExecutionStage
 
 if TYPE_CHECKING:
     from cuvis_ai_core.training.config import PipelineConfig, PipelineMetadata

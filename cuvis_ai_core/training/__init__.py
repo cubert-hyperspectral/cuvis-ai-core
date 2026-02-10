@@ -19,7 +19,7 @@ from cuvis_ai_core.training.config import (
 )
 from cuvis_ai_core.training.datamodule import CuvisDataModule
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.utils.types import Context
+from cuvis_ai_schemas.execution import Context
 
 __all__ = [
     # Configuration
