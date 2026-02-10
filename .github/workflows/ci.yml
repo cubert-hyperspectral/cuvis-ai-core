@@ -185,12 +185,17 @@ jobs:
         run: |
           uv run pip-licenses --format=markdown --with-authors > licenses.md || true
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload dist
+        uses: actions/upload-artifact@v6
         with:
           name: dist
+          path: dist/
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v6
+        with:
+          name: reports
           path: |
-            dist/
             sbom.cdx.json
             licenses.md
 
@@ -207,7 +212,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - name: Download artifacts
+      - name: Download dist
         uses: actions/download-artifact@v7
         with:
           name: dist
