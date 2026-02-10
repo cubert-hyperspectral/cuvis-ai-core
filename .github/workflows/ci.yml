@@ -165,9 +165,9 @@ jobs:
           uv sync --all-extras
 
       - name: Build package
-        env:
-          SETUPTOOLS_SCM_LOCAL_SCHEME: "no-local-version"
         run: |
+          SETUPTOOLS_SCM_PRETEND_VERSION=$(uv run python -c "from setuptools_scm import get_version; print(get_version(local_scheme='no-local-version'))")
+          export SETUPTOOLS_SCM_PRETEND_VERSION
           uv build
 
       - name: Validate package
