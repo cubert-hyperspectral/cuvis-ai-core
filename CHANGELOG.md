@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Changelog validation step in release workflow to prevent publishing without release notes
+- Labels and commit-message prefixes to Dependabot configuration for better PR organization
+
 ## [0.1.2] - 2026-02-09
 
 ### Added
