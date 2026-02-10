@@ -142,7 +142,7 @@ class Annotation(SafeWizard):
             out.bbox = BoundingBoxes(
                 torch.tensor([self.bbox], dtype=torch.float32),
                 format="XYWH",
-                pipeline_size=size,
+                canvas_size=size,
             )
 
         if (
@@ -193,11 +193,11 @@ class QueryableList:
 class COCOData:
     def __init__(self, coco: COCO) -> None:
         self._coco = coco
-        self._image_ids = None
-        self._categories = None
-        self._category_id_to_name = None
-        self._annotations = None
-        self._images = None
+        self._image_ids: list[int] | None = None
+        self._categories: list[Category] | None = None
+        self._category_id_to_name: dict[int, str] | None = None
+        self._annotations: QueryableList | None = None
+        self._images: list[Image] | None = None
 
     @classmethod
     def from_path(cls, path: Path | str):
@@ -225,7 +225,7 @@ class COCOData:
 
     @property
     def license(self) -> License:
-        return Info.from_dict(self._coco.dataset["licenses"])
+        return License.from_dict(self._coco.dataset["licenses"][0])
 
     @property
     def annotations(self) -> QueryableList:
@@ -262,25 +262,24 @@ class COCOData:
         compliance with standard COCO structure.
         """
         path = str(path)
-        dataset = {
-            "info": self.info.to_dict() if hasattr(self, "info") else {},
-            "licenses": [
-                lic.to_dict() for lic in self._coco.dataset.get("licenses", [])
-            ]
-            if "licenses" in self._coco.dataset
-            else [],
-            "images": [img.to_dict() for img in self.images],
-            "annotations": [],
-            "categories": [cat.to_dict() for cat in self.categories],
-        }
+        annotations_list: list[dict[str, Any]] = []
 
+        ann: Annotation | dict[str, Any]
         for ann in self.annotations:
             if isinstance(ann, Annotation):
-                dataset["annotations"].append(ann.to_dict_safe())
+                annotations_list.append(ann.to_dict_safe())
             elif isinstance(ann, dict):
-                dataset["annotations"].append(ann)
+                annotations_list.append(ann)
             else:
                 raise TypeError(f"Unsupported annotation type: {type(ann)}")
+
+        dataset = {
+            "info": self.info.to_dict() if hasattr(self, "info") else {},
+            "licenses": self._coco.dataset.get("licenses", []),
+            "images": [img.to_dict() for img in self.images],
+            "annotations": annotations_list,
+            "categories": [cat.to_dict() for cat in self.categories],
+        }
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump(dataset, f, indent=2)

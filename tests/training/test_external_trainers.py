@@ -7,11 +7,13 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortSpec
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.pipeline import PortSpec
+
 from cuvis_ai_core.training import CuvisDataModule
 from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.utils.types import Context, ExecutionStage
 from tests.fixtures import (
     MockStatisticalTrainableNode,
     SimpleLossNode,

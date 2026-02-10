@@ -9,7 +9,7 @@ import grpc
 import numpy as np
 import torch
 
-from cuvis_ai_core.utils.types import ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
 
 from . import helpers
 from .session_manager import SessionManager

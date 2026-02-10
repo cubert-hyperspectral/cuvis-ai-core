@@ -8,8 +8,8 @@ import torch
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.pipeline.ports import PortSpec
-from cuvis_ai_core.utils.types import ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.pipeline import PortSpec
 from tests.fixtures import (
     MinMaxNormalizer,
     MockStatisticalTrainableNode,
@@ -260,7 +260,7 @@ class TestPortCompatibility:
 
     def test_incompatible_dtype_raises_error(self):
         """Test that connecting incompatible dtypes raises error."""
-        from cuvis_ai_core.pipeline.ports import PortCompatibilityError
+        from cuvis_ai_schemas.pipeline import PortCompatibilityError
 
         class FloatNode(Node):
             INPUT_SPECS = {}

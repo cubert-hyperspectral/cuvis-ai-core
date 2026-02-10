@@ -17,7 +17,8 @@ from cuvis_ai_core.training.config import (
     create_callbacks_from_config,
 )
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_core.utils.types import Context, ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context
 
 from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
