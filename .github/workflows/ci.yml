@@ -166,7 +166,7 @@ jobs:
 
       - name: Build package
         run: |
-          SETUPTOOLS_SCM_PRETEND_VERSION=$(uv run python -c "from setuptools_scm import get_version; print(get_version(local_scheme='no-local-version'))")
+          SETUPTOOLS_SCM_PRETEND_VERSION=$(uv run --with 'setuptools-scm>=8' python -c "from setuptools_scm import get_version; print(get_version(local_scheme='no-local-version'))")
           export SETUPTOOLS_SCM_PRETEND_VERSION
           uv build
 
