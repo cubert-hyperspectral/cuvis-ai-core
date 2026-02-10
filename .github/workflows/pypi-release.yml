@@ -73,9 +73,31 @@ jobs:
             sbom.cdx.json
             licenses.md
 
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build-and-validate
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/cuvis-ai-core/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
   publish-pypi:
     name: Publish to PyPI
-    needs: build-and-validate
+    needs: publish-testpypi
     runs-on: ubuntu-latest
     environment:
       name: pypi
