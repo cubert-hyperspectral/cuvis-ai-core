@@ -142,7 +142,7 @@ class Annotation(SafeWizard):
             out.bbox = BoundingBoxes(
                 torch.tensor([self.bbox], dtype=torch.float32),
                 format="XYWH",
-                pipeline_size=size,
+                canvas_size=size,
             )
 
         if (
@@ -225,7 +225,7 @@ class COCOData:
 
     @property
     def license(self) -> License:
-        return License.from_dict(self._coco.dataset["licenses"])
+        return License.from_dict(self._coco.dataset["licenses"][0])
 
     @property
     def annotations(self) -> QueryableList:
@@ -275,11 +275,7 @@ class COCOData:
 
         dataset = {
             "info": self.info.to_dict() if hasattr(self, "info") else {},
-            "licenses": [
-                lic.to_dict() for lic in self._coco.dataset.get("licenses", [])
-            ]
-            if "licenses" in self._coco.dataset
-            else [],
+            "licenses": self._coco.dataset.get("licenses", []),
             "images": [img.to_dict() for img in self.images],
             "annotations": annotations_list,
             "categories": [cat.to_dict() for cat in self.categories],
