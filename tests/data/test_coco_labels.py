@@ -224,6 +224,20 @@ class TestCOCODataSave:
         coco_data.save(output_path)
         assert output_path.exists()
 
+    def test_save_handles_dict_annotations(self, coco_data, tmp_path):
+        """Test save handles raw dict annotations (not Annotation objects)."""
+        dict_ann = {"id": 99, "image_id": 1, "category_id": 1, "bbox": [0, 0, 5, 5]}
+        coco_data._annotations = QueryableList([dict_ann])
+
+        output_path = tmp_path / "output_dict_ann.json"
+        coco_data.save(output_path)
+
+        with open(output_path) as f:
+            data = json.load(f)
+
+        assert len(data["annotations"]) == 1
+        assert data["annotations"][0]["id"] == 99
+
 
 class TestQueryableList:
     """Test QueryableList filtering functionality."""
