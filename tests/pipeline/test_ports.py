@@ -6,7 +6,7 @@ All tests should FAIL initially until implementation is complete.
 import pytest
 import torch
 
-from cuvis_ai_core.pipeline.ports import (
+from cuvis_ai_schemas.pipeline import (
     DimensionResolver,
     InputPort,
     OutputPort,
