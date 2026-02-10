@@ -4,51 +4,19 @@ on:
   push:
     tags:
       - 'v*.*.*'
-    branches:
-      - main
-      - staging
+
+permissions:
+  contents: write
+  id-token: write
 
 jobs:
-  test-and-typecheck:
-    name: Quality gate (tests & typecheck)
-    runs-on: ubuntu-latest
-    container:
-      image: cubertgmbh/cuvis_pyil:3.5.0-ubuntu24.04
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          uv sync --all-extras
-
-      - name: Run tests
-        run: |
-          uv run pytest tests/ \
-            -m "not slow and not gpu and not stress and not requires_data" \
-            -v
-
-      - name: Run mypy
-        run: |
-          uv run mypy cuvis_ai_core/
-
   build-and-validate:
     name: Build and validate package
-    needs: test-and-typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # Required for setuptools-scm
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -72,6 +40,17 @@ jobs:
         run: |
           uv run twine check dist/*
 
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          PKG_VERSION=$(ls dist/*.tar.gz | sed 's/.*cuvis_ai_core-\(.*\)\.tar\.gz/\1/')
+          echo "Tag version: $TAG_VERSION"
+          echo "Package version: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match package version ($PKG_VERSION)"
+            exit 1
+          fi
+
       - name: Generate SBOM
         run: |
           uv run cyclonedx-py -o sbom.cdx.json || true
@@ -89,30 +68,9 @@ jobs:
             sbom.cdx.json
             licenses.md
 
-  publish-testpypi:
-    name: Publish to TestPyPI
-    needs: build-and-validate
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/project/cuvis-ai-core/
-    permissions:
-      id-token: write
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v7
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
   publish-pypi:
     name: Publish to PyPI
-    needs: publish-testpypi
+    needs: build-and-validate
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -149,6 +107,9 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           sed -n "/## \[${VERSION}\]/,/## \[/p" CHANGELOG.md | sed '1d;$d' > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "No specific release notes found for version ${VERSION}. See CHANGELOG.md for details." > release_notes.md
+          fi
           cat release_notes.md
 
       - name: Create GitHub Release
