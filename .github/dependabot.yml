@@ -9,6 +9,12 @@ updates:
       time: "09:00"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
     groups:
       python-minor-patch:
         patterns:
@@ -31,3 +37,8 @@ updates:
       time: "09:00"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
+    labels:
+      - "ci"
+      - "automated"
+    commit-message:
+      prefix: "ci"

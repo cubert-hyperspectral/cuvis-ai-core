@@ -32,6 +32,16 @@ jobs:
         run: |
           uv sync --all-extras
 
+      - name: Verify changelog entry exists
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if ! grep -q "## \[${TAG_VERSION}\]" CHANGELOG.md; then
+            echo "::error::No CHANGELOG.md entry found for version ${TAG_VERSION}"
+            echo "Add a '## [${TAG_VERSION}]' section to CHANGELOG.md before releasing."
+            exit 1
+          fi
+          echo "Found changelog entry for ${TAG_VERSION}"
+
       - name: Build package
         run: |
           uv build

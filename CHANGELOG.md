@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-02-11
+
+### Added
+- Changelog validation step in release workflow to prevent publishing without release notes
+- Labels and commit-message prefixes to Dependabot configuration for better PR organization
+
 ## [0.1.2] - 2026-02-09
 
 ### Added
@@ -64,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[unreleased]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.2...HEAD
+[unreleased]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cubert-hyperspectral/cuvis-ai-core/releases/tag/v0.1.0
