@@ -131,7 +131,7 @@ class PipelineService:
 
                 pipeline = PipelineBuilder(
                     node_registry=session.node_registry
-                ).build_from_config(trainrun_config.pipeline.model_dump())
+                ).build_from_config(trainrun_config.pipeline.to_dict())
                 # Move pipeline to GPU if available
                 if torch.cuda.is_available():
                     pipeline = pipeline.to("cuda")
@@ -176,6 +176,7 @@ class PipelineService:
         try:
             from datetime import datetime
 
+            from cuvis_ai_core import __version__
             from cuvis_ai_core.training.config import PipelineMetadata
 
             # Use resolve_pipeline_save_path for consistent path resolution
@@ -195,7 +196,7 @@ class PipelineService:
                 else datetime.now().isoformat(),
                 cuvis_ai_version=request.metadata.cuvis_ai_version
                 if request.metadata.cuvis_ai_version
-                else "0.1.5",
+                else __version__,
                 tags=list(request.metadata.tags) if request.metadata.tags else [],
                 author=request.metadata.author if request.metadata.author else "",
             )
@@ -254,7 +255,7 @@ class PipelineService:
 
             pipeline = PipelineBuilder(
                 node_registry=session.node_registry
-            ).build_from_config(pipeline_config.model_dump())
+            ).build_from_config(pipeline_config.to_dict())
             # Move pipeline to GPU if available
             if torch.cuda.is_available():
                 pipeline = pipeline.to("cuda")

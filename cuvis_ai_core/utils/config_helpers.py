@@ -10,11 +10,11 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, ValidationError
 
-from cuvis_ai_core.training.config import (
+from cuvis_ai_schemas.pipeline.config import PipelineConfig
+from cuvis_ai_schemas.training import (
     CallbacksConfig,
     DataConfig,
     OptimizerConfig,
-    PipelineConfig,
     SchedulerConfig,
     TrainingConfig,
     TrainRunConfig,
@@ -194,7 +194,7 @@ def resolve_config_with_hydra(
     config_model = config_class.model_validate(config_dict)
 
     logger.info(f"Successfully resolved {config_type} config")
-    return config_model.model_dump()
+    return config_model.to_dict()
 
 
 def _find_config_file(path: str, search_paths: list[str]) -> Path:

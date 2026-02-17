@@ -96,7 +96,7 @@ class CustomNode(Node):
             builder1 = PipelineBuilder(node_registry=state1.node_registry)
             pipeline_config = {
                 "metadata": {"name": "test_pipeline"},
-                "nodes": [{"name": "custom_node", "class": "CustomNode"}],
+                "nodes": [{"name": "custom_node", "class_name": "CustomNode"}],
                 "connections": [],
             }
             pipeline1 = builder1.build_from_config(pipeline_config)
@@ -534,7 +534,7 @@ class SessionOnlyNode(Node):
             )
             pipeline_config = {
                 "metadata": {"name": "test_pipeline"},
-                "nodes": [{"name": "session_node", "class": "SessionOnlyNode"}],
+                "nodes": [{"name": "session_node", "class_name": "SessionOnlyNode"}],
                 "connections": [],
             }
             pipeline = builder_with_session.build_from_config(pipeline_config)
@@ -550,7 +550,7 @@ class SessionOnlyNode(Node):
             # But can use builtin node
             builtin_config = {
                 "metadata": {"name": "test_pipeline"},
-                "nodes": [{"name": "global_node", "class": "GlobalNode"}],
+                "nodes": [{"name": "global_node", "class_name": "GlobalNode"}],
                 "connections": [],
             }
             pipeline2 = builder_without_session.build_from_config(builtin_config)

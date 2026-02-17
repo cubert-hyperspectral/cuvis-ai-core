@@ -150,7 +150,9 @@ def test_pipeline_integration_with_plugin(tmp_path: Path, create_plugin_pyprojec
     )
     config = {
         "metadata": {"name": "plugin_pipeline"},
-        "nodes": [{"name": "plugin_node", "class": "SimpleTestNode", "params": {}}],
+        "nodes": [
+            {"name": "plugin_node", "class_name": "SimpleTestNode", "params": {}}
+        ],
         "connections": [],
     }
 

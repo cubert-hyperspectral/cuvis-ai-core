@@ -33,10 +33,11 @@ class CuvisPipeline:
     """Main class for connecting nodes in a CUVIS.AI processing graph"""
 
     def __init__(self, name: str, strict_runtime_io_validation: bool = True) -> None:
+        from cuvis_ai_core import __version__
         from cuvis_ai_core.training.config import PipelineMetadata
 
         self._graph = nx.MultiDiGraph()
-        self._metadata = PipelineMetadata(name=name)
+        self._metadata = PipelineMetadata(name=name, cuvis_ai_version=__version__)
         self.strict_runtime_io_validation = strict_runtime_io_validation
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
 
@@ -290,9 +291,13 @@ class CuvisPipeline:
                 - nodes: List of node configurations
                 - connections: List of connection specifications
         """
-        from cuvis_ai_core.training.config import PipelineConfig
+        from cuvis_ai_core.training.config import (
+            ConnectionConfig,
+            NodeConfig,
+            PipelineConfig,
+        )
 
-        node_configs: list[dict[str, Any]] = []
+        node_configs: list[NodeConfig] = []
         for node in self.nodes:
             params = {}
             if hasattr(node, "get_hparams"):
@@ -304,24 +309,24 @@ class CuvisPipeline:
             params = self._convert_numpy_to_native(params or {})
 
             node_configs.append(
-                {
-                    "name": node.name,
-                    "class": f"{node.__class__.__module__}.{node.__class__.__name__}",
-                    "params": params,
-                }
+                NodeConfig(
+                    name=node.name,
+                    class_name=f"{node.__class__.__module__}.{node.__class__.__name__}",
+                    params=params,
+                )
             )
 
-        connection_configs: list[dict[str, str]] = []
+        connection_configs: list[ConnectionConfig] = []
         for source_node, target_node, edge_data in self._graph.edges(data=True):
             from_port = edge_data.get("from_port")
             to_port = edge_data.get("to_port")
             if from_port is None or to_port is None:
                 continue
             connection_configs.append(
-                {
-                    "from": f"{source_node.name}.outputs.{from_port}",
-                    "to": f"{target_node.name}.inputs.{to_port}",
-                }
+                ConnectionConfig(
+                    source=f"{source_node.name}.outputs.{from_port}",
+                    target=f"{target_node.name}.inputs.{to_port}",
+                )
             )
 
         # Use stored metadata and update created timestamp

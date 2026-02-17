@@ -75,7 +75,7 @@ class TrainRunService:
 
             with trainrun_path.open("w", encoding="utf-8") as f:
                 yaml.dump(
-                    trainrun_config.model_dump(mode="json"),
+                    trainrun_config.to_dict(),
                     f,
                     default_flow_style=False,
                     sort_keys=False,

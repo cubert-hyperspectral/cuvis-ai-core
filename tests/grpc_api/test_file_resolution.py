@@ -1,6 +1,7 @@
 import pytest
 
 from cuvis_ai_core.grpc import helpers
+from cuvis_ai_core.utils.config_helpers import _find_config_file
 
 
 def test_find_config_file_relative(tmp_path):
@@ -9,7 +10,7 @@ def test_find_config_file_relative(tmp_path):
     config_file = config_dir / "training.yaml"
     config_file.write_text("seed: 1")
 
-    resolved = helpers._find_config_file("training.yaml", [str(config_dir)])
+    resolved = _find_config_file("training.yaml", [str(config_dir)])
     assert resolved == config_file.resolve()
 
 
@@ -17,7 +18,7 @@ def test_find_config_file_absolute(tmp_path):
     config_file = tmp_path / "data.yaml"
     config_file.write_text("value: 1")
 
-    resolved = helpers._find_config_file(str(config_file), [str(tmp_path)])
+    resolved = _find_config_file(str(config_file), [str(tmp_path)])
     assert resolved == config_file
 
 

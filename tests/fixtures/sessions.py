@@ -93,31 +93,6 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
             else:
                 training_cfg["scheduler"] = scheduler_cfg
 
-        # Align callback naming with pydantic schema
-        trainer_cfg = training_cfg.get("trainer")
-        if isinstance(trainer_cfg, dict):
-            callbacks_cfg = trainer_cfg.get("callbacks")
-            if isinstance(callbacks_cfg, dict) and "model_checkpoint" in callbacks_cfg:
-                checkpoint_cfg = callbacks_cfg.pop("model_checkpoint")
-                if isinstance(checkpoint_cfg, dict):
-                    allowed_checkpoint_keys = {
-                        "dirpath",
-                        "filename",
-                        "monitor",
-                        "mode",
-                        "save_top_k",
-                        "every_n_epochs",
-                        "save_last",
-                        "auto_insert_metric_name",
-                    }
-                    callbacks_cfg["checkpoint"] = {
-                        k: v
-                        for k, v in checkpoint_cfg.items()
-                        if k in allowed_checkpoint_keys
-                    }
-                else:
-                    callbacks_cfg["checkpoint"] = checkpoint_cfg
-
     tmp = tempfile.NamedTemporaryFile(
         delete=False, suffix=".yaml", mode="w", encoding="utf-8"
     )

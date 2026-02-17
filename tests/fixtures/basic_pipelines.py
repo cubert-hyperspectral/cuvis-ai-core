@@ -179,7 +179,7 @@ def pipeline_dict_factory():
         for i in range(num_nodes):
             node_name = f"node_{i}"
             nodes[node_name] = {
-                "class": node_class,
+                "class_name": node_class,
                 "params": {},
             }
 
@@ -187,8 +187,8 @@ def pipeline_dict_factory():
             if i > 0:
                 connections.append(
                     {
-                        "from": f"node_{i - 1}.output",
-                        "to": f"{node_name}.input",
+                        "source": f"node_{i - 1}.output",
+                        "target": f"{node_name}.input",
                     }
                 )
 

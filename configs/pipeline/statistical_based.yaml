@@ -12,18 +12,18 @@ metadata:
 
 nodes:
 - name: LentilsAnomalyDataNode
-  class: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+  class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
   params:
     normal_class_ids:
     - 0
     - 1
 
 - name: MinMaxNormalizer
-  class: tests.fixtures.mock_nodes.MinMaxNormalizer
+  class_name: tests.fixtures.mock_nodes.MinMaxNormalizer
   params:
     eps: 1.0e-06
     use_running_stats: true
 
 connections:
-- from: LentilsAnomalyDataNode.outputs.cube
-  to: MinMaxNormalizer.inputs.data
+- source: LentilsAnomalyDataNode.outputs.cube
+  target: MinMaxNormalizer.inputs.data

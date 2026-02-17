@@ -190,7 +190,7 @@ class PipelineBuilder:
 
             # Get node class from registry (unified call - works for both class and instance!)
             if hasattr(self.node_registry, "get"):
-                node_class = self.node_registry.get(resolved_cfg["class"])
+                node_class = self.node_registry.get(resolved_cfg["class_name"])
             else:
                 raise TypeError(
                     f"node_registry must be NodeRegistry class or instance, got {type(self.node_registry)}"
@@ -256,8 +256,8 @@ class PipelineBuilder:
         """
         # Parse connection specification
         # Format: "node_name.outputs.port_name"
-        from_spec = conn_cfg["from"]
-        to_spec = conn_cfg["to"]
+        from_spec = conn_cfg["source"]
+        to_spec = conn_cfg["target"]
 
         # Extract components
         from_parts = from_spec.split(".")
@@ -265,13 +265,13 @@ class PipelineBuilder:
 
         if len(from_parts) != 3 or from_parts[1] != "outputs":
             raise ValueError(
-                f"Invalid 'from' specification: {from_spec}. "
+                f"Invalid 'source' specification: {from_spec}. "
                 f"Expected format: 'node_name.outputs.port_name'"
             )
 
         if len(to_parts) != 3 or to_parts[1] != "inputs":
             raise ValueError(
-                f"Invalid 'to' specification: {to_spec}. "
+                f"Invalid 'target' specification: {to_spec}. "
                 f"Expected format: 'node_name.inputs.port_name'"
             )
 
