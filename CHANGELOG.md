@@ -1,77 +1,54 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
 
-## [0.1.3] - 2026-02-11
+- Reformatted CHANGELOG to concise single-list style
+- Updated release workflow changelog extraction for new heading format
 
-### Added
-- Changelog validation step in release workflow to prevent publishing without release notes
-- Labels and commit-message prefixes to Dependabot configuration for better PR organization
+## 0.1.3 - 2026-02-11
 
-## [0.1.2] - 2026-02-09
+- Added changelog validation step in release workflow
+- Added labels and commit-message prefixes to Dependabot configuration
 
-### Added
-- `input_specs` and `output_specs` fields to NodeInfo for accurate port validation
-- `NodeRegistry.get_builtin_class()` method for direct builtin node class access
-- New testable helper functions in `git_and_os.py`: `parse_plugin_config`, `extract_package_prefixes`, `clear_package_modules`, `import_plugin_nodes`
-- Support for variadic ports and optional port flags in gRPC protocol
-- Automatic dtype and shape extraction from node `INPUT_SPECS` and `OUTPUT_SPECS`
-- GitHub Actions CI workflow with automated testing, type checking, linting, and security scanning
-- Automated PyPI release workflow with TestPyPI and PyPI publishing
-- Dependabot configuration for automated dependency updates (excludes PyTorch for CUDA compatibility)
-- Codecov integration for code coverage tracking (80% target)
-- Security scanning with pip-audit, detect-secrets, and bandit
-- Complete PyPI package metadata with classifiers and SPDX license identifier
-- Apache License 2.0 file in repository root
+## 0.1.2 - 2026-02-09
 
-### Changed
-- Refactored `NodeRegistry.load_plugin` to use testable helper functions for better maintainability
+- Added input_specs and output_specs fields to NodeInfo for port validation
+- Added NodeRegistry.get_builtin_class() for direct builtin node class access
+- Added testable helper functions in git_and_os.py for plugin loading
+- Added variadic port and optional port flag support in gRPC protocol
+- Added automatic dtype and shape extraction from node port specs
+- Added GitHub Actions CI workflow with testing, type checking, linting, and security
+- Added automated PyPI release workflow with TestPyPI and production publishing
+- Added Dependabot configuration (excludes PyTorch for CUDA compatibility)
+- Added Codecov integration with 80% coverage target
+- Added security scanning with pip-audit, detect-secrets, and bandit
+- Added PyPI package metadata with classifiers and SPDX license identifier
+- Added Apache License 2.0
+- Changed NodeRegistry.load_plugin to use testable helper functions
 - Improved plugin spec dtype handling for better type safety
-- Updated CHANGELOG format to "Keep a Changelog" standard with semantic versioning
-- Aligned all Python version references to 3.11 (Black, MyPy, Ruff)
-- Updated project URLs to GitHub (from GitLab)
+- Changed Python version references to 3.11 across tooling
+- Changed project URLs from GitLab to GitHub
+- Fixed plugin installation and dependency management
+- Fixed restore pipeline with improved error handling
+- Fixed path string handling in coco_labels.py for Windows compatibility
 
-### Fixed
-- Plugin installation and dependency management issues
-- Restore pipeline functionality with improved error handling
-- Path string handling in `coco_labels.py` (raw string prefix for Windows compatibility)
+## 0.1.1 - 2026-01-26
 
-## [0.1.1] - 2026-01-26
+- Fixed plugin installation by auto-installing dependencies from pyproject.toml
+- Improved error messaging for plugin-related issues
+- Added visualization-extension input parameter for restore pipeline
+- Added plugin support in pipeline loading with optional node registry parameter
 
-### Fixed
-- Plugin installation by automatically installing plugin dependencies from pyproject.toml
-- Improved error messaging for plugin-related issues with usage examples
+## 0.1.0 - 2026-01-23
 
-### Added
-- New visualization-extension input parameter for restore pipeline (supports PNG and Markdown formats)
-- Enhanced plugin support in pipeline loading with optional node registry parameter
-
-## [0.1.0] - 2026-01-23
-
-### Added
-- Initial repository creation with framework-only architecture extracted from cuvis-ai monolith
-- Core framework components: Base Node class, Pipeline infrastructure, Training framework, gRPC services, NodeRegistry
-- Plugin system with Git and local filesystem support via extended NodeRegistry
-- Pydantic-validated plugin configuration (GitPluginConfig, LocalPluginConfig, PluginManifest)
-- Session-scoped plugin isolation with gRPC plugin management interface
-- New plugin management RPCs: `LoadPlugins`, `ListLoadedPlugins`, `GetPluginInfo`, `ClearPluginCache`
-- Cache management for Git repositories with version pinning (`~/.cuvis_plugins/`)
-- 422 tests migrated from cuvis-ai with comprehensive fixture library
-- Modular service architecture: SessionService, ConfigService, PipelineService, TrainingService, InferenceService, IntrospectionService, DiscoveryService, PluginService
-
-### Fixed
-- DataLoader access violation (num_workers=0)
-- Single-threaded gRPC compatibility
-
----
-
-[unreleased]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.3...HEAD
-[0.1.3]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/cubert-hyperspectral/cuvis-ai-core/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/cubert-hyperspectral/cuvis-ai-core/releases/tag/v0.1.0
+- Added initial repository with framework extracted from cuvis-ai monolith
+- Added core components: Base Node, Pipeline, Training framework, gRPC services, NodeRegistry
+- Added plugin system with Git and local filesystem support
+- Added Pydantic-validated plugin configuration
+- Added session-scoped plugin isolation with gRPC plugin management
+- Added plugin management RPCs: LoadPlugins, ListLoadedPlugins, GetPluginInfo, ClearPluginCache
+- Added cache management for Git repositories with version pinning
+- Added 422 tests migrated from cuvis-ai with comprehensive fixtures
+- Added modular service architecture with 8 service modules
+- Fixed DataLoader access violation with num_workers=0
+- Fixed gRPC single-threaded compatibility
