@@ -145,11 +145,29 @@ class SingleCu3sDataset(Dataset):
             if mesu_index in self._coco.image_ids:
                 image_id = self._coco.image_ids[self._coco.image_ids.index(mesu_index)]
                 anns = self._coco.annotations.where(image_id=image_id)
+
+                # COCO polygon coordinates may be in a different coordinate
+                # space than the cube (e.g. cuvis_pilot uses SDK view dims
+                # which can differ from cube dims). Create the mask in the
+                # COCO coordinate space, then resize to match the cube.
+                coco_img = self._coco._coco.imgs[image_id]
+                json_h, json_w = coco_img["height"], coco_img["width"]
+                cube_h, cube_w = cube_array.shape[0], cube_array.shape[1]
+
                 category_mask = create_mask(
                     annotations=anns,
-                    image_height=cube_array.shape[0],
-                    image_width=cube_array.shape[1],
+                    image_height=json_h,
+                    image_width=json_w,
                 )
+
+                if (json_h, json_w) != (cube_h, cube_w):
+                    import cv2
+
+                    category_mask = cv2.resize(
+                        category_mask.astype(np.float32),
+                        (cube_w, cube_h),
+                        interpolation=cv2.INTER_NEAREST,
+                    ).astype(np.int32)
             else:
                 # Frame index not in available annotations
                 category_mask = np.zeros(cube_array.shape[:2], dtype=np.int32)
