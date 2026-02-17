@@ -35,9 +35,9 @@ jobs:
       - name: Verify changelog entry exists
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          if ! grep -q "## \[${TAG_VERSION}\]" CHANGELOG.md; then
+          if ! grep -q "^## ${TAG_VERSION}" CHANGELOG.md; then
             echo "::error::No CHANGELOG.md entry found for version ${TAG_VERSION}"
-            echo "Add a '## [${TAG_VERSION}]' section to CHANGELOG.md before releasing."
+            echo "Add a '## ${TAG_VERSION}' section to CHANGELOG.md before releasing."
             exit 1
           fi
           echo "Found changelog entry for ${TAG_VERSION}"
@@ -149,7 +149,7 @@ jobs:
         id: extract-notes
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          sed -n "/## \[${VERSION}\]/,/## \[/p" CHANGELOG.md | sed '1d;$d' > release_notes.md
+          sed -n "/^## ${VERSION}/,/^## [0-9]/p" CHANGELOG.md | sed '1d;$d' > release_notes.md
           if [ ! -s release_notes.md ]; then
             echo "No specific release notes found for version ${VERSION}. See CHANGELOG.md for details." > release_notes.md
           fi
