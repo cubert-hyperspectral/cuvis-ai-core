@@ -13,14 +13,14 @@ metadata:
 nodes:
 - name: LentilsAnomalyDataNode
   class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
-  params:
+  hparams:
     normal_class_ids:
     - 0
     - 1
 
 - name: SoftChannelSelector
   class_name: tests.fixtures.mock_nodes.SoftChannelSelector
-  params:
+  hparams:
     n_select: 3
     input_channels: 61
     init_method: variance
@@ -32,12 +32,12 @@ nodes:
 
 - name: SimpleLossNode
   class_name: tests.fixtures.mock_nodes.SimpleLossNode
-  params:
+  hparams:
     weight: 1.0
 
 - name: MockMetricNode
   class_name: tests.fixtures.registry_test_nodes.MockMetricNode
-  params: {}
+  hparams: {}
 
 connections:
 - source: LentilsAnomalyDataNode.outputs.cube

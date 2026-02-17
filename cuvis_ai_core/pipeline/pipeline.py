@@ -312,7 +312,7 @@ class CuvisPipeline:
                 NodeConfig(
                     name=node.name,
                     class_name=f"{node.__class__.__module__}.{node.__class__.__name__}",
-                    params=params,
+                    hparams=params,
                 )
             )
 

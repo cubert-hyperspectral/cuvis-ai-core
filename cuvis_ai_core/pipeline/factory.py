@@ -197,7 +197,7 @@ class PipelineBuilder:
                 )
 
             # Extract parameters
-            params = resolved_cfg.get("params", {})
+            params = resolved_cfg.get("hparams", {})
 
             # Instantiate node (all nodes accept **kwargs for name, execution_stages, etc.)
             node = node_class(**params)

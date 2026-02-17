@@ -180,7 +180,7 @@ def pipeline_dict_factory():
             node_name = f"node_{i}"
             nodes[node_name] = {
                 "class_name": node_class,
-                "params": {},
+                "hparams": {},
             }
 
             # Connect to previous node

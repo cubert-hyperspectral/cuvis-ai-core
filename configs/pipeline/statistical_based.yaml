@@ -13,14 +13,14 @@ metadata:
 nodes:
 - name: LentilsAnomalyDataNode
   class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
-  params:
+  hparams:
     normal_class_ids:
     - 0
     - 1
 
 - name: MinMaxNormalizer
   class_name: tests.fixtures.mock_nodes.MinMaxNormalizer
-  params:
+  hparams:
     eps: 1.0e-06
     use_running_stats: true
 

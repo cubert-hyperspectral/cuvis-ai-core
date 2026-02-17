@@ -62,7 +62,7 @@ def restore_pipeline(
     processing_mode : str
         Cuvis processing mode string ("Raw", "Reflectance")
     config_overrides : list[str] | None
-        Optional list of config overrides in dot notation (e.g., ["nodes.10.params.output_dir=outputs/my_tb"])
+        Optional list of config overrides in dot notation (e.g., ["nodes.10.hparams.output_dir=outputs/my_tb"])
     plugins_path : str | Path | None
         Optional path to plugins manifest YAML file for loading external plugin nodes
     pipeline_vis_ext : PipelineVisFormat | None

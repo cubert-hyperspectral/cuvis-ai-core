@@ -14,7 +14,7 @@ def simple_pipeline_config():
             {
                 "name": "normalizer",
                 "class_name": "MinMaxNormalizer",
-                "params": {"eps": 1e-6, "use_running_stats": True},
+                "hparams": {"eps": 1e-6, "use_running_stats": True},
             }
         ],
         "connections": [],
@@ -30,12 +30,12 @@ def pipeline_with_connections():
             {
                 "name": "normalizer",
                 "class_name": "MinMaxNormalizer",
-                "params": {"eps": 1e-6},
+                "hparams": {"eps": 1e-6},
             },
             {
                 "name": "selector",
                 "class_name": "SoftChannelSelector",
-                "params": {
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 10,
                     "init_method": "variance",
@@ -79,7 +79,7 @@ class TestPipelineBuilder:
 nodes:
   - name: "normalizer"
     class_name: "MinMaxNormalizer"
-    params:
+    hparams:
       eps: 1.0e-6
 connections: []
 """
@@ -100,7 +100,7 @@ connections: []
                 {
                     "name": "selector",
                     "class_name": "SoftChannelSelector",
-                    "params": {
+                    "hparams": {
                         "n_select": 3,
                         "input_channels": 61,
                         "init_method": "variance",
@@ -121,7 +121,7 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "missing", "class_name": "NonExistentNode", "params": {}}
+                {"name": "missing", "class_name": "NonExistentNode", "hparams": {}}
             ],
             "connections": [],
         }
@@ -135,7 +135,7 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class_name": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
                 {
@@ -154,7 +154,7 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class_name": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
                 {
@@ -173,7 +173,7 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class_name": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
                 {
@@ -195,17 +195,17 @@ connections: []
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "hparams": {"eps": 1e-6},
                 },
             ],
             "connections": [],
@@ -286,17 +286,17 @@ connections: []
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-7},
+                    "hparams": {"eps": 1e-7},
                 },
                 {
                     "name": "normalizer",
                     "class_name": "MinMaxNormalizer",
-                    "params": {"eps": 1e-8},
+                    "hparams": {"eps": 1e-8},
                 },
             ],
             "connections": [],

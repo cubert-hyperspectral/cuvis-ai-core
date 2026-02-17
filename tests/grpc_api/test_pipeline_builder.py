@@ -30,14 +30,14 @@ def minimal_pipeline_yaml():
             {
                 "name": "data",
                 "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {
+                "hparams": {
                     "normal_class_ids": [0],
                 },
             },
             {
                 "name": "normalizer",
                 "class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer",
-                "params": {
+                "hparams": {
                     "eps": 1e-6,
                     "use_running_stats": False,
                 },
@@ -45,7 +45,7 @@ def minimal_pipeline_yaml():
             {
                 "name": "selector",
                 "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 10,
                     "init_method": "uniform",

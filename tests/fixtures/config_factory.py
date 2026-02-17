@@ -123,12 +123,12 @@ def mock_pipeline_dict():
             {
                 "name": "LentilsAnomalyDataNode",
                 "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0, 1]},
+                "hparams": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "SoftChannelSelector",
                 "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 61,
                     "init_method": "variance",
@@ -167,12 +167,12 @@ def minimal_pipeline_dict():
             {
                 "name": "data",
                 "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0, 1]},
+                "hparams": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "selector",
                 "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 61,
                     "init_method": "variance",
@@ -305,11 +305,11 @@ metadata:
 nodes:
   - name: LentilsAnomalyDataNode
     class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
-    params:
+    hparams:
       normal_class_ids: [0, 1]
   - name: SoftChannelSelector
     class_name: tests.fixtures.mock_nodes.SoftChannelSelector
-    params:
+    hparams:
       eps: 1.0e-06
       hard: false
       init_method: variance
