@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Added shared `get_session_or_error()` and `require_pipeline()` gRPC helpers in `error_handling.py`
+- Changed all 8 gRPC service files to use centralized error handling helpers
+- Changed training configs to use `cuvis-ai-schemas` as single source of truth
+- Changed `NodeConfig` usage from `params` to `hparams` across core
+- Removed duplicate proto definitions now owned by `cuvis-ai-schemas`
+- Removed `VALIDATE` compatibility code from execution stage handling
+- Removed dead code and fixed stale docstrings
 - Reformatted CHANGELOG to concise single-list style
 - Updated release workflow changelog extraction for new heading format
 
