@@ -7,6 +7,7 @@ from pathlib import Path
 
 import grpc
 
+from .error_handling import get_session_or_error
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -23,11 +24,10 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineInputsResponse:
         """Return pipeline entrypoint specifications for the session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetPipelineInputsResponse()
 
         try:
@@ -57,11 +57,10 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineOutputsResponse:
         """Return pipeline exit specifications for the session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
 
         try:
@@ -91,11 +90,10 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
         """Return a visualization of the session pipeline."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer

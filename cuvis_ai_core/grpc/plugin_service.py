@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from loguru import logger
 
+from cuvis_ai_core.grpc.error_handling import get_session_or_error
 from cuvis_ai_core.grpc.helpers import DTYPE_NUMPY_TO_PROTO, DTYPE_TORCH_TO_PROTO
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
@@ -94,11 +95,10 @@ class PluginService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPluginsResponse:
         """Load plugins from JSON manifest into session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.LoadPluginsResponse()
 
         if not request.manifest or not request.manifest.config_bytes:
@@ -149,11 +149,10 @@ class PluginService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ListLoadedPluginsResponse:
         """List plugins loaded in session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.ListLoadedPluginsResponse()
 
         plugins = []
@@ -181,11 +180,10 @@ class PluginService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPluginInfoResponse:
         """Get information about specific plugin."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetPluginInfoResponse()
 
         if request.plugin_name not in session.loaded_plugins:
@@ -215,11 +213,10 @@ class PluginService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         """List all available nodes (built-in + session plugins)."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.ListAvailableNodesResponse()
 
         nodes = []

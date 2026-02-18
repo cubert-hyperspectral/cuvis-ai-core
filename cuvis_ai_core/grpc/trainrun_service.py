@@ -11,6 +11,7 @@ import yaml
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 
 from . import helpers
+from .error_handling import get_session_or_error
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -27,11 +28,10 @@ class TrainRunService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SaveTrainRunResponse:
         """Persist the current session TrainRunConfig to disk, optionally with weights."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
 
         if not request.trainrun_path:

@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import grpc
 
+from .error_handling import get_session_or_error
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
-
-if TYPE_CHECKING:  # pragma: no cover - for type hints only
-    pass
 
 
 class SessionService:
@@ -58,11 +54,10 @@ class SessionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SetSessionSearchPathsResponse:
         """Set or extend search paths for config resolution and weight loading."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.SetSessionSearchPathsResponse(success=False)
 
         append = request.append if request.HasField("append") else True

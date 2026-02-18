@@ -12,6 +12,7 @@ from cuvis_ai_core.utils.config_helpers import (
     validate_config_dict,
 )
 
+from .error_handling import get_session_or_error
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -28,11 +29,10 @@ class ConfigService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ResolveConfigResponse:
         """Resolve configuration using Hydra composition."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.ResolveConfigResponse()
 
         try:

@@ -12,6 +12,7 @@ import torch
 from cuvis_ai_schemas.enums import ExecutionStage
 
 from . import helpers
+from .error_handling import get_session_or_error, require_pipeline
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -28,19 +29,13 @@ class InferenceService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.InferenceResponse:
         """Run a forward pass for the requested session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.InferenceResponse()
 
-        # Check if pipeline exists
-        if session.pipeline is None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "No pipeline is available for this session. Build pipeline first."
-            )
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.InferenceResponse()
 
         try:

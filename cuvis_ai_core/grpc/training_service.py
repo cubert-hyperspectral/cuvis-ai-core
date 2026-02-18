@@ -20,6 +20,7 @@ from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 
+from .error_handling import get_session_or_error, require_pipeline
 from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
 
@@ -39,18 +40,13 @@ class TrainingService:
         context: grpc.ServicerContext,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train the pipeline with statistical or gradient methods."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return
 
-        if session.pipeline is None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "No pipeline to train. Build pipeline or set trainrun config first."
-            )
+        if not require_pipeline(session, context):
             return
 
         # Get data config - either from request or from session's experiment config

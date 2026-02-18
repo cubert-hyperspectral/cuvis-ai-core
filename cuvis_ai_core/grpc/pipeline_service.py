@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from cuvis_ai_core.training.config import TrainRunConfig
 
 from . import helpers
+from .error_handling import get_session_or_error, require_pipeline
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -29,18 +30,13 @@ class PipelineService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
         """Load weights into an existing pipeline (path or raw bytes)."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
 
-        if session.pipeline is None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "No pipeline is available for this session. Build pipeline first."
-            )
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
 
         strict = request.strict if request.HasField("strict") else True
@@ -93,11 +89,10 @@ class PipelineService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SetTrainRunConfigResponse:
         """Persist trainrun configuration and apply pipeline precedence logic."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
 
         if not request.config.config_bytes:
@@ -161,11 +156,10 @@ class PipelineService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SavePipelineResponse:
         """Save trained pipeline (structure + weights) to disk."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.SavePipelineResponse(success=False)
 
         if not request.pipeline_path:
@@ -232,11 +226,10 @@ class PipelineService:
         2) LoadPipeline to build pipeline structure
         3) LoadPipelineWeights to load weights (optional, explicit)
         """
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
         if not request.pipeline or not request.pipeline.config_bytes:
