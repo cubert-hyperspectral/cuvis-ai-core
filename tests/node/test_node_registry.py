@@ -81,8 +81,8 @@ class TestNodeRegistry:
     def test_get_custom_node_via_importlib(self):
         """Test getting custom node via full import path."""
         # Test with a mock node from our test fixtures
-        cls = NodeRegistry.get("tests.fixtures.mock_nodes.MockMinMaxNormalizer")
-        assert cls.__name__ == "MockMinMaxNormalizer"
+        cls = NodeRegistry.get("tests.fixtures.mock_nodes.MockMetricNode")
+        assert cls.__name__ == "MockMetricNode"
 
     def test_get_missing_node_raises_error(self):
         """Test getting non-existent node raises clear error."""

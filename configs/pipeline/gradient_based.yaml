@@ -36,7 +36,7 @@ nodes:
     weight: 1.0
 
 - name: MockMetricNode
-  class_name: tests.fixtures.registry_test_nodes.MockMetricNode
+  class_name: tests.fixtures.mock_nodes.MockMetricNode
   hparams: {}
 
 connections:
