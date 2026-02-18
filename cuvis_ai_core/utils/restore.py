@@ -1,5 +1,6 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -8,6 +9,7 @@ import torch
 import yaml
 from loguru import logger
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from cuvis_ai_core.data.datasets import SingleCu3sDataset
 from cuvis_ai_core.data.datasets import SingleCu3sDataModule
@@ -43,6 +45,8 @@ def restore_pipeline(
     device: str = "auto",
     cu3s_file_path: str | Path | None = None,
     processing_mode: str = "Reflectance",
+    annotation_json_path: str | Path | None = None,
+    measurement_indices: list[int] | None = None,
     config_overrides: list[str] | None = None,
     plugins_path: str | Path | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
@@ -123,28 +127,53 @@ def restore_pipeline(
         data = SingleCu3sDataset(
             cu3s_file_path=str(cu3s_file_path),
             processing_mode=processing_mode,
+            annotation_json_path=str(annotation_json_path)
+            if annotation_json_path
+            else None,
+            measurement_indices=measurement_indices,
         )
-        dataloader = DataLoader(data, shuffle=False, batch_size=1)
+        dataloader = DataLoader(data, shuffle=False, batch_size=1, num_workers=0)
 
         for module in pipeline.torch_layers:
             module.eval()
 
-        # Process all batches
-        results = []
-        global_step = 0  # Track step across batches
+        # Process all batches (outputs discarded — sink nodes write to disk)
+        total_frames = len(data)
+        global_step = 0
+        forward_times = []
         with torch.no_grad():
-            for batch in dataloader:
-                # Create context with incrementing step
+            for batch in tqdm(
+                dataloader, total=total_frames, desc="Inference", unit="frame"
+            ):
+                if load_device:
+                    batch = {
+                        k: v.to(load_device) if isinstance(v, torch.Tensor) else v
+                        for k, v in batch.items()
+                    }
                 context = Context(
                     stage=ExecutionStage.INFERENCE,
                     batch_idx=global_step,
                     global_step=global_step,
                 )
-                outputs = pipeline.forward(batch=batch, context=context)
-                results.append(outputs)
-                global_step += 1  # Increment for next batch
+                t0 = time.perf_counter()
+                pipeline.forward(batch=batch, context=context)
+                t1 = time.perf_counter()
+                forward_times.append(t1 - t0)
+                global_step += 1
 
-        logger.info(f"Processed {len(results)} measurements")
+        avg_time = sum(forward_times) / len(forward_times)
+        total_time = sum(forward_times)
+        fps = global_step / total_time
+        logger.info(
+            f"Inference complete: {global_step} frames processed in {total_time:.2f}s "
+            f"(avg forward call: {avg_time * 1000:.1f}ms, {fps:.1f} fps)"
+        )
+
+        # Finalize video outputs from any ToVideoNode in the pipeline
+        for node in pipeline.nodes:
+            if hasattr(node, "close") and hasattr(node, "output_video_path"):
+                node.close()
+                logger.success(f"Video saved: {node.output_video_path}")
 
     else:
         # Just display input/output specs
@@ -503,8 +532,20 @@ Examples:
         "--processing-mode",
         type=str,
         default="Reflectance",
-        choices=["Raw", "Reflectance"],
+        choices=["Raw", "Reflectance", "SpectralRadiance"],
         help="Processing mode (default: Reflectance)",
+    )
+    parser.add_argument(
+        "--annotation-json-path",
+        type=str,
+        default=None,
+        help="Path to COCO annotation JSON file for mask loading",
+    )
+    parser.add_argument(
+        "--measurement-indices",
+        type=str,
+        default=None,
+        help="Comma-separated measurement indices to process (e.g., '0,304,530,568'). Default: all frames.",
     )
     parser.add_argument(
         "--override",
@@ -532,12 +573,19 @@ Examples:
     if args.pipeline_vis_ext is not None:
         vis_ext = PipelineVisFormat(args.pipeline_vis_ext)
 
+    # Parse measurement indices from comma-separated string
+    meas_indices = None
+    if args.measurement_indices is not None:
+        meas_indices = [int(x.strip()) for x in args.measurement_indices.split(",")]
+
     restore_pipeline(
         pipeline_path=args.pipeline_path,
         weights_path=args.weights_path,
         device=args.device,
         cu3s_file_path=args.cu3s_file_path,
         processing_mode=args.processing_mode,
+        annotation_json_path=args.annotation_json_path,
+        measurement_indices=meas_indices,
         config_overrides=args.override,
         plugins_path=args.plugins_path,
         pipeline_vis_ext=vis_ext,

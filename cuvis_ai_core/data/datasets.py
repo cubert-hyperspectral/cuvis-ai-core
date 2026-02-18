@@ -89,9 +89,10 @@ class SingleCu3sDataset(Dataset):
             measurement_indices, max_index=self._total_measurements
         )
 
+        ids = self.measurement_indices
+        ids_str = str(ids) if len(ids) <= 20 else f"[{ids[0]}..{ids[-1]}]"
         logger.info(
-            f"Loaded cu3s dataset from {cu3s_file_path} with {len(self.measurement_indices)} "
-            f"measurements: {self.measurement_indices}"
+            f"Loaded cu3s dataset from {cu3s_file_path} with {len(ids)} measurements: {ids_str}"
         )
         self.has_labels = (
             annotation_json_path is not None
@@ -152,7 +153,7 @@ class SingleCu3sDataset(Dataset):
                 # COCO coordinate space, then resize to match the cube.
                 coco_img = self._coco._coco.imgs[image_id]
                 json_h, json_w = coco_img["height"], coco_img["width"]
-                cube_h, cube_w = cube_array.shape[0], cube_array.shape[1]
+                # cube_h, cube_w = cube_array.shape[0], cube_array.shape[1]
 
                 category_mask = create_mask(
                     annotations=anns,
@@ -160,14 +161,6 @@ class SingleCu3sDataset(Dataset):
                     image_width=json_w,
                 )
 
-                if (json_h, json_w) != (cube_h, cube_w):
-                    import cv2
-
-                    category_mask = cv2.resize(
-                        category_mask.astype(np.float32),
-                        (cube_w, cube_h),
-                        interpolation=cv2.INTER_NEAREST,
-                    ).astype(np.int32)
             else:
                 # Frame index not in available annotations
                 category_mask = np.zeros(cube_array.shape[:2], dtype=np.int32)
