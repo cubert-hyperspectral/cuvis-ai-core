@@ -300,9 +300,7 @@ class CuvisPipeline:
         node_configs: list[NodeConfig] = []
         for node in self.nodes:
             params = {}
-            if hasattr(node, "get_hparams"):
-                params = node.get_hparams()  # type: ignore[attr-defined]
-            elif hasattr(node, "hparams"):
+            if hasattr(node, "hparams"):
                 params = node.hparams
 
             # Convert numpy arrays to native Python types for clean YAML serialization

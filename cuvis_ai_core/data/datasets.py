@@ -88,8 +88,6 @@ class SingleCu3sDataset(Dataset):
         self.measurement_indices = _resolve_measurement_indices(
             measurement_indices, max_index=self._total_measurements
         )
-        # Backwards compatibility for legacy callers.
-        self.mes_ids = self.measurement_indices
 
         logger.info(
             f"Loaded cu3s dataset from {cu3s_file_path} with {len(self.measurement_indices)} "

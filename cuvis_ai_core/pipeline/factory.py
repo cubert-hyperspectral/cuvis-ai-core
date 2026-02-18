@@ -252,7 +252,7 @@ class PipelineBuilder:
         Args:
             pipeline: Pipeline instance
             node_instances: Mapping of base names to node instances
-            conn_cfg: Connection config with 'from' and 'to' keys
+            conn_cfg: Connection config with 'source' and 'target' keys
         """
         # Parse connection specification
         # Format: "node_name.outputs.port_name"
