@@ -20,7 +20,7 @@ from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 
-from .error_handling import get_session_or_error, require_pipeline
+from .error_handling import get_session_or_error, grpc_handler, require_pipeline
 from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
 
@@ -120,203 +120,194 @@ class TrainingService:
             context.set_details(f"Training failed: {str(exc)}")
             return
 
+    @grpc_handler("Failed to get status")
     def get_train_status(
         self,
         request: cuvis_ai_pb2.GetTrainStatusRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetTrainStatusResponse:
         """Get current training status."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-
-            # Simple status tracking (can be enhanced with async training in future)
-            if session.trainer is None:
-                status = cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
-            else:
-                status = cuvis_ai_pb2.TRAIN_STATUS_COMPLETE  # Simplified for Phase 5
-
-            # Create a TrainResponse with the status
-            latest_progress = cuvis_ai_pb2.TrainResponse(
-                context=cuvis_ai_pb2.Context(
-                    stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
-                    epoch=0,
-                    batch_idx=0,
-                    global_step=0,
-                ),
-                status=status,
-                message="Training status query",
-            )
-
-            return cuvis_ai_pb2.GetTrainStatusResponse(latest_progress=latest_progress)
-
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.GetTrainStatusResponse()
-        except Exception as exc:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get status: {str(exc)}")
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetTrainStatusResponse()
 
+        # Simple status tracking (can be enhanced with async training in future)
+        if session.trainer is None:
+            status = cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
+        else:
+            status = cuvis_ai_pb2.TRAIN_STATUS_COMPLETE  # Simplified for Phase 5
+
+        # Create a TrainResponse with the status
+        latest_progress = cuvis_ai_pb2.TrainResponse(
+            context=cuvis_ai_pb2.Context(
+                stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
+                epoch=0,
+                batch_idx=0,
+                global_step=0,
+            ),
+            status=status,
+            message="Training status query",
+        )
+
+        return cuvis_ai_pb2.GetTrainStatusResponse(latest_progress=latest_progress)
+
+    @grpc_handler("Failed to get capabilities")
     def get_training_capabilities(
         self,
         request: cuvis_ai_pb2.GetTrainingCapabilitiesRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetTrainingCapabilitiesResponse:
         """Return supported optimizers, schedulers, and callbacks."""
-        try:
-            from cuvis_ai_core.training.optimizer_registry import (
-                get_supported_optimizers,
-                get_supported_schedulers,
-            )
+        from cuvis_ai_core.training.optimizer_registry import (
+            get_supported_optimizers,
+            get_supported_schedulers,
+        )
 
-            supported_optimizers = get_supported_optimizers()
-            supported_schedulers = get_supported_schedulers()
+        supported_optimizers = get_supported_optimizers()
+        supported_schedulers = get_supported_schedulers()
 
-            callbacks = [
-                cuvis_ai_pb2.CallbackTypeInfo(
-                    type="EarlyStopping",
-                    description="Stop training when a monitored metric stops improving.",
-                    parameters=[
-                        cuvis_ai_pb2.ParamSpec(
-                            name="monitor",
-                            type="string",
-                            required=True,
-                            description="Metric to monitor (e.g., 'val_loss').",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="patience",
-                            type="int",
-                            required=False,
-                            default_value="10",
-                            description="Number of epochs with no improvement.",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="mode",
-                            type="string",
-                            required=False,
-                            default_value="min",
-                            validation="in ['min', 'max']",
-                            description="Optimization direction for monitored metric.",
-                        ),
-                    ],
-                ),
-                cuvis_ai_pb2.CallbackTypeInfo(
-                    type="ModelCheckpoint",
-                    description="Persist checkpoints during training.",
-                    parameters=[
-                        cuvis_ai_pb2.ParamSpec(
-                            name="dirpath",
-                            type="string",
-                            required=True,
-                            description="Directory to store checkpoints.",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="monitor",
-                            type="string",
-                            required=True,
-                            description="Metric to monitor for best checkpoint.",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="mode",
-                            type="string",
-                            required=False,
-                            default_value="max",
-                            validation="in ['min', 'max']",
-                            description="Optimization direction for checkpoint metric.",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="save_top_k",
-                            type="int",
-                            required=False,
-                            default_value="1",
-                            description="Number of best checkpoints to keep.",
-                        ),
-                    ],
-                ),
-                cuvis_ai_pb2.CallbackTypeInfo(
-                    type="LearningRateMonitor",
-                    description="Log learning rate during training.",
-                    parameters=[
-                        cuvis_ai_pb2.ParamSpec(
-                            name="logging_interval",
-                            type="string",
-                            required=False,
-                            default_value="epoch",
-                            validation="in ['step', 'epoch']",
-                            description="Frequency to log learning rate.",
-                        ),
-                        cuvis_ai_pb2.ParamSpec(
-                            name="log_momentum",
-                            type="bool",
-                            required=False,
-                            default_value="False",
-                            description="Whether to log optimizer momentum.",
-                        ),
-                    ],
-                ),
-            ]
-
-            optimizer_params = cuvis_ai_pb2.OptimizerParamsSchema(
-                parameters=[
-                    cuvis_ai_pb2.ParamSpec(
-                        name="lr",
-                        type="float",
-                        required=True,
-                        description="Learning rate.",
-                    ),
-                    cuvis_ai_pb2.ParamSpec(
-                        name="weight_decay",
-                        type="float",
-                        required=False,
-                        default_value="0.0",
-                        description="Weight decay (L2 regularization).",
-                    ),
-                    cuvis_ai_pb2.ParamSpec(
-                        name="betas",
-                        type="tuple",
-                        required=False,
-                        description="Adam/AdamW betas (beta1, beta2).",
-                    ),
-                ]
-            )
-
-            scheduler_params = cuvis_ai_pb2.SchedulerParamsSchema(
+        callbacks = [
+            cuvis_ai_pb2.CallbackTypeInfo(
+                type="EarlyStopping",
+                description="Stop training when a monitored metric stops improving.",
                 parameters=[
                     cuvis_ai_pb2.ParamSpec(
                         name="monitor",
                         type="string",
-                        required=False,
-                        description="Metric to monitor for scheduler decisions.",
-                    ),
-                    cuvis_ai_pb2.ParamSpec(
-                        name="factor",
-                        type="float",
-                        required=False,
-                        default_value="0.1",
-                        description="LR reduction factor for ReduceLROnPlateau.",
+                        required=True,
+                        description="Metric to monitor (e.g., 'val_loss').",
                     ),
                     cuvis_ai_pb2.ParamSpec(
                         name="patience",
                         type="int",
                         required=False,
                         default_value="10",
-                        description="Epochs to wait before reducing LR.",
+                        description="Number of epochs with no improvement.",
                     ),
-                ]
-            )
+                    cuvis_ai_pb2.ParamSpec(
+                        name="mode",
+                        type="string",
+                        required=False,
+                        default_value="min",
+                        validation="in ['min', 'max']",
+                        description="Optimization direction for monitored metric.",
+                    ),
+                ],
+            ),
+            cuvis_ai_pb2.CallbackTypeInfo(
+                type="ModelCheckpoint",
+                description="Persist checkpoints during training.",
+                parameters=[
+                    cuvis_ai_pb2.ParamSpec(
+                        name="dirpath",
+                        type="string",
+                        required=True,
+                        description="Directory to store checkpoints.",
+                    ),
+                    cuvis_ai_pb2.ParamSpec(
+                        name="monitor",
+                        type="string",
+                        required=True,
+                        description="Metric to monitor for best checkpoint.",
+                    ),
+                    cuvis_ai_pb2.ParamSpec(
+                        name="mode",
+                        type="string",
+                        required=False,
+                        default_value="max",
+                        validation="in ['min', 'max']",
+                        description="Optimization direction for checkpoint metric.",
+                    ),
+                    cuvis_ai_pb2.ParamSpec(
+                        name="save_top_k",
+                        type="int",
+                        required=False,
+                        default_value="1",
+                        description="Number of best checkpoints to keep.",
+                    ),
+                ],
+            ),
+            cuvis_ai_pb2.CallbackTypeInfo(
+                type="LearningRateMonitor",
+                description="Log learning rate during training.",
+                parameters=[
+                    cuvis_ai_pb2.ParamSpec(
+                        name="logging_interval",
+                        type="string",
+                        required=False,
+                        default_value="epoch",
+                        validation="in ['step', 'epoch']",
+                        description="Frequency to log learning rate.",
+                    ),
+                    cuvis_ai_pb2.ParamSpec(
+                        name="log_momentum",
+                        type="bool",
+                        required=False,
+                        default_value="False",
+                        description="Whether to log optimizer momentum.",
+                    ),
+                ],
+            ),
+        ]
 
-            return cuvis_ai_pb2.GetTrainingCapabilitiesResponse(
-                supported_optimizers=supported_optimizers,
-                supported_schedulers=supported_schedulers,
-                supported_callbacks=callbacks,
-                optimizer_params=optimizer_params,
-                scheduler_params=scheduler_params,
-            )
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get capabilities: {exc}")
-            return cuvis_ai_pb2.GetTrainingCapabilitiesResponse()
+        optimizer_params = cuvis_ai_pb2.OptimizerParamsSchema(
+            parameters=[
+                cuvis_ai_pb2.ParamSpec(
+                    name="lr",
+                    type="float",
+                    required=True,
+                    description="Learning rate.",
+                ),
+                cuvis_ai_pb2.ParamSpec(
+                    name="weight_decay",
+                    type="float",
+                    required=False,
+                    default_value="0.0",
+                    description="Weight decay (L2 regularization).",
+                ),
+                cuvis_ai_pb2.ParamSpec(
+                    name="betas",
+                    type="tuple",
+                    required=False,
+                    description="Adam/AdamW betas (beta1, beta2).",
+                ),
+            ]
+        )
+
+        scheduler_params = cuvis_ai_pb2.SchedulerParamsSchema(
+            parameters=[
+                cuvis_ai_pb2.ParamSpec(
+                    name="monitor",
+                    type="string",
+                    required=False,
+                    description="Metric to monitor for scheduler decisions.",
+                ),
+                cuvis_ai_pb2.ParamSpec(
+                    name="factor",
+                    type="float",
+                    required=False,
+                    default_value="0.1",
+                    description="LR reduction factor for ReduceLROnPlateau.",
+                ),
+                cuvis_ai_pb2.ParamSpec(
+                    name="patience",
+                    type="int",
+                    required=False,
+                    default_value="10",
+                    description="Epochs to wait before reducing LR.",
+                ),
+            ]
+        )
+
+        return cuvis_ai_pb2.GetTrainingCapabilitiesResponse(
+            supported_optimizers=supported_optimizers,
+            supported_schedulers=supported_schedulers,
+            supported_callbacks=callbacks,
+            optimizer_params=optimizer_params,
+            scheduler_params=scheduler_params,
+        )
 
     def _capture_experiment_context(
         self,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import grpc
 
-from .error_handling import get_session_or_error
+from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -15,6 +15,7 @@ class SessionService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
+    @grpc_handler("Failed to create session")
     def create_session(
         self,
         request: cuvis_ai_pb2.CreateSessionRequest,
@@ -22,13 +23,8 @@ class SessionService:
     ) -> cuvis_ai_pb2.CreateSessionResponse:
         """Create a new session with pipeline configuration."""
         # Phase 4: allow parameter-less creation (explicit pipeline setup via BuildPipeline)
-        try:
-            session_id = self.session_manager.create_session()
-            return cuvis_ai_pb2.CreateSessionResponse(session_id=session_id)
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to create session: {exc}")
-            return cuvis_ai_pb2.CreateSessionResponse()
+        session_id = self.session_manager.create_session()
+        return cuvis_ai_pb2.CreateSessionResponse(session_id=session_id)
 
     def close_session(
         self,
@@ -48,6 +44,7 @@ class SessionService:
             context.set_details(f"Failed to close session: {exc}")
             return cuvis_ai_pb2.CloseSessionResponse(success=False)
 
+    @grpc_handler("Failed to update search paths")
     def set_session_search_paths(
         self,
         request: cuvis_ai_pb2.SetSessionSearchPathsRequest,
@@ -62,21 +59,16 @@ class SessionService:
 
         append = request.append if request.HasField("append") else True
 
-        try:
-            current_paths, rejected_paths = self.session_manager.set_search_paths(
-                session.session_id,
-                list(request.search_paths),
-                append=append,
-            )
-            return cuvis_ai_pb2.SetSessionSearchPathsResponse(
-                success=True,
-                current_paths=current_paths,
-                rejected_paths=rejected_paths,
-            )
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to update search paths: {exc}")
-            return cuvis_ai_pb2.SetSessionSearchPathsResponse(success=False)
+        current_paths, rejected_paths = self.session_manager.set_search_paths(
+            session.session_id,
+            list(request.search_paths),
+            append=append,
+        )
+        return cuvis_ai_pb2.SetSessionSearchPathsResponse(
+            success=True,
+            current_paths=current_paths,
+            rejected_paths=rejected_paths,
+        )
 
 
 __all__ = ["SessionService"]

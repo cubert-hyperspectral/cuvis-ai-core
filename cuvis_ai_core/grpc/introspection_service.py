@@ -7,7 +7,7 @@ from pathlib import Path
 
 import grpc
 
-from .error_handling import get_session_or_error
+from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -18,6 +18,7 @@ class IntrospectionService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
+    @grpc_handler("Failed to get inputs")
     def get_pipeline_inputs(
         self,
         request: cuvis_ai_pb2.GetPipelineInputsRequest,
@@ -30,27 +31,23 @@ class IntrospectionService:
         if session is None:
             return cuvis_ai_pb2.GetPipelineInputsResponse()
 
-        try:
-            input_specs_dict = session.pipeline.get_input_specs()
-            input_specs = {
-                name: cuvis_ai_pb2.TensorSpec(
-                    name=spec.get("name", name),
-                    shape=list(spec.get("shape", [])),
-                    dtype=self._dtype_str_to_proto(spec.get("dtype")),
-                    required=bool(spec.get("required", False)),
-                )
-                for name, spec in input_specs_dict.items()
-            }
-
-            return cuvis_ai_pb2.GetPipelineInputsResponse(
-                input_names=list(input_specs.keys()),
-                input_specs=input_specs,
+        input_specs_dict = session.pipeline.get_input_specs()
+        input_specs = {
+            name: cuvis_ai_pb2.TensorSpec(
+                name=spec.get("name", name),
+                shape=list(spec.get("shape", [])),
+                dtype=self._dtype_str_to_proto(spec.get("dtype")),
+                required=bool(spec.get("required", False)),
             )
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get inputs: {exc}")
-            return cuvis_ai_pb2.GetPipelineInputsResponse()
+            for name, spec in input_specs_dict.items()
+        }
 
+        return cuvis_ai_pb2.GetPipelineInputsResponse(
+            input_names=list(input_specs.keys()),
+            input_specs=input_specs,
+        )
+
+    @grpc_handler("Failed to get outputs")
     def get_pipeline_outputs(
         self,
         request: cuvis_ai_pb2.GetPipelineOutputsRequest,
@@ -63,26 +60,21 @@ class IntrospectionService:
         if session is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
 
-        try:
-            output_specs_dict = session.pipeline.get_output_specs()
-            output_specs = {
-                name: cuvis_ai_pb2.TensorSpec(
-                    name=spec.get("name", name),
-                    shape=list(spec.get("shape", [])),
-                    dtype=self._dtype_str_to_proto(spec.get("dtype")),
-                    required=bool(spec.get("required", False)),
-                )
-                for name, spec in output_specs_dict.items()
-            }
-
-            return cuvis_ai_pb2.GetPipelineOutputsResponse(
-                output_names=list(output_specs.keys()),
-                output_specs=output_specs,
+        output_specs_dict = session.pipeline.get_output_specs()
+        output_specs = {
+            name: cuvis_ai_pb2.TensorSpec(
+                name=spec.get("name", name),
+                shape=list(spec.get("shape", [])),
+                dtype=self._dtype_str_to_proto(spec.get("dtype")),
+                required=bool(spec.get("required", False)),
             )
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get outputs: {exc}")
-            return cuvis_ai_pb2.GetPipelineOutputsResponse()
+            for name, spec in output_specs_dict.items()
+        }
+
+        return cuvis_ai_pb2.GetPipelineOutputsResponse(
+            output_names=list(output_specs.keys()),
+            output_specs=output_specs,
+        )
 
     def get_pipeline_visualization(
         self,

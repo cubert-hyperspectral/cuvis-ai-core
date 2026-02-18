@@ -12,7 +12,7 @@ from cuvis_ai_core.utils.config_helpers import (
     validate_config_dict,
 )
 
-from .error_handling import get_session_or_error
+from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -23,6 +23,7 @@ class ConfigService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
+    @grpc_handler("Config resolution failed")
     def resolve_config(
         self,
         request: cuvis_ai_pb2.ResolveConfigRequest,
@@ -35,25 +36,16 @@ class ConfigService:
         if session is None:
             return cuvis_ai_pb2.ResolveConfigResponse()
 
-        try:
-            config_dict = resolve_config_with_hydra(
-                config_type=request.config_type,
-                config_path=request.path,
-                search_paths=session.search_paths,
-                overrides=list(request.overrides),
-            )
-            config_json = json.dumps(config_dict, indent=2)
-            return cuvis_ai_pb2.ResolveConfigResponse(
-                config_bytes=config_json.encode("utf-8")
-            )
-        except FileNotFoundError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.ResolveConfigResponse()
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Config resolution failed: {exc}")
-            return cuvis_ai_pb2.ResolveConfigResponse()
+        config_dict = resolve_config_with_hydra(
+            config_type=request.config_type,
+            config_path=request.path,
+            search_paths=session.search_paths,
+            overrides=list(request.overrides),
+        )
+        config_json = json.dumps(config_dict, indent=2)
+        return cuvis_ai_pb2.ResolveConfigResponse(
+            config_bytes=config_json.encode("utf-8")
+        )
 
     def get_parameter_schema(
         self,
