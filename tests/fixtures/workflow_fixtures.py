@@ -8,55 +8,38 @@ import pytest
 from cuvis_ai_core.grpc.v1 import cuvis_ai_core_pb2 as cuvis_ai_pb2
 from tests.fixtures.grpc import resolve_and_load_pipeline
 
-# Cache for pretrained pipelines to avoid recomputation
-_pretrained_pipeline_cache = {}
 
-
-@pytest.fixture(scope="function")
+@pytest.fixture
 def pretrained_pipeline(
     grpc_stub, tmp_path, data_config_factory
 ) -> Generator[Path, None, None]:
-    """Function-scoped fixture that creates and caches a pretrained pipeline.
+    """Create a pretrained pipeline for testing.
 
-    This fixture creates a trainable pipeline, performs statistical training,
-    and saves it to a temporary directory. Uses the gradient_based pipeline
-    from configs which contains trainable nodes.
+    Creates a trainable pipeline, performs statistical training, and saves it
+    to a temporary directory. Uses the gradient_based pipeline from configs.
 
     Yields:
         Path: Path to the saved pretrained pipeline YAML file
     """
-    cache_key = "pretrained_trainable"
-
-    # Check if we already have a cached pipeline
-    if cache_key in _pretrained_pipeline_cache:
-        yield _pretrained_pipeline_cache[cache_key]
-        return
-
-    # Create temporary directory for this session
     temp_dir = tmp_path / "pretrained_pipelines"
     temp_dir.mkdir(exist_ok=True)
     pipeline_path = temp_dir / "pretrained_trainable.yaml"
 
-    # Create session and setup pipeline
     session_response = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
     session_id = session_response.session_id
 
     try:
-        # Load the trainable pipeline using proper proto construction
         resolve_and_load_pipeline(grpc_stub, session_id, path="pipeline/gradient_based")
 
-        # Perform statistical training to initialize nodes
         stat_train_request = cuvis_ai_pb2.TrainRequest(
             session_id=session_id,
             trainer_type=cuvis_ai_pb2.TRAINER_TYPE_STATISTICAL,
             data=data_config_factory(),
         )
 
-        # Consume training progress messages
         for _ in grpc_stub.Train(stat_train_request):
             pass
 
-        # Save the pretrained pipeline
         save_response = grpc_stub.SavePipeline(
             cuvis_ai_pb2.SavePipelineRequest(
                 session_id=session_id,
@@ -72,13 +55,8 @@ def pretrained_pipeline(
         if not save_response.success:
             raise RuntimeError("Failed to save pretrained pipeline")
 
-        # Cache the pipeline path for reuse
-        _pretrained_pipeline_cache[cache_key] = pipeline_path
-
-        # Yield the pipeline path for test usage
         yield pipeline_path
     finally:
-        # Clean up the session
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 
 

@@ -253,6 +253,9 @@ class TestWorkflow4_DiscoverAndInspect:
     4. CreateSession based on discovered pipeline
     """
 
+    # TODO: Re-enable once cuvis native SDK thread-safety is resolved.
+    #       The shared_workflow_setup fixture creates two sessions concurrently,
+    #       triggering a crash in the native library's global state.
     @pytest.mark.skip(
         reason="Native cuvis library has thread-safety issues causing crashes during concurrent access"
     )

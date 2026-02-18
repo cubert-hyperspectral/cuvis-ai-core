@@ -326,7 +326,7 @@ connections: []
         assert len(list(pipeline.nodes)) == 2
 
         # Step 3: Add a new node with the same base name using internal method
-        from tests.fixtures.registry_test_nodes import MockMinMaxNormalizer
+        from tests.fixtures.mock_nodes import MockMinMaxNormalizer
 
         new_node = MockMinMaxNormalizer(eps=1e-9, name="normalizer")
         pipeline._assign_counter_and_add_node(new_node)

@@ -81,9 +81,7 @@ class TestNodeRegistry:
     def test_get_custom_node_via_importlib(self):
         """Test getting custom node via full import path."""
         # Test with a mock node from our test fixtures
-        cls = NodeRegistry.get(
-            "tests.fixtures.registry_test_nodes.MockMinMaxNormalizer"
-        )
+        cls = NodeRegistry.get("tests.fixtures.mock_nodes.MockMinMaxNormalizer")
         assert cls.__name__ == "MockMinMaxNormalizer"
 
     def test_get_missing_node_raises_error(self):
@@ -99,7 +97,7 @@ class TestNodeRegistry:
     def test_get_missing_class_in_module_raises_error(self):
         """Test getting non-existent class from valid module raises AttributeError."""
         with pytest.raises(AttributeError, match="has no class"):
-            NodeRegistry.get("tests.fixtures.registry_test_nodes.NonExistentClass")
+            NodeRegistry.get("tests.fixtures.mock_nodes.NonExistentClass")
 
     def test_list_builtin_nodes(self):
         """Test listing all registered nodes."""
@@ -188,9 +186,7 @@ class TestNodeRegistry:
         # Try to import a function or variable instead of a class
         with pytest.raises(TypeError, match="not a class"):
             # __name__ is a module attribute, not a class
-            NodeRegistry._import_from_path(
-                "tests.fixtures.registry_test_nodes.__name__"
-            )
+            NodeRegistry._import_from_path("tests.fixtures.mock_nodes.__name__")
 
     def test_auto_register_invalid_package(self):
         """Test auto-registering invalid package raises ImportError."""

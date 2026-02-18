@@ -288,7 +288,7 @@ class TestBinaryDeciderBug:
 
     def test_binary_decider_returns_bool(self):
         """Test that BinaryDecider now returns bool as specified."""
-        from tests.fixtures.registry_test_nodes import MockBinaryDecider
+        from tests.fixtures.mock_nodes import MockBinaryDecider
 
         CuvisPipeline("test", strict_runtime_io_validation=True)
 
@@ -307,7 +307,7 @@ class TestBinaryDeciderBug:
 
     def test_binary_decider_in_pipeline_with_validation(self):
         """Test that BinaryDecider works in pipeline with validation enabled."""
-        from tests.fixtures.registry_test_nodes import MockBinaryDecider
+        from tests.fixtures.mock_nodes import MockBinaryDecider
 
         # Create a simple source that outputs 1-channel data
         # (matching BinaryDecider's expected input)

@@ -3,11 +3,11 @@
 from tests.fixtures.mock_nodes import (
     LentilsAnomalyDataNode,
     MinMaxNormalizer,
+    MockMetricNode,
     MockStatisticalTrainableNode,
     SimpleLossNode,
     SoftChannelSelector,
 )
-from tests.fixtures.registry_test_nodes import MockMetricNode
 
 __all__ = [
     "LentilsAnomalyDataNode",
