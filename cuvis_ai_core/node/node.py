@@ -60,6 +60,17 @@ class Node(nn.Module, ABC, Serializable):
 
     INPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
     OUTPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
+    TRAINABLE_BUFFERS: tuple[str, ...] = ()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Validate TRAINABLE_BUFFERS declaration at class definition time."""
+        super().__init_subclass__(**kwargs)
+        tb = cls.__dict__.get("TRAINABLE_BUFFERS")
+        if tb is not None:
+            if not isinstance(tb, tuple) or not all(isinstance(n, str) for n in tb):
+                raise TypeError(
+                    f"{cls.__name__}.TRAINABLE_BUFFERS must be a tuple of strings."
+                )
 
     def __init__(
         self,
@@ -159,38 +170,41 @@ class Node(nn.Module, ABC, Serializable):
     def unfreeze(self) -> None:
         """Enable gradient computation for this node's parameters.
 
-        For statistical nodes, this method should be overridden to convert
-        buffers to nn.Parameters. The base implementation enables gradients
-        for any existing parameters.
-
-        After statistical initialization with fit(), nodes store their learned
-        values as buffers. Call unfreeze() to convert them to trainable parameters
-        for gradient-based optimization.
-
-        Example
-        -------
-        >>> node.fit(input_stream)  # Statistical initialization -> buffers
-        >>> node.unfreeze()  # Convert buffers -> nn.Parameters
-        >>> # Now node can be trained with gradient descent
+        Buffers listed in TRAINABLE_BUFFERS are automatically converted to
+        nn.Parameters. Subclasses with non-standard patterns (e.g. nn.Conv2d
+        layers) should override both freeze() and unfreeze() instead.
         """
+        for name in self.TRAINABLE_BUFFERS:
+            attr = getattr(self, name, None)
+            if attr is None:
+                raise AttributeError(
+                    f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
+                    f"but it is not registered as a buffer or parameter."
+                )
+            if not isinstance(attr, nn.Parameter):
+                delattr(self, name)
+                setattr(self, name, nn.Parameter(attr.clone()))
         self.freezed = False
         self.requires_grad_(True)
 
     def freeze(self) -> None:
         """Disable gradient computation for this node's parameters.
 
-        This disables requires_grad for all parameters in the node, preventing
-        gradient updates during training. Use this after statistical initialization
-        if you want to keep the node frozen, or to freeze a previously unfrozen node.
-
-        Example
-        -------
-        >>> node.fit(input_stream)  # Statistical initialization
-        >>> node.freeze()  # Keep frozen (already frozen by default)
-        >>> # Or after unfreezing:
-        >>> node.unfreeze()  # Enable gradients
-        >>> node.freeze()  # Disable gradients again
+        nn.Parameters listed in TRAINABLE_BUFFERS are automatically converted
+        back to buffers. Subclasses with non-standard patterns should override
+        both freeze() and unfreeze() instead.
         """
+        for name in self.TRAINABLE_BUFFERS:
+            attr = getattr(self, name, None)
+            if attr is None:
+                raise AttributeError(
+                    f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
+                    f"but it is not registered as a buffer or parameter."
+                )
+            if isinstance(attr, nn.Parameter):
+                data = attr.data.clone()
+                delattr(self, name)
+                self.register_buffer(name, data)
         self.freezed = True
         self.requires_grad_(False)
 
