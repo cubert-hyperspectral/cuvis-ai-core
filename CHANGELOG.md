@@ -2,15 +2,16 @@
 
 ## [Unreleased]
 
-- Added shared `get_session_or_error()` and `require_pipeline()` gRPC helpers in `error_handling.py`
-- Changed all 8 gRPC service files to use centralized error handling helpers
+- Added `@grpc_handler` decorator for unified exception-to-gRPC-status mapping across all services
+- Added `get_session_or_error()` and `require_pipeline()` gRPC validation helpers in `error_handling.py`
+- Added session `fps` metadata property to `CuvisDataset`
+- Added spectral radiance processing mode with dark-reference validation in `CuvisDataset`
+- Changed all 8 gRPC service files to use `@grpc_handler` decorator, replacing inline try/except blocks
 - Changed training configs to use `cuvis-ai-schemas` as single source of truth
 - Changed `NodeConfig` usage from `params` to `hparams` across core
 - Removed duplicate proto definitions now owned by `cuvis-ai-schemas`
 - Removed `VALIDATE` compatibility code from execution stage handling
 - Removed dead code and fixed stale docstrings
-- Reformatted CHANGELOG to concise single-list style
-- Updated release workflow changelog extraction for new heading format
 
 ## 0.1.3 - 2026-02-11
 
