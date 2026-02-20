@@ -137,6 +137,7 @@ class PluginService:
             loaded_plugins=loaded, failed_plugins=failed
         )
 
+    @grpc_handler("Failed to list loaded plugins")
     def list_loaded_plugins(
         self,
         request: cuvis_ai_pb2.ListLoadedPluginsRequest,
@@ -168,6 +169,7 @@ class PluginService:
 
         return cuvis_ai_pb2.ListLoadedPluginsResponse(plugins=plugins)
 
+    @grpc_handler("Failed to get plugin info")
     def get_plugin_info(
         self,
         request: cuvis_ai_pb2.GetPluginInfoRequest,
@@ -201,6 +203,7 @@ class PluginService:
             )
         )
 
+    @grpc_handler("Failed to list available nodes")
     def list_available_nodes(
         self,
         request: cuvis_ai_pb2.ListAvailableNodesRequest,

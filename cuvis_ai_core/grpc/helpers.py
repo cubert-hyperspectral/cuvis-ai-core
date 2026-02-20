@@ -486,14 +486,14 @@ def _infer_tags_from_pipeline(pipeline_data: dict) -> list[str]:
     return tags
 
 
-def list_available_pipelinees(
+def list_available_pipelines(
     base_dir: str | Path | None = None, filter_tag: str | None = None
 ) -> list[dict[str, Any]]:
     """List all available pipeline configurations.
 
     Args:
         base_dir: Base directory to search for pipeline files (defaults to server base dir / pipeline)
-        filter_tag: Optional tag to filter pipelinees (e.g., "anomaly", "segmentation")
+        filter_tag: Optional tag to filter pipelines (e.g., "anomaly", "segmentation")
 
     Returns:
         List of dictionaries with pipeline information:
@@ -515,7 +515,7 @@ def list_available_pipelinees(
     if not base_dir_path.exists():
         raise FileNotFoundError(f"Pipeline base directory not found: {base_dir_path}")
 
-    pipelinees = []
+    pipelines = []
 
     # Find all .yaml files in base directory
     for yaml_path in base_dir_path.glob("*.yaml"):
@@ -530,7 +530,7 @@ def list_available_pipelinees(
         pt_path = yaml_path.with_suffix(".pt")
         has_weights = pt_path.exists()
 
-        pipelinees.append(
+        pipelines.append(
             {
                 "name": yaml_path.stem,
                 "path": str(yaml_path),
@@ -541,7 +541,7 @@ def list_available_pipelinees(
             }
         )
 
-    return pipelinees
+    return pipelines
 
 
 def get_pipeline_info(

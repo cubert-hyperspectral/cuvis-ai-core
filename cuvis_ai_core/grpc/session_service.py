@@ -26,6 +26,7 @@ class SessionService:
         session_id = self.session_manager.create_session()
         return cuvis_ai_pb2.CreateSessionResponse(session_id=session_id)
 
+    @grpc_handler("Failed to close session")
     def close_session(
         self,
         request: cuvis_ai_pb2.CloseSessionRequest,

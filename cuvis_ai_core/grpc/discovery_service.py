@@ -12,19 +12,19 @@ from .v1 import cuvis_ai_pb2
 class DiscoveryService:
     """Discover available pipelines."""
 
-    @grpc_handler("Failed to list pipelinees")
-    def list_available_pipelinees(
+    @grpc_handler("Failed to list pipelines")
+    def list_available_pipelines(
         self,
-        request: cuvis_ai_pb2.ListAvailablePipelineesRequest,
+        request: cuvis_ai_pb2.ListAvailablePipelinesRequest,
         context: grpc.ServicerContext,
-    ) -> cuvis_ai_pb2.ListAvailablePipelineesResponse:
+    ) -> cuvis_ai_pb2.ListAvailablePipelinesResponse:
         """List all available pipeline configurations."""
         filter_tag = request.filter_tag if request.HasField("filter_tag") else None
 
-        pipelinees_list = helpers.list_available_pipelinees(filter_tag=filter_tag)
+        pipelines_list = helpers.list_available_pipelines(filter_tag=filter_tag)
 
         pipeline_infos = []
-        for pipeline_dict in pipelinees_list:
+        for pipeline_dict in pipelines_list:
             metadata = pipeline_dict["metadata"]
             pipeline_info = cuvis_ai_pb2.PipelineInfo(
                 name=pipeline_dict["name"],
@@ -43,7 +43,7 @@ class DiscoveryService:
             )
             pipeline_infos.append(pipeline_info)
 
-        return cuvis_ai_pb2.ListAvailablePipelineesResponse(pipelinees=pipeline_infos)
+        return cuvis_ai_pb2.ListAvailablePipelinesResponse(pipelines=pipeline_infos)
 
     @grpc_handler("Failed to get pipeline info")
     def get_pipeline_info(

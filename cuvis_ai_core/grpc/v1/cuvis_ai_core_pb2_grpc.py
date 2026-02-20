@@ -21,10 +21,10 @@ class CuvisAIServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.ListAvailablePipelinees = channel.unary_unary(
-            "/cuvis_ai.v1.CuvisAIService/ListAvailablePipelinees",
-            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesRequest.SerializeToString,
-            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesResponse.FromString,
+        self.ListAvailablePipelines = channel.unary_unary(
+            "/cuvis_ai.v1.CuvisAIService/ListAvailablePipelines",
+            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesRequest.SerializeToString,
+            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesResponse.FromString,
             _registered_method=True,
         )
         self.GetPipelineInfo = channel.unary_unary(
@@ -186,7 +186,7 @@ class CuvisAIServiceServicer(object):
 
     """
 
-    def ListAvailablePipelinees(self, request, context):
+    def ListAvailablePipelines(self, request, context):
         """Pipeline Discovery"""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -345,10 +345,10 @@ class CuvisAIServiceServicer(object):
 
 def add_CuvisAIServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-        "ListAvailablePipelinees": grpc.unary_unary_rpc_method_handler(
-            servicer.ListAvailablePipelinees,
-            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesRequest.FromString,
-            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesResponse.SerializeToString,
+        "ListAvailablePipelines": grpc.unary_unary_rpc_method_handler(
+            servicer.ListAvailablePipelines,
+            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesRequest.FromString,
+            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesResponse.SerializeToString,
         ),
         "GetPipelineInfo": grpc.unary_unary_rpc_method_handler(
             servicer.GetPipelineInfo,
@@ -494,7 +494,7 @@ class CuvisAIService(object):
     """
 
     @staticmethod
-    def ListAvailablePipelinees(
+    def ListAvailablePipelines(
         request,
         target,
         options=(),
@@ -509,9 +509,9 @@ class CuvisAIService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/cuvis_ai.v1.CuvisAIService/ListAvailablePipelinees",
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesRequest.SerializeToString,
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelineesResponse.FromString,
+            "/cuvis_ai.v1.CuvisAIService/ListAvailablePipelines",
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesRequest.SerializeToString,
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailablePipelinesResponse.FromString,
             options,
             channel_credentials,
             insecure,

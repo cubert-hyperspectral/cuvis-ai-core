@@ -47,6 +47,7 @@ class ConfigService:
             config_bytes=config_json.encode("utf-8")
         )
 
+    @grpc_handler("Failed to get parameter schema")
     def get_parameter_schema(
         self,
         request: cuvis_ai_pb2.GetParameterSchemaRequest,
@@ -66,6 +67,7 @@ class ConfigService:
             context.set_details(f"Failed to generate schema: {exc}")
             return cuvis_ai_pb2.GetParameterSchemaResponse()
 
+    @grpc_handler("Failed to validate config")
     def validate_config(
         self,
         request: cuvis_ai_pb2.ValidateConfigRequest,

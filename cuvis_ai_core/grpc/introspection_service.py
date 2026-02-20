@@ -76,6 +76,7 @@ class IntrospectionService:
             output_specs=output_specs,
         )
 
+    @grpc_handler("Failed to get pipeline visualization")
     def get_pipeline_visualization(
         self,
         request: cuvis_ai_pb2.GetPipelineVisualizationRequest,
