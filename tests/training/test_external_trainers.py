@@ -146,8 +146,15 @@ class TestGradientTrainer:
         trainer.setup("fit")
 
         # Manually call training_step to test context passing
+        # Suppress self.log() warning since we're calling training_step without PL Trainer
+        import warnings
+
         batch = {"dummy": torch.tensor(1.0)}
-        trainer.training_step(batch, 0)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=r".*self\.log\(\).*", category=UserWarning
+            )
+            trainer.training_step(batch, 0)
 
         # Check that context was passed
         assert source.received_context is not None

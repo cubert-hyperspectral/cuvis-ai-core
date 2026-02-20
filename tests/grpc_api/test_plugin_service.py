@@ -182,6 +182,30 @@ class ValidNode(Node):
         response = self.plugin_service.load_plugins(request, self.mock_context)
         assert len(response.loaded_plugins) == 0
 
+    def test_list_loaded_plugins_invalid_session(self):
+        """Test listing plugins with non-existent session."""
+        request = cuvis_ai_pb2.ListLoadedPluginsRequest(
+            session_id="nonexistent_session"
+        )
+        response = self.plugin_service.list_loaded_plugins(request, self.mock_context)
+        assert len(response.plugins) == 0
+
+    def test_get_plugin_info_invalid_session(self):
+        """Test getting plugin info with non-existent session."""
+        request = cuvis_ai_pb2.GetPluginInfoRequest(
+            session_id="nonexistent_session", plugin_name="any"
+        )
+        response = self.plugin_service.get_plugin_info(request, self.mock_context)
+        assert response.plugin.name == ""
+
+    def test_list_available_nodes_invalid_session(self):
+        """Test listing available nodes with non-existent session."""
+        request = cuvis_ai_pb2.ListAvailableNodesRequest(
+            session_id="nonexistent_session"
+        )
+        response = self.plugin_service.list_available_nodes(request, self.mock_context)
+        assert len(response.nodes) == 0
+
     def test_list_loaded_plugins_empty(self):
         """Test listing plugins when none are loaded."""
         # Create session

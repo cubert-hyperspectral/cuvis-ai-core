@@ -122,13 +122,13 @@ def mock_pipeline_dict():
         "nodes": [
             {
                 "name": "LentilsAnomalyDataNode",
-                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0, 1]},
+                "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
+                "hparams": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "SoftChannelSelector",
-                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 61,
                     "init_method": "variance",
@@ -142,8 +142,8 @@ def mock_pipeline_dict():
         ],
         "connections": [
             {
-                "from": "LentilsAnomalyDataNode.outputs.cube",
-                "to": "SoftChannelSelector.inputs.data",
+                "source": "LentilsAnomalyDataNode.outputs.cube",
+                "target": "SoftChannelSelector.inputs.data",
             },
         ],
     }
@@ -166,13 +166,13 @@ def minimal_pipeline_dict():
         "nodes": [
             {
                 "name": "data",
-                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {"normal_class_ids": [0, 1]},
+                "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
+                "hparams": {"normal_class_ids": [0, 1]},
             },
             {
                 "name": "selector",
-                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 61,
                     "init_method": "variance",
@@ -185,7 +185,7 @@ def minimal_pipeline_dict():
             },
         ],
         "connections": [
-            {"from": "data.outputs.cube", "to": "selector.inputs.data"},
+            {"source": "data.outputs.cube", "target": "selector.inputs.data"},
         ],
     }
 
@@ -304,12 +304,12 @@ metadata:
 
 nodes:
   - name: LentilsAnomalyDataNode
-    class: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
-    params:
+    class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+    hparams:
       normal_class_ids: [0, 1]
   - name: SoftChannelSelector
-    class: tests.fixtures.mock_nodes.SoftChannelSelector
-    params:
+    class_name: tests.fixtures.mock_nodes.SoftChannelSelector
+    hparams:
       eps: 1.0e-06
       hard: false
       init_method: variance
@@ -320,8 +320,8 @@ nodes:
       temperature_min: 0.1
 
 connections:
-  - from: LentilsAnomalyDataNode.outputs.cube
-    to: SoftChannelSelector.inputs.data
+  - source: LentilsAnomalyDataNode.outputs.cube
+    target: SoftChannelSelector.inputs.data
 """)
 
     return str(pipeline_path)

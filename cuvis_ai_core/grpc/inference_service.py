@@ -12,6 +12,7 @@ import torch
 from cuvis_ai_schemas.enums import ExecutionStage
 
 from . import helpers
+from .error_handling import get_session_or_error, grpc_handler, require_pipeline
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -22,44 +23,27 @@ class InferenceService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
+    @grpc_handler("Inference failed")
     def inference(
         self,
         request: cuvis_ai_pb2.InferenceRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.InferenceResponse:
         """Run a forward pass for the requested session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.InferenceResponse()
 
-        # Check if pipeline exists
-        if session.pipeline is None:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "No pipeline is available for this session. Build pipeline first."
-            )
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.InferenceResponse()
 
-        try:
-            batch = self._parse_input_batch(request.inputs)
-            # Ensure all tensor inputs are on the same device as the pipeline
-            batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.InferenceResponse()
+        batch = self._parse_input_batch(request.inputs)
+        # Ensure all tensor inputs are on the same device as the pipeline
+        batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
 
-        try:
-            outputs = session.pipeline.forward(
-                batch=batch, stage=ExecutionStage.INFERENCE
-            )
-        except Exception as exc:  # pragma: no cover - exercise in tests via validation
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Inference failed: {exc}")
-            return cuvis_ai_pb2.InferenceResponse()
+        outputs = session.pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
 
         output_specs = set(request.output_specs)
         tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}

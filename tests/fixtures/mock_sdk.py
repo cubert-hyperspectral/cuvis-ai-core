@@ -35,6 +35,7 @@ def mock_cuvis_sdk(create_test_cube):
     mock_session = Mock()
     mock_session.get_measurement = Mock(return_value=mock_measurement)
     mock_session.__len__ = Mock(return_value=7)  # 7 measurements total
+    mock_session.fps = 30.0  # Default FPS for tests
 
     # Create mock processing context
     mock_pc = Mock()
@@ -63,6 +64,7 @@ def mock_cuvis_sdk(create_test_cube):
         # Setup ProcessingMode enum
         mock_pm.Raw = "Raw"
         mock_pm.Reflectance = "Reflectance"
+        mock_pm.SpectralRadiance = "SpectralRadiance"
         mock_rt.White = "White"
         mock_rt.Dark = "Dark"
 

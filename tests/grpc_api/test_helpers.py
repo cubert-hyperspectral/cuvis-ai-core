@@ -155,36 +155,36 @@ class TestConfigOverrideUtility:
         return {
             "metadata": {"name": "original"},
             "nodes": [
-                {"params": {"lr": 0.1, "path": "/tmp"}},
-                {"params": {"flag": False}},
+                {"hparams": {"lr": 0.1, "path": "/tmp"}},
+                {"hparams": {"flag": False}},
             ],
             "connections": [],
         }
 
     def test_override_with_list_format(self, base_config):
         updated = apply_config_overrides(
-            base_config, ["metadata.name=updated", "nodes.0.params.lr=0.2"]
+            base_config, ["metadata.name=updated", "nodes.0.hparams.lr=0.2"]
         )
         assert updated["metadata"]["name"] == "updated"
-        assert updated["nodes"][0]["params"]["lr"] == 0.2
+        assert updated["nodes"][0]["hparams"]["lr"] == 0.2
         # Original config should remain unchanged
         assert base_config["metadata"]["name"] == "original"
 
     def test_override_with_dict_format(self, base_config):
         overrides = {
             "metadata": {"name": "dict-name"},
-            "nodes": [{"params": {"lr": 0.3}}],
+            "nodes": [{"hparams": {"lr": 0.3}}],
         }
         updated = apply_config_overrides(base_config, overrides)
         assert updated["metadata"]["name"] == "dict-name"
-        assert updated["nodes"][0]["params"]["lr"] == 0.3
+        assert updated["nodes"][0]["hparams"]["lr"] == 0.3
 
     def test_override_nested_and_indices(self, base_config):
         updated = apply_config_overrides(
-            base_config, ["nodes.1.params.flag=true", "nodes[0].params.path=/data"]
+            base_config, ["nodes.1.hparams.flag=true", "nodes[0].hparams.path=/data"]
         )
-        assert updated["nodes"][1]["params"]["flag"] is True
-        assert updated["nodes"][0]["params"]["path"] == "/data"
+        assert updated["nodes"][1]["hparams"]["flag"] is True
+        assert updated["nodes"][0]["hparams"]["path"] == "/data"
 
     def test_invalid_override_format_raises(self, base_config):
         with pytest.raises(ValueError):

@@ -244,15 +244,18 @@ class TestWorkflow3_ResumeTraining:
 
 
 class TestWorkflow4_DiscoverAndInspect:
-    """Workflow 4: Discover and Inspect Pipelinees.
+    """Workflow 4: Discover and Inspect Pipelines.
 
     Steps:
-    1. ListAvailablePipelinees
+    1. ListAvailablePipelines
     2. Filter by tag
     3. GetPipelineInfo for specific pipeline
     4. CreateSession based on discovered pipeline
     """
 
+    # TODO: Re-enable once cuvis native SDK thread-safety is resolved.
+    #       The shared_workflow_setup fixture creates two sessions concurrently,
+    #       triggering a crash in the native library's global state.
     @pytest.mark.skip(
         reason="Native cuvis library has thread-safety issues causing crashes during concurrent access"
     )
@@ -260,18 +263,18 @@ class TestWorkflow4_DiscoverAndInspect:
         """Test pipeline discovery and inspection workflow using shared setup."""
         _ = shared_workflow_setup
 
-        # Step 1: ListAvailablePipelinees
-        list_response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        # Step 1: ListAvailablePipelines
+        list_response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
-        assert len(list_response.pipelinees) >= 2
+        assert len(list_response.pipelines) >= 2
 
         # Step 2: Filter by tag
-        anomaly_response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest(filter_tag="anomaly")
+        anomaly_response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="anomaly")
         )
-        assert len(anomaly_response.pipelinees) >= 1
-        assert any(c.name == "rx_detector" for c in anomaly_response.pipelinees)
+        assert len(anomaly_response.pipelines) >= 1
+        assert any(c.name == "rx_detector" for c in anomaly_response.pipelines)
 
         # Step 3: GetPipelineInfo for specific pipeline
         info_response = grpc_stub.GetPipelineInfo(

@@ -130,10 +130,10 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Pipeline Discovery
     # ------------------------------------------------------------------
-    def ListAvailablePipelinees(
+    def ListAvailablePipelines(
         self, request, context
-    ) -> cuvis_ai_pb2.ListAvailablePipelineesResponse:
-        return self.discovery_service.list_available_pipelinees(request, context)
+    ) -> cuvis_ai_pb2.ListAvailablePipelinesResponse:
+        return self.discovery_service.list_available_pipelines(request, context)
 
     def GetPipelineInfo(self, request, context) -> cuvis_ai_pb2.GetPipelineInfoResponse:
         return self.discovery_service.get_pipeline_info(request, context)

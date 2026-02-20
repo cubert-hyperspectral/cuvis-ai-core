@@ -29,23 +29,23 @@ def minimal_pipeline_yaml():
         "nodes": [
             {
                 "name": "data",
-                "class": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
-                "params": {
+                "class_name": "tests.fixtures.mock_nodes.LentilsAnomalyDataNode",
+                "hparams": {
                     "normal_class_ids": [0],
                 },
             },
             {
                 "name": "normalizer",
-                "class": "tests.fixtures.mock_nodes.MinMaxNormalizer",
-                "params": {
+                "class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer",
+                "hparams": {
                     "eps": 1e-6,
                     "use_running_stats": False,
                 },
             },
             {
                 "name": "selector",
-                "class": "tests.fixtures.mock_nodes.SoftChannelSelector",
-                "params": {
+                "class_name": "tests.fixtures.mock_nodes.SoftChannelSelector",
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 10,
                     "init_method": "uniform",
@@ -58,12 +58,12 @@ def minimal_pipeline_yaml():
         ],
         "connections": [
             {
-                "from": "data.outputs.cube",
-                "to": "normalizer.inputs.data",
+                "source": "data.outputs.cube",
+                "target": "normalizer.inputs.data",
             },
             {
-                "from": "normalizer.outputs.normalized",
-                "to": "selector.inputs.data",
+                "source": "normalizer.outputs.normalized",
+                "target": "selector.inputs.data",
             },
         ],
     }
@@ -209,7 +209,7 @@ class TestPipelineBuilderYAML:
     def test_invalid_node_class_raises_error(self, minimal_pipeline_yaml):
         """Test that invalid node class raises ImportError."""
         config = minimal_pipeline_yaml.copy()
-        config["nodes"][0]["class"] = "invalid.node.Class"
+        config["nodes"][0]["class_name"] = "invalid.node.Class"
 
         builder = PipelineBuilder()
         with pytest.raises(ImportError):
@@ -220,8 +220,8 @@ class TestPipelineBuilderYAML:
         config = minimal_pipeline_yaml.copy()
         config["connections"].append(
             {
-                "from": "nonexistent.outputs.port",
-                "to": "normalizer.inputs.data",
+                "source": "nonexistent.outputs.port",
+                "target": "normalizer.inputs.data",
             }
         )
 

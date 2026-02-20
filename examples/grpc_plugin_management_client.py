@@ -84,7 +84,7 @@ metadata:
 nodes:
   - name: detector
     class: my_plugin.nodes.CustomDetector
-    params:
+    hparams:
       threshold: 0.5
 connections: []
 """

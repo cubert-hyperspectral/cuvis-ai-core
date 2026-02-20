@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from loguru import logger
 
+from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
 from cuvis_ai_core.grpc.helpers import DTYPE_NUMPY_TO_PROTO, DTYPE_TORCH_TO_PROTO
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
@@ -88,17 +89,17 @@ class PluginService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
+    @grpc_handler("Failed to load plugins")
     def load_plugins(
         self,
         request: cuvis_ai_pb2.LoadPluginsRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPluginsResponse:
         """Load plugins from JSON manifest into session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.LoadPluginsResponse()
 
         if not request.manifest or not request.manifest.config_bytes:
@@ -106,54 +107,47 @@ class PluginService:
             context.set_details("manifest.config_bytes is required")
             return cuvis_ai_pb2.LoadPluginsResponse()
 
-        try:
-            # Parse JSON → Pydantic (following existing pattern)
-            manifest_json = request.manifest.config_bytes.decode("utf-8")
-            manifest = PluginManifest.model_validate_json(manifest_json)
+        # Parse JSON → Pydantic (following existing pattern)
+        manifest_json = request.manifest.config_bytes.decode("utf-8")
+        manifest = PluginManifest.model_validate_json(manifest_json)
 
-            loaded = []
-            failed = {}
+        loaded = []
+        failed = {}
 
-            # Load each plugin into session's registry instance
-            for plugin_name, config in manifest.plugins.items():
-                try:
-                    session.node_registry.load_plugin(
-                        plugin_name,
-                        config.model_dump(),
-                    )
+        # Load each plugin into session's registry instance
+        for plugin_name, config in manifest.plugins.items():
+            try:
+                session.node_registry.load_plugin(
+                    plugin_name,
+                    config.model_dump(),
+                )
 
-                    # Track in session
-                    session.loaded_plugins[plugin_name] = config.model_dump()
-                    loaded.append(plugin_name)
+                # Track in session
+                session.loaded_plugins[plugin_name] = config.model_dump()
+                loaded.append(plugin_name)
 
-                    logger.info(
-                        f"Loaded plugin '{plugin_name}' in session {request.session_id}"
-                    )
-                except Exception as e:
-                    failed[plugin_name] = str(e)
-                    logger.error(f"Failed to load plugin '{plugin_name}': {e}")
+                logger.info(
+                    f"Loaded plugin '{plugin_name}' in session {request.session_id}"
+                )
+            except Exception as e:
+                failed[plugin_name] = str(e)
+                logger.error(f"Failed to load plugin '{plugin_name}': {e}")
 
-            return cuvis_ai_pb2.LoadPluginsResponse(
-                loaded_plugins=loaded, failed_plugins=failed
-            )
+        return cuvis_ai_pb2.LoadPluginsResponse(
+            loaded_plugins=loaded, failed_plugins=failed
+        )
 
-        except Exception as e:
-            logger.error(f"LoadPlugins failed: {e}")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to load plugins: {e}")
-            return cuvis_ai_pb2.LoadPluginsResponse()
-
+    @grpc_handler("Failed to list loaded plugins")
     def list_loaded_plugins(
         self,
         request: cuvis_ai_pb2.ListLoadedPluginsRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ListLoadedPluginsResponse:
         """List plugins loaded in session."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.ListLoadedPluginsResponse()
 
         plugins = []
@@ -175,17 +169,17 @@ class PluginService:
 
         return cuvis_ai_pb2.ListLoadedPluginsResponse(plugins=plugins)
 
+    @grpc_handler("Failed to get plugin info")
     def get_plugin_info(
         self,
         request: cuvis_ai_pb2.GetPluginInfoRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPluginInfoResponse:
         """Get information about specific plugin."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.GetPluginInfoResponse()
 
         if request.plugin_name not in session.loaded_plugins:
@@ -209,17 +203,17 @@ class PluginService:
             )
         )
 
+    @grpc_handler("Failed to list available nodes")
     def list_available_nodes(
         self,
         request: cuvis_ai_pb2.ListAvailableNodesRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         """List all available nodes (built-in + session plugins)."""
-        try:
-            session = self.session_manager.get_session(request.session_id)
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
             return cuvis_ai_pb2.ListAvailableNodesResponse()
 
         nodes = []
@@ -348,6 +342,7 @@ class PluginService:
 
         return input_specs_map, output_specs_map
 
+    @grpc_handler("Failed to clear cache")
     def clear_plugin_cache(
         self,
         request: cuvis_ai_pb2.ClearPluginCacheRequest,
@@ -356,30 +351,23 @@ class PluginService:
         """Clear Git plugin cache."""
         plugin_name = request.plugin_name if request.plugin_name else None
 
-        try:
-            # Count cleared before clearing
-            cache_dir = NodeRegistry._cache_dir
+        # Count cleared before clearing
+        cache_dir = NodeRegistry._cache_dir
 
-            if plugin_name:
-                cleared = (
-                    len(list(cache_dir.glob(f"{plugin_name}@*")))
-                    if cache_dir.exists()
-                    else 0
-                )
-            else:
-                cleared = len(list(cache_dir.glob("*"))) if cache_dir.exists() else 0
+        if plugin_name:
+            cleared = (
+                len(list(cache_dir.glob(f"{plugin_name}@*")))
+                if cache_dir.exists()
+                else 0
+            )
+        else:
+            cleared = len(list(cache_dir.glob("*"))) if cache_dir.exists() else 0
 
-            # Clear cache
-            NodeRegistry.clear_plugin_cache(plugin_name)
+        # Clear cache
+        NodeRegistry.clear_plugin_cache(plugin_name)
 
-            logger.info(f"Cleared {cleared} cached plugin(s)")
-            return cuvis_ai_pb2.ClearPluginCacheResponse(cleared_count=cleared)
-
-        except Exception as e:
-            logger.error(f"ClearPluginCache failed: {e}")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to clear cache: {e}")
-            return cuvis_ai_pb2.ClearPluginCacheResponse(cleared_count=0)
+        logger.info(f"Cleared {cleared} cached plugin(s)")
+        return cuvis_ai_pb2.ClearPluginCacheResponse(cleared_count=cleared)
 
 
 __all__ = ["PluginService"]

@@ -125,3 +125,22 @@ def test_pipeline_visualize_can_render_to_file(tmp_path):
     )
     assert path_md.is_file()
     assert path_md.read_text().startswith("flowchart")
+
+
+def test_normalize_stage_with_string():
+    """Cover the string branch of _normalize_stage."""
+    pipeline, *_ = _build_pipeline()
+    visualizer = PipelineVisualizer(pipeline)
+
+    assert visualizer._normalize_stage("TRAIN") == "train"
+    assert visualizer._normalize_stage("Inference") == "inference"
+
+
+def test_normalize_stage_with_enum():
+    """Verify enum branch of _normalize_stage still works."""
+    pipeline, *_ = _build_pipeline()
+    visualizer = PipelineVisualizer(pipeline)
+
+    assert (
+        visualizer._normalize_stage(ExecutionStage.TRAIN) == ExecutionStage.TRAIN.value
+    )

@@ -14,8 +14,10 @@ def test_complete_trainrun_serialization():
         name="test_run",
         pipeline=PipelineConfig(
             name="test_pipeline",
-            nodes=[{"name": "node1", "type": "test"}],
-            connections=[{"from": "node1", "to": "output"}],
+            nodes=[{"name": "node1", "class_name": "test.TestNode", "hparams": {}}],
+            connections=[
+                {"source": "node1.outputs.data", "target": "node1.inputs.data"}
+            ],
         ),
         data=DataConfig(
             cu3s_file_path="/path/to/data.cu3s",

@@ -17,7 +17,7 @@ from tests.fixtures.mock_nodes import (
     MinMaxNormalizer,
     SimpleLossNode,
 )
-from tests.fixtures.registry_test_nodes import MockMetricNode
+from tests.fixtures.mock_nodes import MockMetricNode
 
 from .synthetic_data import create_small_scale_dataset
 from .test_pipeline_stress import (

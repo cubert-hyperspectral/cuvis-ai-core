@@ -22,7 +22,7 @@ from tests.fixtures.mock_nodes import (
     MinMaxNormalizer,
     SimpleLossNode,
 )
-from tests.fixtures.registry_test_nodes import MockMetricNode
+from tests.fixtures.mock_nodes import MockMetricNode
 
 from .synthetic_data import (
     create_medium_scale_dataset,

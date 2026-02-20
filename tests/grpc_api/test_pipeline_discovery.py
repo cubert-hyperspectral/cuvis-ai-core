@@ -19,48 +19,48 @@ def pipeline_directory(monkeypatch):
     return pipeline_dir
 
 
-class TestListAvailablePipelinees:
-    """Test the ListAvailablePipelinees RPC method."""
+class TestListAvailablePipelines:
+    """Test the ListAvailablePipelines RPC method."""
 
-    def test_list_all_pipelinees(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+    def test_list_all_pipelines(self, grpc_stub, pipeline_directory):
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        assert len(response.pipelinees) > 1
-        pipeline_names = {c.name for c in response.pipelinees}
+        assert len(response.pipelines) > 1
+        pipeline_names = {c.name for c in response.pipelines}
         assert any(c in pipeline_names for c in {"statistical_based", "gradient_based"})
 
     def test_list_with_tag_filter_statistical(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest(filter_tag="statistical")
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="statistical")
         )
 
-        # Both pipelinees have the "statistical" tag
-        assert len(response.pipelinees) >= 1
-        pipeline_names = {c.name for c in response.pipelinees}
+        # Both pipelines have the "statistical" tag
+        assert len(response.pipelines) >= 1
+        pipeline_names = {c.name for c in response.pipelines}
         assert any(c in pipeline_names for c in {"statistical_based", "gradient_based"})
 
-        for pipeline in response.pipelinees:
+        for pipeline in response.pipelines:
             assert "statistical" in pipeline.tags
 
     def test_list_with_tag_filter_gradient(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest(filter_tag="gradient")
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="gradient")
         )
 
-        assert len(response.pipelinees) > 1
-        pipeline_names = {c.name for c in response.pipelinees}
+        assert len(response.pipelines) > 1
+        pipeline_names = {c.name for c in response.pipelines}
         assert any(c in pipeline_names for c in {"gradient_based"})
 
-        assert all("gradient" in pipeline.tags for pipeline in response.pipelinees)
+        assert all("gradient" in pipeline.tags for pipeline in response.pipelines)
 
     def test_list_with_unknown_tag(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest(filter_tag="nonexistent")
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="nonexistent")
         )
 
-        assert len(response.pipelinees) == 0
+        assert len(response.pipelines) == 0
 
     def test_list_empty_directory(self, grpc_stub, monkeypatch, tmp_path):
         # Create empty temp directory with pipeline subdirectory
@@ -72,43 +72,41 @@ class TestListAvailablePipelinees:
             "cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: empty_dir
         )
 
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        assert len(response.pipelinees) == 0
+        assert len(response.pipelines) == 0
 
     def test_list_includes_weights_info(self, grpc_stub, pipeline_directory):
-        response = grpc_stub.ListAvailablePipelinees(
-            cuvis_ai_pb2.ListAvailablePipelineesRequest()
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        pipelinees_by_name = {c.name: c for c in response.pipelinees}
+        pipelines_by_name = {c.name: c for c in response.pipelines}
 
         rx_weights = pipeline_directory / "pipeline" / "statistical_based.pt"
-        assert (
-            pipelinees_by_name["statistical_based"].has_weights == rx_weights.exists()
-        )
+        assert pipelines_by_name["statistical_based"].has_weights == rx_weights.exists()
         if rx_weights.exists():
-            assert pipelinees_by_name["statistical_based"].weights_path
+            assert pipelines_by_name["statistical_based"].weights_path
             assert (
                 "statistical_based.pt"
-                in pipelinees_by_name["statistical_based"].weights_path
+                in pipelines_by_name["statistical_based"].weights_path
             )
         else:
-            assert not pipelinees_by_name["statistical_based"].weights_path
+            assert not pipelines_by_name["statistical_based"].weights_path
 
         gradient_based_weights = pipeline_directory / "pipeline" / "gradient_based.pt"
         assert (
-            pipelinees_by_name["gradient_based"].has_weights
+            pipelines_by_name["gradient_based"].has_weights
             == gradient_based_weights.exists()
         )
         if gradient_based_weights.exists():
             assert (
-                "gradient_based.pt" in pipelinees_by_name["gradient_based"].weights_path
+                "gradient_based.pt" in pipelines_by_name["gradient_based"].weights_path
             )
         else:
-            assert not pipelinees_by_name["gradient_based"].weights_path
+            assert not pipelines_by_name["gradient_based"].weights_path
 
 
 class TestGetPipelineInfo:

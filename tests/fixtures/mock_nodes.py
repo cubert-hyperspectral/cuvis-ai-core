@@ -1,11 +1,18 @@
-"""Mock nodes for testing serialization patterns."""
+"""Mock nodes for testing.
 
-import pytest
+Contains all mock node implementations used across the test suite:
+- Full-fidelity mock nodes (MinMaxNormalizer, SoftChannelSelector, etc.) for
+  serialization, training, and pipeline integration tests.
+- Lightweight mock nodes (MockTrainablePCA, MockLossNode, MockMetricNode, etc.)
+  for registry and basic wiring tests.
+"""
+
 import torch
 import torch.nn as nn
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_schemas.execution import InputStream
+from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.execution import Context, InputStream, Metric
 from cuvis_ai_schemas.pipeline import PortSpec
 
 
@@ -422,8 +429,6 @@ class SimpleLossNode(Node):
     }
 
     def __init__(self, weight: float = 1.0, **kwargs):
-        from cuvis_ai_schemas.enums import ExecutionStage
-
         self.weight = weight
         super().__init__(weight=weight, **kwargs)
 
@@ -438,7 +443,9 @@ class SimpleLossNode(Node):
         self, predictions: torch.Tensor, targets: torch.Tensor, **_
     ) -> dict[str, torch.Tensor]:
         """Compute MSE loss between predictions and targets."""
-        # Compute MSE loss
+        # Expand targets to match predictions shape if needed (avoids broadcast warning)
+        if predictions.shape != targets.shape:
+            targets = targets.expand_as(predictions)
         loss = torch.nn.functional.mse_loss(predictions, targets)
 
         # Apply weight
@@ -447,17 +454,127 @@ class SimpleLossNode(Node):
         return {"loss": loss}
 
 
-# Pytest Fixtures
-# ----------------
+# ---------------------------------------------------------------------------
+# Lightweight mock nodes (for registry and basic wiring tests)
+# ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def mock_statistical_trainable_node():
-    """Factory fixture for MockStatisticalTrainableNode.
+class MockTrainablePCA(Node):
+    """Mock PCA node for testing registry operations."""
 
-    Returns the class itself so tests can instantiate it with custom parameters.
+    INPUT_SPECS = {
+        "data": PortSpec(dtype=torch.float32, shape=(-1, -1)),
+    }
+    OUTPUT_SPECS = {
+        "transformed": PortSpec(dtype=torch.float32, shape=(-1, -1)),
+    }
 
-    Usage:
-        node = mock_statistical_trainable_node(input_dim=4, hidden_dim=3)
+    def forward(self, data, **kwargs):
+        return {"transformed": data}
+
+    def load(self, params, serial_dir):
+        pass
+
+
+class MockLossNode(Node):
+    """Mock loss node for testing — lightweight, no execution_stages."""
+
+    INPUT_SPECS = {
+        "predictions": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+        "targets": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+    }
+    OUTPUT_SPECS = {
+        "loss": PortSpec(dtype=torch.float32, shape=()),
+    }
+
+    def forward(self, predictions, targets, **kwargs):
+        pred_flat = predictions.reshape(-1)
+        targ_flat = targets.reshape(-1)
+        loss = torch.mean((pred_flat - targ_flat) ** 2)
+        return {"loss": loss}
+
+    def load(self, params, serial_dir):
+        pass
+
+
+class MockMetricNode(Node):
+    """Mock metric node for testing training workflows.
+
+    Executes only during VAL and TEST stages (like real metric nodes).
+    Returns metrics in List[Metric] format for proper logging.
     """
-    return MockStatisticalTrainableNode
+
+    INPUT_SPECS = {
+        "predictions": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+        "targets": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1)),
+    }
+    OUTPUT_SPECS = {
+        "metrics": PortSpec(dtype=list, shape=(), description="List of Metric objects"),
+    }
+
+    def __init__(
+        self,
+        execution_stages: set[ExecutionStage] | None = None,
+        **kwargs,
+    ):
+        name, execution_stages = Node.consume_base_kwargs(
+            kwargs, execution_stages or {ExecutionStage.VAL, ExecutionStage.TEST}
+        )
+        super().__init__(
+            name=name,
+            execution_stages=execution_stages,
+            **kwargs,
+        )
+
+    def forward(self, predictions, targets, context: Context, **kwargs):
+        """Compute simple accuracy-like metric (percentage of close predictions)."""
+        pred_flat = predictions.reshape(-1)
+        targ_flat = targets.reshape(-1)
+        close_predictions = torch.abs(pred_flat - targ_flat) < 0.1
+        metric_value = close_predictions.float().mean()
+
+        return {
+            "metrics": [
+                Metric(
+                    name="accuracy",
+                    value=metric_value.item(),
+                    stage=context.stage,
+                    epoch=context.epoch,
+                    batch_idx=context.batch_idx,
+                )
+            ]
+        }
+
+    def load(self, params, serial_dir):
+        pass
+
+
+class MockBinaryDecider(Node):
+    """Mock binary decider for testing runtime validation.
+
+    Mimics the BinaryDecider from cuvis_ai but properly returns bool dtype.
+    """
+
+    INPUT_SPECS = {
+        "logits": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, 1)),
+    }
+    OUTPUT_SPECS = {
+        "decisions": PortSpec(dtype=torch.bool, shape=(-1, -1, -1, 1)),
+    }
+
+    def __init__(self, threshold: float = 0.5, **kwargs):
+        super().__init__(**kwargs)
+        self.threshold = threshold
+
+    def forward(self, logits, **kwargs):
+        decisions = logits > self.threshold
+        return {"decisions": decisions}
+
+    def load(self, params, serial_dir):
+        pass
+
+
+# Aliases — allow referencing as "MockMinMaxNormalizer" etc. for tests that
+# used the old registry_test_nodes names.
+MockMinMaxNormalizer = MinMaxNormalizer
+MockSoftChannelSelector = SoftChannelSelector

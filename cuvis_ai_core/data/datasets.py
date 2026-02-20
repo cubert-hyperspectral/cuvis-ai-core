@@ -43,6 +43,14 @@ class SingleCu3sDataset(Dataset):
         self.session = cuvis.SessionFile(cu3s_file_path)
         self.pc = cuvis.ProcessingContext(self.session)
 
+        # Session frame rate (Hz), useful for downstream video export synchronization.
+        # Keep a None fallback for sessions where FPS metadata is unavailable.
+        self.fps: float | None = None
+        try:
+            self.fps = float(self.session.fps)
+        except Exception:
+            self.fps = None
+
         has_white_ref = (
             self.session.get_reference(0, cuvis.ReferenceType.White) is not None
         )
@@ -51,11 +59,24 @@ class SingleCu3sDataset(Dataset):
         )
         if processing_mode is not None:
             if isinstance(processing_mode, str):
-                processing_mode = getattr(cuvis.ProcessingMode, processing_mode, "Raw")
+                processing_mode = getattr(
+                    cuvis.ProcessingMode, processing_mode, cuvis.ProcessingMode.Raw
+                )
 
             if processing_mode == cuvis.ProcessingMode.Reflectance:
                 assert has_white_ref and has_dark_ref, (
                     "Reflectance processing mode requires both White and Dark references "
+                    "in the cu3s file."
+                )
+            spectral_radiance_mode = getattr(
+                cuvis.ProcessingMode, "SpectralRadiance", None
+            )
+            if (
+                spectral_radiance_mode is not None
+                and processing_mode == spectral_radiance_mode
+            ):
+                assert has_dark_ref, (
+                    "SpectralRadiance processing mode requires a Dark reference "
                     "in the cu3s file."
                 )
             self.pc.processing_mode = processing_mode
@@ -67,8 +88,6 @@ class SingleCu3sDataset(Dataset):
         self.measurement_indices = _resolve_measurement_indices(
             measurement_indices, max_index=self._total_measurements
         )
-        # Backwards compatibility for legacy callers.
-        self.mes_ids = self.measurement_indices
 
         logger.info(
             f"Loaded cu3s dataset from {cu3s_file_path} with {len(self.measurement_indices)} "

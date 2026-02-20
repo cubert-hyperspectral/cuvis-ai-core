@@ -426,10 +426,7 @@ class PipelineVisualizer:
     def _normalize_stage(self, stage: ExecutionStage | str) -> str:
         if isinstance(stage, ExecutionStage):
             return stage.value
-        stage_value = str(stage).lower()
-        if stage_value == ExecutionStage.VALIDATE.value:
-            return ExecutionStage.VAL.value
-        return stage_value
+        return str(stage).lower()
 
     def _format_graphviz_attributes(self, attrs: Mapping[str, Any]) -> list[str]:
         return [

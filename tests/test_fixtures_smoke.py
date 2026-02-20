@@ -69,18 +69,6 @@ def test_batch_factory_fixture(batch_factory):
 
 
 @pytest.mark.unit
-def test_tmp_config_dir_fixture(tmp_config_dir):
-    """Verify tmp_config_dir fixture creates directory."""
-    assert tmp_config_dir.exists()
-    assert tmp_config_dir.is_dir()
-
-    # Can write files to it
-    test_file = tmp_config_dir / "test.yaml"
-    test_file.write_text("test: content")
-    assert test_file.exists()
-
-
-@pytest.mark.unit
 def test_minimal_pipeline_dict_fixture(minimal_pipeline_dict):
     """Verify minimal_pipeline_dict fixture structure."""
     assert "version" in minimal_pipeline_dict

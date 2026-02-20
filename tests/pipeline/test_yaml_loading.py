@@ -13,8 +13,8 @@ def simple_pipeline_config():
         "nodes": [
             {
                 "name": "normalizer",
-                "class": "MinMaxNormalizer",
-                "params": {"eps": 1e-6, "use_running_stats": True},
+                "class_name": "MinMaxNormalizer",
+                "hparams": {"eps": 1e-6, "use_running_stats": True},
             }
         ],
         "connections": [],
@@ -29,13 +29,13 @@ def pipeline_with_connections():
         "nodes": [
             {
                 "name": "normalizer",
-                "class": "MinMaxNormalizer",
-                "params": {"eps": 1e-6},
+                "class_name": "MinMaxNormalizer",
+                "hparams": {"eps": 1e-6},
             },
             {
                 "name": "selector",
-                "class": "SoftChannelSelector",
-                "params": {
+                "class_name": "SoftChannelSelector",
+                "hparams": {
                     "n_select": 3,
                     "input_channels": 10,
                     "init_method": "variance",
@@ -43,7 +43,10 @@ def pipeline_with_connections():
             },
         ],
         "connections": [
-            {"from": "normalizer.outputs.normalized", "to": "selector.inputs.data"}
+            {
+                "source": "normalizer.outputs.normalized",
+                "target": "selector.inputs.data",
+            }
         ],
     }
 
@@ -75,8 +78,8 @@ class TestPipelineBuilder:
   name: "test"
 nodes:
   - name: "normalizer"
-    class: "MinMaxNormalizer"
-    params:
+    class_name: "MinMaxNormalizer"
+    hparams:
       eps: 1.0e-6
 connections: []
 """
@@ -96,8 +99,8 @@ connections: []
             "nodes": [
                 {
                     "name": "selector",
-                    "class": "SoftChannelSelector",
-                    "params": {
+                    "class_name": "SoftChannelSelector",
+                    "hparams": {
                         "n_select": 3,
                         "input_channels": 61,
                         "init_method": "variance",
@@ -117,7 +120,9 @@ connections: []
         """Test that missing node class raises error."""
         config = {
             "metadata": {"name": "test"},
-            "nodes": [{"name": "missing", "class": "NonExistentNode", "params": {}}],
+            "nodes": [
+                {"name": "missing", "class_name": "NonExistentNode", "hparams": {}}
+            ],
             "connections": [],
         }
 
@@ -130,18 +135,18 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
                 {
-                    "from": "invalid_format",  # Missing .outputs.port
-                    "to": "normalizer.inputs.data",
+                    "source": "invalid_format",  # Missing .outputs.port
+                    "target": "normalizer.inputs.data",
                 }
             ],
         }
 
         builder = PipelineBuilder()
-        with pytest.raises(ValueError, match="Invalid 'from' specification"):
+        with pytest.raises(ValueError, match="Invalid 'source' specification"):
             builder.build_from_config(config)
 
     def test_missing_source_node_raises_error(self):
@@ -149,10 +154,13 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
-                {"from": "missing_node.outputs.data", "to": "normalizer.inputs.data"}
+                {
+                    "source": "missing_node.outputs.data",
+                    "target": "normalizer.inputs.data",
+                }
             ],
         }
 
@@ -165,12 +173,12 @@ connections: []
         config = {
             "metadata": {"name": "test"},
             "nodes": [
-                {"name": "normalizer", "class": "MinMaxNormalizer", "params": {}}
+                {"name": "normalizer", "class_name": "MinMaxNormalizer", "hparams": {}}
             ],
             "connections": [
                 {
-                    "from": "normalizer.outputs.normalized",
-                    "to": "missing_node.inputs.data",
+                    "source": "normalizer.outputs.normalized",
+                    "target": "missing_node.inputs.data",
                 }
             ],
         }
@@ -186,18 +194,18 @@ connections: []
             "nodes": [
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-6},
                 },
             ],
             "connections": [],
@@ -248,7 +256,7 @@ connections: []
             "nodes": [
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
+                    "class_name": "MinMaxNormalizer",
                     # No params field
                 }
             ],
@@ -277,18 +285,18 @@ connections: []
             "nodes": [
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-6},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-6},
                 },
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-7},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-7},
                 },
                 {
                     "name": "normalizer",
-                    "class": "MinMaxNormalizer",
-                    "params": {"eps": 1e-8},
+                    "class_name": "MinMaxNormalizer",
+                    "hparams": {"eps": 1e-8},
                 },
             ],
             "connections": [],
@@ -318,7 +326,7 @@ connections: []
         assert len(list(pipeline.nodes)) == 2
 
         # Step 3: Add a new node with the same base name using internal method
-        from tests.fixtures.registry_test_nodes import MockMinMaxNormalizer
+        from tests.fixtures.mock_nodes import MockMinMaxNormalizer
 
         new_node = MockMinMaxNormalizer(eps=1e-9, name="normalizer")
         pipeline._assign_counter_and_add_node(new_node)
