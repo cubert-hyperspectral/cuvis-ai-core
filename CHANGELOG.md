@@ -6,6 +6,8 @@
 - Added `get_session_or_error()` and `require_pipeline()` gRPC validation helpers in `error_handling.py`
 - Added session `fps` metadata property to `CuvisDataset`
 - Added spectral radiance processing mode with dark-reference validation in `CuvisDataset`
+- Added `@grpc_handler` to 7 service methods that were missing it (close_session, get_parameter_schema, validate_config, list_loaded_plugins, get_plugin_info, list_available_nodes, get_pipeline_visualization)
+- Fixed `Pipelinees` typo — renamed to `Pipelines` across gRPC stubs, services, helpers, and tests (upstream fix in cuvis-ai-schemas PR #8)
 - Changed all 8 gRPC service files to use `@grpc_handler` decorator, replacing inline try/except blocks
 - Changed training configs to use `cuvis-ai-schemas` as single source of truth
 - Changed `NodeConfig` usage from `params` to `hparams` across core
