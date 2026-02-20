@@ -443,7 +443,9 @@ class SimpleLossNode(Node):
         self, predictions: torch.Tensor, targets: torch.Tensor, **_
     ) -> dict[str, torch.Tensor]:
         """Compute MSE loss between predictions and targets."""
-        # Compute MSE loss
+        # Expand targets to match predictions shape if needed (avoids broadcast warning)
+        if predictions.shape != targets.shape:
+            targets = targets.expand_as(predictions)
         loss = torch.nn.functional.mse_loss(predictions, targets)
 
         # Apply weight

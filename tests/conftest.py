@@ -9,11 +9,11 @@ from __future__ import annotations
 import warnings
 import pytest
 
-# Filter PyTorch Lightning internal deprecation warnings
-# TreeSpec deprecation in pytorch_lightning.utilities._pytree
+# Filter PyTorch Lightning internal FutureWarning from torch.utils._pytree.LeafSpec
+# Triggered when PL's _pytree.py instantiates LeafSpec() (deprecated in PyTorch 2.x)
 warnings.filterwarnings(
     "ignore",
-    category=DeprecationWarning,
+    category=FutureWarning,
     module="pytorch_lightning.utilities._pytree",
 )
 
