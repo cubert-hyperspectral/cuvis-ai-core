@@ -177,4 +177,4 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "hotfix/fix-pipelinees-typo" }
+cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "main" }

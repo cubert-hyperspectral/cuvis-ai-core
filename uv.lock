@@ -527,7 +527,7 @@ test = [
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "cuvis", specifier = ">=3.5.0" },
-    { name = "cuvis-ai-schemas", git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=hotfix%2Ffix-pipelinees-typo" },
+    { name = "cuvis-ai-schemas", git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=main" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "dataclass-wizard" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
@@ -575,8 +575,8 @@ provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.1.3.post5+g342efe2f6"
-source = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=hotfix%2Ffix-pipelinees-typo#342efe2f6154cc198104bfa0a0f7bb8a1a0d21e0" }
+version = "0.1.3.post5+g97c807401"
+source = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=main#97c8074017b0b1389bbff5fa28d7ef522a4fc8de" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
