@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Added `TRAINABLE_BUFFERS: tuple[str, ...]` class attribute on `Node` base class
+- Added `__init_subclass__` hook that validates `TRAINABLE_BUFFERS` is a tuple of strings at class definition time
+- Changed `freeze()` and `unfreeze()` to iterate `TRAINABLE_BUFFERS` for automatic buffer↔parameter conversion
 - Added `@grpc_handler` decorator for unified exception-to-gRPC-status mapping across all services
 - Added `get_session_or_error()` and `require_pipeline()` gRPC validation helpers in `error_handling.py`
 - Added session `fps` metadata property to `CuvisDataset`
