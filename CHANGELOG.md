@@ -13,6 +13,7 @@
 - Changed `NodeConfig` usage from `params` to `hparams` across core
 - Removed duplicate proto definitions now owned by `cuvis-ai-schemas`
 - Removed `VALIDATE` compatibility code from execution stage handling
+- Renamed `Node.freezed` to private `_frozen` attribute with read-only `frozen` property
 - Removed dead code and fixed stale docstrings
 
 ## 0.1.3 - 2026-02-11

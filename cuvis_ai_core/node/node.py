@@ -116,10 +116,15 @@ class Node(nn.Module, ABC, Serializable):
         self.execution_stages = set(execution_stages)
 
         self._statistically_initialized = False
-        self.freezed = False
+        self._frozen = False
         self._input_ports: dict[str, InputPort] = {}
         self._output_ports: dict[str, OutputPort] = {}
         self._create_ports()
+
+    @property
+    def frozen(self) -> bool:
+        """Whether this node is frozen (no gradient computation)."""
+        return self._frozen
 
     @property
     def name(self) -> str:
@@ -184,7 +189,7 @@ class Node(nn.Module, ABC, Serializable):
             if not isinstance(attr, nn.Parameter):
                 delattr(self, name)
                 setattr(self, name, nn.Parameter(attr.clone()))
-        self.freezed = False
+        self._frozen = False
         self.requires_grad_(True)
 
     def freeze(self) -> None:
@@ -205,7 +210,7 @@ class Node(nn.Module, ABC, Serializable):
                 data = attr.data.clone()
                 delattr(self, name)
                 self.register_buffer(name, data)
-        self.freezed = True
+        self._frozen = True
         self.requires_grad_(False)
 
     def should_execute(self, stage: ExecutionStage | str) -> bool:
