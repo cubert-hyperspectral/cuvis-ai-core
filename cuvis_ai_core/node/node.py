@@ -65,9 +65,13 @@ class Node(nn.Module, ABC, Serializable):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Validate TRAINABLE_BUFFERS declaration at class definition time."""
         super().__init_subclass__(**kwargs)
-        tb = cls.__dict__.get("TRAINABLE_BUFFERS")
-        if tb is not None:
-            if not isinstance(tb, tuple) or not all(isinstance(n, str) for n in tb):
+        if "TRAINABLE_BUFFERS" in cls.__dict__:
+            tb = cls.__dict__["TRAINABLE_BUFFERS"]
+            if (
+                tb is None
+                or not isinstance(tb, tuple)
+                or not all(isinstance(n, str) for n in tb)
+            ):
                 raise TypeError(
                     f"{cls.__name__}.TRAINABLE_BUFFERS must be a tuple of strings."
                 )
@@ -180,15 +184,15 @@ class Node(nn.Module, ABC, Serializable):
         layers) should override both freeze() and unfreeze() instead.
         """
         for name in self.TRAINABLE_BUFFERS:
-            attr = getattr(self, name, None)
-            if attr is None:
+            if name not in self._buffers and name not in self._parameters:
                 raise AttributeError(
                     f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
                     f"but it is not registered as a buffer or parameter."
                 )
-            if not isinstance(attr, nn.Parameter):
+            if name in self._buffers:
+                buf = self._buffers[name]
                 delattr(self, name)
-                setattr(self, name, nn.Parameter(attr.clone()))
+                setattr(self, name, nn.Parameter(buf.clone()))
         self._frozen = False
         self.requires_grad_(True)
 
@@ -200,14 +204,13 @@ class Node(nn.Module, ABC, Serializable):
         both freeze() and unfreeze() instead.
         """
         for name in self.TRAINABLE_BUFFERS:
-            attr = getattr(self, name, None)
-            if attr is None:
+            if name not in self._buffers and name not in self._parameters:
                 raise AttributeError(
                     f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
                     f"but it is not registered as a buffer or parameter."
                 )
-            if isinstance(attr, nn.Parameter):
-                data = attr.data.clone()
+            if name in self._parameters:
+                data = self._parameters[name].detach().clone()
                 delattr(self, name)
                 self.register_buffer(name, data)
         self._frozen = True

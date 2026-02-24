@@ -40,6 +40,20 @@ def test_valid_trainable_buffers():
     assert node.TRAINABLE_BUFFERS == ("weight", "bias")
 
 
+def test_invalid_trainable_buffers_none():
+    """TRAINABLE_BUFFERS = None raises TypeError."""
+    with pytest.raises(TypeError, match="must be a tuple of strings"):
+
+        class _Bad(Node):
+            TRAINABLE_BUFFERS = None
+
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            def forward(self, **_):
+                return {}
+
+
 def test_invalid_trainable_buffers_list():
     """TRAINABLE_BUFFERS as list raises TypeError."""
     with pytest.raises(TypeError, match="must be a tuple of strings"):
@@ -112,8 +126,8 @@ def test_unfreeze_preserves_values():
 
     node.unfreeze()
 
-    assert torch.equal(node.weight.data, orig_weight)
-    assert torch.equal(node.bias.data, orig_bias)
+    assert torch.equal(node.weight.detach(), orig_weight)
+    assert torch.equal(node.bias.detach(), orig_bias)
 
 
 # -- freeze: nn.Parameter → buffer -----------------------------------------
