@@ -60,6 +60,21 @@ class Node(nn.Module, ABC, Serializable):
 
     INPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
     OUTPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
+    TRAINABLE_BUFFERS: tuple[str, ...] = ()
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Validate TRAINABLE_BUFFERS declaration at class definition time."""
+        super().__init_subclass__(**kwargs)
+        if "TRAINABLE_BUFFERS" in cls.__dict__:
+            tb = cls.__dict__["TRAINABLE_BUFFERS"]
+            if (
+                tb is None
+                or not isinstance(tb, tuple)
+                or not all(isinstance(n, str) for n in tb)
+            ):
+                raise TypeError(
+                    f"{cls.__name__}.TRAINABLE_BUFFERS must be a tuple of strings."
+                )
 
     def __init__(
         self,
@@ -105,10 +120,15 @@ class Node(nn.Module, ABC, Serializable):
         self.execution_stages = set(execution_stages)
 
         self._statistically_initialized = False
-        self.freezed = False
+        self._frozen = False
         self._input_ports: dict[str, InputPort] = {}
         self._output_ports: dict[str, OutputPort] = {}
         self._create_ports()
+
+    @property
+    def frozen(self) -> bool:
+        """Whether this node is frozen (no gradient computation)."""
+        return self._frozen
 
     @property
     def name(self) -> str:
@@ -159,39 +179,41 @@ class Node(nn.Module, ABC, Serializable):
     def unfreeze(self) -> None:
         """Enable gradient computation for this node's parameters.
 
-        For statistical nodes, this method should be overridden to convert
-        buffers to nn.Parameters. The base implementation enables gradients
-        for any existing parameters.
-
-        After statistical initialization with fit(), nodes store their learned
-        values as buffers. Call unfreeze() to convert them to trainable parameters
-        for gradient-based optimization.
-
-        Example
-        -------
-        >>> node.fit(input_stream)  # Statistical initialization -> buffers
-        >>> node.unfreeze()  # Convert buffers -> nn.Parameters
-        >>> # Now node can be trained with gradient descent
+        Buffers listed in TRAINABLE_BUFFERS are automatically converted to
+        nn.Parameters. Subclasses with non-standard patterns (e.g. nn.Conv2d
+        layers) should override both freeze() and unfreeze() instead.
         """
-        self.freezed = False
+        for name in self.TRAINABLE_BUFFERS:
+            if name not in self._buffers and name not in self._parameters:
+                raise AttributeError(
+                    f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
+                    f"but it is not registered as a buffer or parameter."
+                )
+            if name in self._buffers:
+                buf = self._buffers[name]
+                delattr(self, name)
+                setattr(self, name, nn.Parameter(buf.clone()))
+        self._frozen = False
         self.requires_grad_(True)
 
     def freeze(self) -> None:
         """Disable gradient computation for this node's parameters.
 
-        This disables requires_grad for all parameters in the node, preventing
-        gradient updates during training. Use this after statistical initialization
-        if you want to keep the node frozen, or to freeze a previously unfrozen node.
-
-        Example
-        -------
-        >>> node.fit(input_stream)  # Statistical initialization
-        >>> node.freeze()  # Keep frozen (already frozen by default)
-        >>> # Or after unfreezing:
-        >>> node.unfreeze()  # Enable gradients
-        >>> node.freeze()  # Disable gradients again
+        nn.Parameters listed in TRAINABLE_BUFFERS are automatically converted
+        back to buffers. Subclasses with non-standard patterns should override
+        both freeze() and unfreeze() instead.
         """
-        self.freezed = True
+        for name in self.TRAINABLE_BUFFERS:
+            if name not in self._buffers and name not in self._parameters:
+                raise AttributeError(
+                    f"{type(self).__name__}.TRAINABLE_BUFFERS declares '{name}' "
+                    f"but it is not registered as a buffer or parameter."
+                )
+            if name in self._parameters:
+                data = self._parameters[name].detach().clone()
+                delattr(self, name)
+                self.register_buffer(name, data)
+        self._frozen = True
         self.requires_grad_(False)
 
     def should_execute(self, stage: ExecutionStage | str) -> bool:
