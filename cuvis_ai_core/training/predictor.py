@@ -8,6 +8,7 @@ from typing import Any
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_schemas.enums import ExecutionStage
@@ -41,10 +42,18 @@ class Predictor:
         collected: list[dict[tuple[str, str], Any]] = []
         batch_idx = 0
 
+        total = self._estimate_total_batches(dataloaders, max_batches)
+
         self._reset_nodes()
         try:
             with torch.no_grad():
-                for batch in self._iter_batches(dataloaders):
+                pbar = tqdm(
+                    self._iter_batches(dataloaders),
+                    total=total,
+                    desc=f"Predict [{self.pipeline.name}]",
+                    unit="batch",
+                )
+                for batch in pbar:
                     if max_batches is not None and batch_idx >= max_batches:
                         break
 
@@ -58,10 +67,31 @@ class Predictor:
                     if collect_outputs:
                         collected.append(outputs)
                     batch_idx += 1
+                pbar.close()
         finally:
             self._close_nodes()
 
         return collected if collect_outputs else None
+
+    @staticmethod
+    def _estimate_total_batches(
+        dataloaders: Any, max_batches: int | None
+    ) -> int | None:
+        """Try to compute the total number of batches for the progress bar."""
+        total: int | None = None
+        try:
+            if isinstance(dataloaders, DataLoader):
+                total = len(dataloaders)
+            elif isinstance(dataloaders, Mapping):
+                total = sum(len(dl) for dl in dataloaders.values() if dl is not None)
+            elif isinstance(dataloaders, Iterable) and hasattr(dataloaders, "__len__"):
+                total = sum(len(dl) for dl in dataloaders if dl is not None)
+        except TypeError:
+            total = None
+
+        if total is not None and max_batches is not None:
+            total = min(total, max_batches)
+        return total
 
     @staticmethod
     def _iter_batches(dataloaders: Any) -> Iterable[dict[str, Any]]:
