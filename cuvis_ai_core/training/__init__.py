@@ -18,6 +18,7 @@ from cuvis_ai_core.training.config import (
     TrainRunConfig,
 )
 from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_core.training.predictor import Predictor
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_schemas.execution import Context
 
@@ -35,6 +36,8 @@ __all__ = [
     "CuvisDataModule",
     # Context
     "Context",
+    # Inference
+    "Predictor",
     # External Trainers (Phase 4.7)
     "GradientTrainer",
     "StatisticalTrainer",
