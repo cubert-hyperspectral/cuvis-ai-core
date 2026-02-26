@@ -179,6 +179,7 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         train_ids: list[int] | None = None,
         val_ids: list[int] | None = None,
         test_ids: list[int] | None = None,
+        predict_ids: list[int] | None = None,
         batch_size: int = 2,
         processing_mode: str = "Reflectance",
         normalize_to_unit: bool = False,
@@ -197,6 +198,8 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             train_ids: List of measurement indices for training
             val_ids: List of measurement indices for validation
             test_ids: List of measurement indices for testing
+            predict_ids: List of measurement indices for prediction.
+                If omitted, all available measurements are used for predict.
             batch_size: Batch size for dataloaders
             processing_mode: Cuvis processing mode string ("Raw", "Reflectance")
             normalize_to_unit: If True, normalize cube per-channel to [0, 1].
@@ -207,10 +210,12 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         """
         super().__init__()
 
-        # Priority 1: Explicit paths
-        if cu3s_file_path and annotation_json_path:
+        # Priority 1: Explicit CU3S path (annotation path optional)
+        if cu3s_file_path:
             self.cu3s_file_path = Path(cu3s_file_path)
-            self.annotation_json_path = Path(annotation_json_path)
+            self.annotation_json_path = (
+                Path(annotation_json_path) if annotation_json_path else None
+            )
         # Priority 2: Auto-resolve from data_dir + dataset_name
         elif data_dir and dataset_name:
             self.cu3s_file_path, self.annotation_json_path = _resolve_assets(
@@ -218,18 +223,21 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             )
         else:
             raise ValueError(
-                "Must provide either (cu3s_file_path AND annotation_json_path) OR (data_dir AND dataset_name)"
+                "Must provide either cu3s_file_path OR (data_dir AND dataset_name)"
             )
 
         self.batch_size = batch_size
         self.train_ids = train_ids or []
         self.val_ids = val_ids or []
         self.test_ids = test_ids or []
+        # Predict defaults to full-session inference when no explicit IDs are passed.
+        self.predict_ids = list(predict_ids) if predict_ids else None
         self.processing_mode = processing_mode
         self.normalize_to_unit = normalize_to_unit
         self.train_ds: SingleCu3sDataset | None = None
         self.val_ds: SingleCu3sDataset | None = None
         self.test_ds: SingleCu3sDataset | None = None
+        self.predict_ds: SingleCu3sDataset | None = None
 
     def prepare_data(self) -> None:
         # Only download if using auto-resolve mode with Lentils dataset
@@ -237,11 +245,17 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         pass
 
     def setup(self, stage: str | None = None) -> None:
+        annotation_json_path = (
+            str(self.annotation_json_path)
+            if self.annotation_json_path is not None
+            else None
+        )
+
         if stage == "fit" or stage is None:
             if self.train_ids:
                 self.train_ds = SingleCu3sDataset(
                     cu3s_file_path=str(self.cu3s_file_path),
-                    annotation_json_path=str(self.annotation_json_path),
+                    annotation_json_path=annotation_json_path,
                     processing_mode=self.processing_mode,
                     measurement_indices=self.train_ids,
                     normalize_to_unit=self.normalize_to_unit,
@@ -252,7 +266,7 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             if self.val_ids:
                 self.val_ds = SingleCu3sDataset(
                     cu3s_file_path=str(self.cu3s_file_path),
-                    annotation_json_path=str(self.annotation_json_path),
+                    annotation_json_path=annotation_json_path,
                     processing_mode=self.processing_mode,
                     measurement_indices=self.val_ids,
                     normalize_to_unit=self.normalize_to_unit,
@@ -265,9 +279,18 @@ class SingleCu3sDataModule(pl.LightningDataModule):
                 raise ValueError("test_ids must be provided to build the test dataset.")
             self.test_ds = SingleCu3sDataset(
                 cu3s_file_path=str(self.cu3s_file_path),
-                annotation_json_path=str(self.annotation_json_path),
+                annotation_json_path=annotation_json_path,
                 processing_mode=self.processing_mode,
                 measurement_indices=self.test_ids,
+                normalize_to_unit=self.normalize_to_unit,
+            )
+
+        if stage == "predict" or stage is None:
+            self.predict_ds = SingleCu3sDataset(
+                cu3s_file_path=str(self.cu3s_file_path),
+                annotation_json_path=annotation_json_path,
+                processing_mode=self.processing_mode,
+                measurement_indices=self.predict_ids,
                 normalize_to_unit=self.normalize_to_unit,
             )
 
@@ -294,6 +317,15 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             )
         return DataLoader(
             self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
+        )
+
+    def predict_dataloader(self) -> DataLoader:
+        if self.predict_ds is None:
+            raise RuntimeError(
+                "Predict dataset is not initialized. Call setup('predict') first."
+            )
+        return DataLoader(
+            self.predict_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
         )
 
 
