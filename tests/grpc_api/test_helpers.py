@@ -3,7 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
-from cuvis_ai_core.grpc.helpers import find_weights_file, resolve_pipeline_path
+from cuvis_ai_core.grpc.helpers import (
+    find_weights_file,
+    get_pipeline_info,
+    list_available_pipelines,
+    resolve_pipeline_path,
+)
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import (
     apply_config_overrides,
@@ -44,6 +49,53 @@ class TestPipelinePathResolution:
         """Test that FileNotFoundError is raised for missing pipeline."""
         with pytest.raises(FileNotFoundError, match="Pipeline configuration not found"):
             resolve_pipeline_path("nonexistent_pipeline_xyz")
+
+
+class TestPipelineDiscoveryHelpers:
+    """Test pipeline discovery helper functions directly."""
+
+    def test_list_available_pipelines_with_explicit_base_dir(self, tmp_path):
+        """Test list_available_pipelines with explicit base_dir as string."""
+        pipeline_dir = tmp_path / "pipelines"
+        pipeline_dir.mkdir()
+        (pipeline_dir / "my_pipeline.yaml").write_text(
+            "metadata:\n  name: my_pipeline\n  tags: [test]\nnodes: []\nconnections: []\n"
+        )
+
+        result = list_available_pipelines(base_dir=str(pipeline_dir))
+        assert len(result) == 1
+        assert result[0]["name"] == "my_pipeline"
+
+    def test_get_pipeline_info_with_string_base_dir(self, tmp_path):
+        """Test get_pipeline_info with base_dir provided as a string."""
+        pipeline_dir = tmp_path / "pipelines"
+        pipeline_dir.mkdir()
+        (pipeline_dir / "test_pipe.yaml").write_text(
+            "metadata:\n  name: test_pipe\n  tags: [demo]\nnodes: []\nconnections: []\n"
+        )
+
+        result = get_pipeline_info("test_pipe", base_dir=str(pipeline_dir))
+        assert result["name"] == "test_pipe"
+        assert result["tags"] == ["demo"]
+        assert result["has_weights"] is False
+
+    def test_get_pipeline_info_absolute_path_outside_base_dir(self, tmp_path):
+        """Test get_pipeline_info fallback when yaml is outside base_dir."""
+        # Create pipeline in a separate directory (outside base_dir)
+        external_dir = tmp_path / "external"
+        external_dir.mkdir()
+        yaml_file = external_dir / "external_pipe.yaml"
+        yaml_file.write_text(
+            "metadata:\n  name: external_pipe\n  tags: [ext]\nnodes: []\nconnections: []\n"
+        )
+
+        # Pass an absolute path as pipeline_name but a different base_dir
+        base_dir = tmp_path / "base"
+        base_dir.mkdir()
+
+        result = get_pipeline_info(str(yaml_file), base_dir=base_dir)
+        # Falls back to yaml_path.stem since file is outside base_dir
+        assert result["name"] == "external_pipe"
 
 
 class TestWeightsFileResolution:

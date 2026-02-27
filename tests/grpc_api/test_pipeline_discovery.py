@@ -109,6 +109,97 @@ class TestListAvailablePipelines:
             assert not pipelines_by_name["gradient_based"].weights_path
 
 
+class TestSubdirectoryPipelineDiscovery:
+    """Test discovery of pipelines in subdirectories."""
+
+    @pytest.fixture
+    def nested_pipeline_dir(self, monkeypatch, tmp_path):
+        """Create a pipeline directory with subdirectories."""
+        base = tmp_path / "configs"
+        base.mkdir()
+        pipeline_dir = base / "pipeline"
+        pipeline_dir.mkdir()
+
+        # Top-level pipeline
+        (pipeline_dir / "top_level.yaml").write_text(
+            "metadata:\n  name: top_level\n  tags: [top]\nnodes: []\nconnections: []\n"
+        )
+
+        # Subdirectory pipeline
+        subdir = pipeline_dir / "anomaly" / "adaclip"
+        subdir.mkdir(parents=True)
+        (subdir / "baseline.yaml").write_text(
+            "metadata:\n  name: baseline\n  tags: [anomaly]\nnodes: []\nconnections: []\n"
+        )
+        (subdir / "baseline.pt").write_bytes(b"fake weights")
+
+        # Another subdirectory
+        rxdir = pipeline_dir / "anomaly" / "rx"
+        rxdir.mkdir(parents=True)
+        (rxdir / "statistical.yaml").write_text(
+            "metadata:\n  name: statistical\n  tags: [anomaly, statistical]\nnodes: []\nconnections: []\n"
+        )
+
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.helpers.get_server_base_dir", lambda: base
+        )
+        return base
+
+    def test_discovers_subdirectory_pipelines(self, grpc_stub, nested_pipeline_dir):
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
+        )
+
+        names = {p.name for p in response.pipelines}
+        assert "top_level" in names
+        assert "anomaly/adaclip/baseline" in names
+        assert "anomaly/rx/statistical" in names
+        assert len(response.pipelines) == 3
+
+    def test_subdirectory_names_are_relative_paths(
+        self, grpc_stub, nested_pipeline_dir
+    ):
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
+        )
+
+        names = {p.name for p in response.pipelines}
+        # Names use forward slashes, no .yaml extension
+        for name in names:
+            assert not name.endswith(".yaml")
+            assert "\\" not in name
+
+    def test_subdirectory_tag_filter(self, grpc_stub, nested_pipeline_dir):
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="anomaly")
+        )
+
+        names = {p.name for p in response.pipelines}
+        assert "anomaly/adaclip/baseline" in names
+        assert "anomaly/rx/statistical" in names
+        assert "top_level" not in names
+
+    def test_subdirectory_weights_detected(self, grpc_stub, nested_pipeline_dir):
+        response = grpc_stub.ListAvailablePipelines(
+            cuvis_ai_pb2.ListAvailablePipelinesRequest()
+        )
+
+        by_name = {p.name: p for p in response.pipelines}
+        assert by_name["anomaly/adaclip/baseline"].has_weights is True
+        assert by_name["anomaly/rx/statistical"].has_weights is False
+
+    def test_get_info_for_subdirectory_pipeline(self, grpc_stub, nested_pipeline_dir):
+        response = grpc_stub.GetPipelineInfo(
+            cuvis_ai_pb2.GetPipelineInfoRequest(
+                pipeline_name="anomaly/adaclip/baseline"
+            )
+        )
+
+        info = response.pipeline_info
+        assert info.name == "anomaly/adaclip/baseline"
+        assert info.has_weights is True
+
+
 class TestGetPipelineInfo:
     """Test the GetPipelineInfo RPC method."""
 

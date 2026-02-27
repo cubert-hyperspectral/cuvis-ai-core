@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.2.0 - 2026-02-27
+
+- Added recursive pipeline discovery to find configs in subdirectories (e.g., `anomaly/adaclip/baseline`)
+- Added pipeline names as relative paths from base directory instead of bare stem
 - Added `TRAINABLE_BUFFERS: tuple[str, ...]` class attribute on `Node` base class
 - Added `__init_subclass__` hook that validates `TRAINABLE_BUFFERS` is a tuple of strings at class definition time
 - Changed `freeze()` and `unfreeze()` to iterate `TRAINABLE_BUFFERS` for automatic buffer↔parameter conversion

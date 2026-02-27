@@ -497,7 +497,7 @@ def list_available_pipelines(
 
     Returns:
         List of dictionaries with pipeline information:
-        - name: str (short name without .yaml extension)
+        - name: str (relative path without .yaml extension, e.g., "anomaly/adaclip/baseline")
         - path: str (full path to pipeline file)
         - metadata: dict (pipeline metadata)
         - tags: list[str] (pipeline tags)
@@ -517,8 +517,8 @@ def list_available_pipelines(
 
     pipelines = []
 
-    # Find all .yaml files in base directory
-    for yaml_path in base_dir_path.glob("*.yaml"):
+    # Find all .yaml files recursively in base directory and subdirectories
+    for yaml_path in sorted(base_dir_path.rglob("*.yaml")):
         metadata = extract_pipeline_metadata(yaml_path)
 
         # Apply tag filter if provided
@@ -530,9 +530,13 @@ def list_available_pipelines(
         pt_path = yaml_path.with_suffix(".pt")
         has_weights = pt_path.exists()
 
+        # Compute name as relative path from base_dir without .yaml extension
+        rel_path = yaml_path.relative_to(base_dir_path)
+        pipeline_name = rel_path.with_suffix("").as_posix()
+
         pipelines.append(
             {
-                "name": yaml_path.stem,
+                "name": pipeline_name,
                 "path": str(yaml_path),
                 "metadata": metadata,
                 "tags": metadata["tags"],
@@ -552,7 +556,7 @@ def get_pipeline_info(
     """Get detailed information about a specific pipeline.
 
     Args:
-        pipeline_name: Pipeline short name (e.g., "statistical_based")
+        pipeline_name: Pipeline name or relative path (e.g., "statistical_based" or "anomaly/adaclip/baseline")
         base_dir: Base directory for pipeline configs (defaults to server base dir / pipeline)
         include_yaml_content: Whether to include full YAML content in response
 
@@ -569,8 +573,14 @@ def get_pipeline_info(
     Raises:
         FileNotFoundError: If pipeline file cannot be found
     """
+    # Resolve base directory for relative name computation
+    if base_dir is None:
+        base_dir_path = get_server_base_dir() / "pipeline"
+    else:
+        base_dir_path = Path(base_dir) if isinstance(base_dir, str) else base_dir
+
     # Resolve pipeline path
-    yaml_path = resolve_pipeline_path(pipeline_name, base_dir)
+    yaml_path = resolve_pipeline_path(pipeline_name, base_dir_path)
 
     # Extract metadata
     metadata = extract_pipeline_metadata(yaml_path)
@@ -579,8 +589,15 @@ def get_pipeline_info(
     pt_path = yaml_path.with_suffix(".pt")
     has_weights = pt_path.exists()
 
+    # Compute name as relative path from base_dir when possible
+    try:
+        rel_path = yaml_path.relative_to(base_dir_path)
+        result_name = rel_path.with_suffix("").as_posix()
+    except ValueError:
+        result_name = yaml_path.stem
+
     result = {
-        "name": yaml_path.stem,
+        "name": result_name,
         "path": str(yaml_path),
         "metadata": metadata,
         "tags": metadata["tags"],
