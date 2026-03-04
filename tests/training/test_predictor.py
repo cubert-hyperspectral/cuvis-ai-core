@@ -7,6 +7,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 
+import cuvis_ai_core.training.predictor as predictor_mod
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.predictor import Predictor
@@ -175,3 +176,46 @@ def test_predictor_rejects_non_dict_batch() -> None:
     predictor = Predictor(pipeline=pipeline, datamodule=datamodule)
     with pytest.raises(TypeError, match="Expected batch to be dict"):
         predictor.predict()
+
+
+@pytest.mark.parametrize(
+    ("is_tty", "expected_disable"),
+    [
+        (False, True),
+        (True, False),
+    ],
+)
+def test_predictor_tqdm_disable_follows_tty_state(
+    monkeypatch: pytest.MonkeyPatch, is_tty: bool, expected_disable: bool
+) -> None:
+    pipeline, _, sink = _build_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    captured_disable: list[bool] = []
+
+    class _FakePbar:
+        def __init__(self, iterable) -> None:
+            self._iterable = iterable
+
+        def __iter__(self):
+            return iter(self._iterable)
+
+        def close(self) -> None:
+            return None
+
+    def _fake_tqdm(iterable, *args, **kwargs):
+        del args
+        captured_disable.append(bool(kwargs.get("disable")))
+        return _FakePbar(iterable)
+
+    class _FakeStderr:
+        def isatty(self) -> bool:
+            return is_tty
+
+    monkeypatch.setattr(predictor_mod, "tqdm", _fake_tqdm)
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _FakeStderr())
+
+    predictor = Predictor(pipeline=pipeline, datamodule=datamodule)
+    predictor.predict(collect_outputs=False)
+
+    assert captured_disable == [expected_disable]
+    assert sink.forward_calls == 2
