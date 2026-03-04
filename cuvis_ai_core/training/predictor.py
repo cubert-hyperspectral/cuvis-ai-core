@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -52,6 +53,7 @@ class Predictor:
                     total=total,
                     desc=f"Predict [{self.pipeline.name}]",
                     unit="batch",
+                    disable=self._should_disable_progress_bar(),
                 )
                 for batch in pbar:
                     if max_batches is not None and batch_idx >= max_batches:
@@ -92,6 +94,18 @@ class Predictor:
         if total is not None and max_batches is not None:
             total = min(total, max_batches)
         return total
+
+    @staticmethod
+    def _should_disable_progress_bar() -> bool:
+        """Disable tqdm when stderr is not an interactive TTY."""
+        stream = getattr(sys, "stderr", None)
+        is_tty = getattr(stream, "isatty", None)
+        if not callable(is_tty):
+            return True
+        try:
+            return not bool(is_tty())
+        except Exception:
+            return True
 
     @staticmethod
     def _iter_batches(dataloaders: Any) -> Iterable[dict[str, Any]]:
