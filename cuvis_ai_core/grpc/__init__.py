@@ -7,6 +7,7 @@ from .discovery_service import DiscoveryService
 from .inference_service import InferenceService
 from .introspection_service import IntrospectionService
 from .pipeline_service import PipelineService
+from .profiling_service import ProfilingService
 from .service import CuvisAIService
 from .session_manager import SessionManager, SessionState
 from .session_service import SessionService
@@ -24,6 +25,7 @@ __all__ = [
     "SessionService",
     "ConfigService",
     "PipelineService",
+    "ProfilingService",
     "InferenceService",
     "TrainingService",
     "TrainRunService",
