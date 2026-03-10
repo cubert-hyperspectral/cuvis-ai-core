@@ -282,4 +282,87 @@ class PipelineProfiler:
         return results
 
 
-__all__ = ["PipelineProfiler"]
+# ---------------------------------------------------------------------------
+# Formatted table output
+# ---------------------------------------------------------------------------
+
+
+def format_profiling_table(
+    stats: list[NodeProfilingStats],
+    *,
+    total_frames: int | None = None,
+    skip_first_n: int = 0,
+) -> str:
+    """Format profiling stats as a pretty-printed text table.
+
+    Parameters
+    ----------
+    stats : list[NodeProfilingStats]
+        Profiling stats as returned by ``PipelineProfiler.snapshot()`` or
+        ``CuvisPipeline.get_profiling_summary()``.
+    total_frames : int or None
+        Total number of frames/batches processed (shown in the header).
+    skip_first_n : int
+        Number of warm-up samples that were skipped (shown in the header).
+
+    Returns
+    -------
+    str
+        Multi-line formatted table ready for logging or printing.
+    """
+    if not stats:
+        return "No profiling data collected."
+
+    sorted_stats = sorted(stats, key=lambda s: s.total_ms, reverse=True)
+
+    # Header
+    parts: list[str] = []
+    header_meta = "Profiling Summary"
+    if total_frames is not None:
+        header_meta += f" ({total_frames} frames"
+        if skip_first_n > 0:
+            header_meta += f", skip_first_n={skip_first_n}"
+        header_meta += ")"
+    elif skip_first_n > 0:
+        header_meta += f" (skip_first_n={skip_first_n})"
+    parts.append(header_meta)
+
+    col_header = (
+        f"{'Node':<40} {'Stage':<12} {'Count':>5} {'Mean(ms)':>10} "
+        f"{'Std(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} "
+        f"{'Median(ms)':>10} {'Total(s)':>10}"
+    )
+    separator = "-" * len(col_header)
+    parts.append(col_header)
+    parts.append(separator)
+
+    # Rows
+    total_pipeline_ms = 0.0
+    for s in sorted_stats:
+        total_pipeline_ms += s.total_ms
+        parts.append(
+            f"{s.node_name:<40} {s.stage:<12} {s.count:>5} {s.mean_ms:>10.2f} "
+            f"{s.std_ms:>10.2f} {s.min_ms:>10.2f} {s.max_ms:>10.2f} "
+            f"{s.median_ms:>10.2f} {s.total_ms / 1000:>10.3f}"
+        )
+
+    # Footer
+    parts.append(separator)
+    parts.append(
+        f"{'TOTAL':<40} {'':12} {'':>5} {'':>10} {'':>10} {'':>10} "
+        f"{'':>10} {'':>10} {total_pipeline_ms / 1000:>10.3f}"
+    )
+
+    # FPS line
+    frame_count = sorted_stats[0].count if sorted_stats else 0
+    if frame_count > 0:
+        avg_frame_ms = total_pipeline_ms / frame_count
+        fps = 1000.0 / avg_frame_ms if avg_frame_ms > 0 else 0.0
+        parts.append(
+            f"Average per-frame pipeline time: {avg_frame_ms:.2f} ms ({fps:.1f} FPS)"
+        )
+
+    return "\n".join(parts)
+
+
+__all__ = ["PipelineProfiler", "format_profiling_table"]
