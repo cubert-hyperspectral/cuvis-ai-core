@@ -18,16 +18,7 @@ import io
 # from contextlib import contextmanager
 
 
-def RLE2mask(rle: list, mask_width: int, mask_height: int) -> np.ndarray:
-    mask = np.zeros(mask_width * mask_height, np.uint8)
-    ids = 0
-    value = 0
-    for c in rle:
-        mask[ids : ids + c] = value
-        value = not value
-        ids += c
-    mask = mask.reshape((mask_height, mask_width), order="F")
-    return mask.astype(bool, copy=False)
+from cuvis_ai_core.data.rle import rle_list_to_mask
 
 
 class SafeWizard(JSONWizard):
@@ -156,7 +147,9 @@ class Annotation(SafeWizard):
 
         if self.mask is not None:
             size = self.mask["size"]
-            mask_np = RLE2mask(self.mask["counts"], size[0], size[1])
+            mask_np = rle_list_to_mask(
+                self.mask["counts"], height=size[0], width=size[1]
+            )
             out.mask = Mask(torch.from_numpy(mask_np))
 
         return out.to_dict_safe()

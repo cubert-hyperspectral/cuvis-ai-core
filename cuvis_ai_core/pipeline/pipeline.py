@@ -17,7 +17,7 @@ from torch import nn
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
-from cuvis_ai_core.pipeline.profiling import PipelineProfiler
+from cuvis_ai_core.pipeline.profiling import PipelineProfiler, format_profiling_table
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import (
@@ -825,6 +825,35 @@ class CuvisPipeline:
             return []
         stage_value = stage.value if stage is not None else None
         return self._profiler.snapshot(stage=stage_value)
+
+    def format_profiling_summary(
+        self,
+        stage: ExecutionStage | None = None,
+        *,
+        total_frames: int | None = None,
+    ) -> str:
+        """Return a formatted text table of profiling stats.
+
+        Convenience method that calls :meth:`get_profiling_summary` and
+        formats the result with :func:`format_profiling_table`.
+
+        Parameters
+        ----------
+        stage : ExecutionStage or None
+            If provided, only include stats for this execution stage.
+        total_frames : int or None
+            Total frames/batches processed (shown in the table header).
+
+        Returns
+        -------
+        str
+            Multi-line formatted table ready for logging or printing.
+        """
+        stats = self.get_profiling_summary(stage=stage)
+        skip_first_n = self._profiler._skip_first_n if self._profiler is not None else 0
+        return format_profiling_table(
+            stats, total_frames=total_frames, skip_first_n=skip_first_n
+        )
 
     # ------------------------------------------------------------------
     # Profiling timing helpers (private)

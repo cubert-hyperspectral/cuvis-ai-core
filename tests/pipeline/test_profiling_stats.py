@@ -11,7 +11,12 @@ import threading
 import numpy as np
 import pytest
 
-from cuvis_ai_core.pipeline.profiling import PipelineProfiler, _ScalarAccumulator
+from cuvis_ai_core.pipeline.profiling import (
+    PipelineProfiler,
+    _ScalarAccumulator,
+    format_profiling_table,
+)
+from cuvis_ai_schemas.pipeline.profiling import NodeProfilingStats
 
 
 class TestScalarAccumulator:
@@ -225,3 +230,73 @@ class TestPipelineProfiler:
             t.join(timeout=10)
 
         assert errors == [], f"Thread errors: {errors}"
+
+
+class TestFormatProfilingTable:
+    """Tests for format_profiling_table()."""
+
+    def _make_stats(self) -> list[NodeProfilingStats]:
+        return [
+            NodeProfilingStats(
+                node_name="node_a",
+                stage="inference",
+                count=100,
+                mean_ms=10.0,
+                median_ms=9.5,
+                std_ms=2.0,
+                min_ms=5.0,
+                max_ms=20.0,
+                total_ms=1000.0,
+                last_ms=10.0,
+            ),
+            NodeProfilingStats(
+                node_name="node_b",
+                stage="inference",
+                count=100,
+                mean_ms=5.0,
+                median_ms=4.8,
+                std_ms=1.0,
+                min_ms=3.0,
+                max_ms=8.0,
+                total_ms=500.0,
+                last_ms=5.0,
+            ),
+        ]
+
+    def test_empty_returns_message(self) -> None:
+        assert format_profiling_table([]) == "No profiling data collected."
+
+    def test_contains_header_and_nodes(self) -> None:
+        table = format_profiling_table(
+            self._make_stats(), total_frames=103, skip_first_n=3
+        )
+        assert "Profiling Summary (103 frames, skip_first_n=3)" in table
+        assert "node_a" in table
+        assert "node_b" in table
+        assert "TOTAL" in table
+
+    def test_sorted_by_total_descending(self) -> None:
+        table = format_profiling_table(self._make_stats())
+        lines = table.split("\n")
+        # node_a (1000ms) should appear before node_b (500ms) in data rows
+        node_a_idx = next(i for i, line in enumerate(lines) if "node_a" in line)
+        node_b_idx = next(i for i, line in enumerate(lines) if "node_b" in line)
+        assert node_a_idx < node_b_idx
+
+    def test_total_line(self) -> None:
+        table = format_profiling_table(self._make_stats())
+        assert "1.500" in table  # 1500ms = 1.500s total
+
+    def test_fps_line(self) -> None:
+        table = format_profiling_table(self._make_stats())
+        # 1500ms total / 100 frames = 15ms per frame → ~66.7 FPS
+        assert "15.00 ms" in table
+        assert "66.7 FPS" in table
+
+    def test_skip_first_n_only(self) -> None:
+        table = format_profiling_table(self._make_stats(), skip_first_n=5)
+        assert "skip_first_n=5" in table
+
+    def test_no_metadata(self) -> None:
+        table = format_profiling_table(self._make_stats())
+        assert table.startswith("Profiling Summary\n")

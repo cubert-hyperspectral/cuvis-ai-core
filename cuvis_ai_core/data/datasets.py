@@ -10,7 +10,8 @@ from loguru import logger
 from skimage.draw import polygon2mask
 from torch.utils.data import Dataset
 
-from cuvis_ai_core.data.coco_labels import Annotation, COCOData, RLE2mask
+from cuvis_ai_core.data.coco_labels import Annotation, COCOData
+from cuvis_ai_core.data.rle import rle_list_to_mask
 from cuvis_ai_core.utils.general import _resolve_measurement_indices
 
 
@@ -362,11 +363,8 @@ def create_mask(
                     write_idx = poly_mask & (category_mask == 0)
                     category_mask[write_idx] = cat_id
         if isinstance(mask, dict) and len(mask.get("counts", lambda: [])) > 0:
-            mask_width, mask_height = mask.get("size")
-            # decode RLE mask
-            decoded = RLE2mask(
-                mask.get("counts"), mask_width=mask_width, mask_height=mask_height
-            )
+            height, width = mask.get("size")
+            decoded = rle_list_to_mask(mask.get("counts"), height=height, width=width)
 
             if overlap_strategy == "overwrite":
                 write_mask = decoded

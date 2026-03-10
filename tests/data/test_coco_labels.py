@@ -15,8 +15,8 @@ from cuvis_ai_core.data.coco_labels import (
     Info,
     License,
     QueryableList,
-    RLE2mask,
 )
+from cuvis_ai_core.data.rle import rle_list_to_mask
 
 
 @pytest.fixture
@@ -336,30 +336,30 @@ class TestAnnotation:
         assert "mask" in result
 
 
-class TestRLE2mask:
+class TestRLEListToMask:
     """Test RLE to mask conversion utility."""
 
-    def test_rle2mask_basic(self):
-        """Test RLE2mask converts run-length encoding to binary mask."""
+    def test_basic(self):
+        """Test rle_list_to_mask converts run-length encoding to binary mask."""
         rle = [5, 2, 3, 10, 80]  # 5 zeros, 2 ones, 3 zeros, 10 ones, 80 zeros
-        mask = RLE2mask(rle, mask_width=10, mask_height=10)
+        mask = rle_list_to_mask(rle, height=10, width=10)
 
         assert mask.shape == (10, 10)
         assert mask.dtype == bool
         assert mask.sum() == 12  # 2 + 10 ones
 
-    def test_rle2mask_all_zeros(self):
-        """Test RLE2mask with all zeros."""
+    def test_all_zeros(self):
+        """Test rle_list_to_mask with all zeros."""
         rle = [100]
-        mask = RLE2mask(rle, mask_width=10, mask_height=10)
+        mask = rle_list_to_mask(rle, height=10, width=10)
 
         assert mask.shape == (10, 10)
         assert mask.sum() == 0
 
-    def test_rle2mask_alternating(self):
-        """Test RLE2mask with alternating pattern."""
+    def test_alternating(self):
+        """Test rle_list_to_mask with alternating pattern."""
         rle = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        mask = RLE2mask(rle, mask_width=5, mask_height=2)
+        mask = rle_list_to_mask(rle, height=2, width=5)
 
         assert mask.shape == (2, 5)
         assert mask.sum() == 5

@@ -98,6 +98,10 @@ class InferenceService:
         if inputs.text_prompt:
             batch["text_prompt"] = inputs.text_prompt
 
+        # Parse extra tensor inputs (node-specific dynamic inputs).
+        for key, tensor_proto in inputs.extra_inputs.items():
+            batch[key] = helpers.proto_to_tensor(tensor_proto)
+
         return batch
 
     def _move_batch_to_pipeline_device(
