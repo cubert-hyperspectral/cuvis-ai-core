@@ -157,6 +157,8 @@ class VideoFrameDataModule(pl.LightningDataModule):
 
     def setup(self, stage: str | None = None) -> None:
         if stage == "predict" or stage is None:
+            if self.predict_ds is not None:
+                return  # already set up (possibly wrapped with Subset)
             video_iter = VideoIterator(self.video_path)
             self.predict_ds = VideoFrameDataset(video_iter, end_frame=self.end_frame)
             self.fps = video_iter.frame_rate
