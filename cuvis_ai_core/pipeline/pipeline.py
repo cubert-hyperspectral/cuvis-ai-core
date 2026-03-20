@@ -352,6 +352,7 @@ class CuvisPipeline:
         self,
         config_path: str | Path,
         validate_nodes: bool = True,
+        save_weights: bool = True,
         include_optimizer: bool = False,
         include_scheduler: bool = False,
         metadata: PipelineMetadata | None = None,
@@ -359,19 +360,22 @@ class CuvisPipeline:
         """
         Save pipeline configuration and weights to files.
 
-        Creates two files:
+        Creates:
         1. YAML config file (structure, metadata)
-        2. .pt weights file (all node state_dicts)
+        2. Optional .pt weights file (all node state_dicts)
 
         Args:
             config_path: Path for YAML config file
             validate_nodes: If True, validate all nodes support serialization before saving
+                weights
+            save_weights: Whether to save a co-located .pt weights file.
             include_optimizer: Whether to save optimizer state
             include_scheduler: Whether to save scheduler state
             metadata: Pipeline metadata (PipelineMetadata instance with description, tags, etc.)
 
         Raises:
             RuntimeError: If validate_nodes=True and any node doesn't support serialization
+            ValueError: If optimizer/scheduler saving is requested while save_weights=False
 
         Example:
             >>> from cuvis_ai_core.training.config import PipelineMetadata
@@ -385,8 +389,13 @@ class CuvisPipeline:
             ...     )
             ... )
         """
-        # Validate nodes before saving
-        if validate_nodes:
+        if not save_weights and (include_optimizer or include_scheduler):
+            raise ValueError(
+                "include_optimizer/include_scheduler require save_weights=True"
+            )
+
+        # Validate nodes before saving weights
+        if validate_nodes and save_weights:
             invalid_nodes = []
             for node in self.nodes:
                 if hasattr(node, "validate_serialization_support"):
@@ -421,30 +430,32 @@ class CuvisPipeline:
         if metadata:
             config_dict["metadata"].update(metadata.to_dict())
 
-        state_dict: dict[str, Any] = {}
-        for node in self.nodes:
-            if hasattr(node, "state_dict"):
-                state_dict[node.name] = node.state_dict()
-
-        checkpoint: dict[str, Any] = {
-            "state_dict": state_dict,
-            "metadata": config_dict["metadata"],
-        }
-
-        if include_optimizer and hasattr(self, "optimizer"):
-            checkpoint["optimizer_state"] = self.optimizer.state_dict()  # type: ignore[attr-defined]
-
-        if include_scheduler and hasattr(self, "scheduler"):
-            checkpoint["scheduler_state"] = self.scheduler.state_dict()  # type: ignore[attr-defined]
-
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
-        weights_path = config_path.with_suffix(".pt")
-        torch.save(checkpoint, weights_path)
+        if save_weights:
+            state_dict: dict[str, Any] = {}
+            for node in self.nodes:
+                if hasattr(node, "state_dict"):
+                    state_dict[node.name] = node.state_dict()
 
-        logger.info(f"Pipeline saved: Config={config_path}, Weights={weights_path}")
+            checkpoint: dict[str, Any] = {
+                "state_dict": state_dict,
+                "metadata": config_dict["metadata"],
+            }
+
+            if include_optimizer and hasattr(self, "optimizer"):
+                checkpoint["optimizer_state"] = self.optimizer.state_dict()  # type: ignore[attr-defined]
+
+            if include_scheduler and hasattr(self, "scheduler"):
+                checkpoint["scheduler_state"] = self.scheduler.state_dict()  # type: ignore[attr-defined]
+
+            weights_path = config_path.with_suffix(".pt")
+            torch.save(checkpoint, weights_path)
+            logger.info(f"Pipeline saved: Config={config_path}, Weights={weights_path}")
+        else:
+            logger.info(f"Pipeline saved: Config={config_path} (weights skipped)")
 
     def _restore_weights_from_checkpoint(
         self,

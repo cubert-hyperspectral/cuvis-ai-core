@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Improved pipeline state serialization behavior to better preserve node state handling across save/load paths.
+- Added/updated serialization tests covering current node-state persistence scenarios.
+- Added `.cursor/` to `.gitignore` to keep local editor workspace artifacts out of commits.
+
 ## 0.2.0 - 2026-02-27
 
 - Added recursive pipeline discovery to find configs in subdirectories (e.g., `anomaly/adaclip/baseline`)
