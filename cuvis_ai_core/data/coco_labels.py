@@ -18,7 +18,7 @@ import io
 # from contextlib import contextmanager
 
 
-from cuvis_ai_core.data.rle import rle_list_to_mask
+from cuvis_ai_core.data.rle import decode_rle_mask_for_canvas
 
 
 class SafeWizard(JSONWizard):
@@ -128,6 +128,7 @@ class Annotation(SafeWizard):
     def to_torchvision(self, size: tuple[int, int]) -> dict[str, Any]:
         """Convert COCO-style bbox/segmentation/mask into torchvision tensors."""
         out = copy(self)
+        canvas_height, canvas_width = int(size[0]), int(size[1])
 
         if self.bbox is not None:
             out.bbox = BoundingBoxes(
@@ -146,9 +147,10 @@ class Annotation(SafeWizard):
             out.segmentation = Mask(torch.from_numpy(mask_np))
 
         if self.mask is not None:
-            size = self.mask["size"]
-            mask_np = rle_list_to_mask(
-                self.mask["counts"], height=size[0], width=size[1]
+            mask_np = decode_rle_mask_for_canvas(
+                self.mask,
+                target_height=canvas_height,
+                target_width=canvas_width,
             )
             out.mask = Mask(torch.from_numpy(mask_np))
 

@@ -11,7 +11,7 @@ from skimage.draw import polygon2mask
 from torch.utils.data import Dataset
 
 from cuvis_ai_core.data.coco_labels import Annotation, COCOData
-from cuvis_ai_core.data.rle import rle_list_to_mask
+from cuvis_ai_core.data.rle import decode_rle_mask_for_canvas
 from cuvis_ai_core.utils.general import _resolve_measurement_indices
 
 
@@ -121,6 +121,36 @@ class SingleCu3sDataset(Dataset):
     def __len__(self) -> int:
         return len(self.measurement_indices)
 
+    def _resolve_annotation_canvas_size(
+        self, image_id: int, cube_shape: tuple[int, int]
+    ) -> tuple[int, int]:
+        cube_height, cube_width = int(cube_shape[0]), int(cube_shape[1])
+
+        if self._coco is None:
+            return cube_height, cube_width
+
+        images = getattr(self._coco, "images", None)
+        if isinstance(images, list):
+            for image in images:
+                if getattr(image, "id", None) != image_id:
+                    continue
+                try:
+                    return int(image.height), int(image.width)
+                except (AttributeError, TypeError, ValueError):
+                    break
+
+        coco_backend = getattr(self._coco, "_coco", None)
+        image_lookup = getattr(coco_backend, "imgs", None)
+        if isinstance(image_lookup, dict):
+            image_meta = image_lookup.get(image_id)
+            if isinstance(image_meta, dict):
+                try:
+                    return int(image_meta["height"]), int(image_meta["width"])
+                except (KeyError, TypeError, ValueError):
+                    pass
+
+        return cube_height, cube_width
+
     @property
     def wavelengths_nm(self) -> np.ndarray:
         mesu = self.session.get_measurement(0)  # starts the cound from 0
@@ -152,8 +182,10 @@ class SingleCu3sDataset(Dataset):
                 # space than the cube (e.g. cuvis_pilot uses SDK view dims
                 # which can differ from cube dims). Create the mask in the
                 # COCO coordinate space, then resize to match the cube.
-                coco_img = self._coco._coco.imgs[image_id]
-                json_h, json_w = coco_img["height"], coco_img["width"]
+                json_h, json_w = self._resolve_annotation_canvas_size(
+                    image_id=image_id,
+                    cube_shape=(cube_array.shape[0], cube_array.shape[1]),
+                )
                 # cube_h, cube_w = cube_array.shape[0], cube_array.shape[1]
 
                 category_mask = create_mask(
@@ -362,9 +394,13 @@ def create_mask(
                 else:
                     write_idx = poly_mask & (category_mask == 0)
                     category_mask[write_idx] = cat_id
-        if isinstance(mask, dict) and len(mask.get("counts", lambda: [])) > 0:
-            height, width = mask.get("size")
-            decoded = rle_list_to_mask(mask.get("counts"), height=height, width=width)
+        counts = mask.get("counts") if isinstance(mask, dict) else None
+        if counts is not None and len(counts) > 0:
+            decoded = decode_rle_mask_for_canvas(
+                mask,
+                target_height=image_height,
+                target_width=image_width,
+            )
 
             if overlap_strategy == "overwrite":
                 write_mask = decoded
