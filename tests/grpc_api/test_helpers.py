@@ -64,7 +64,7 @@ class TestPipelineDiscoveryHelpers:
 
         result = list_available_pipelines(base_dir=str(pipeline_dir))
         assert len(result) == 1
-        assert result[0]["name"] == "my_pipeline"
+        assert result[0]["pipeline_path"] == "my_pipeline.yaml"
 
     def test_get_pipeline_info_with_string_base_dir(self, tmp_path):
         """Test get_pipeline_info with base_dir provided as a string."""
@@ -74,13 +74,13 @@ class TestPipelineDiscoveryHelpers:
             "metadata:\n  name: test_pipe\n  tags: [demo]\nnodes: []\nconnections: []\n"
         )
 
-        result = get_pipeline_info("test_pipe", base_dir=str(pipeline_dir))
-        assert result["name"] == "test_pipe"
-        assert result["tags"] == ["demo"]
-        assert result["has_weights"] is False
+        result = get_pipeline_info("test_pipe.yaml", base_dir=str(pipeline_dir))
+        assert result["pipeline_path"] == "test_pipe.yaml"
+        assert result["metadata"]["tags"] == ["demo"]
+        assert result["weights_path"] == ""
 
-    def test_get_pipeline_info_absolute_path_outside_base_dir(self, tmp_path):
-        """Test get_pipeline_info fallback when yaml is outside base_dir."""
+    def test_get_pipeline_info_rejects_absolute_path(self, tmp_path):
+        """Test get_pipeline_info rejects absolute paths."""
         # Create pipeline in a separate directory (outside base_dir)
         external_dir = tmp_path / "external"
         external_dir.mkdir()
@@ -93,9 +93,8 @@ class TestPipelineDiscoveryHelpers:
         base_dir = tmp_path / "base"
         base_dir.mkdir()
 
-        result = get_pipeline_info(str(yaml_file), base_dir=base_dir)
-        # Falls back to yaml_path.stem since file is outside base_dir
-        assert result["name"] == "external_pipe"
+        with pytest.raises(ValueError, match="relative path|must use '/' separators"):
+            get_pipeline_info(str(yaml_file), base_dir=base_dir)
 
 
 class TestWeightsFileResolution:

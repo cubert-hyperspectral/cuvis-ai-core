@@ -13,7 +13,7 @@ def test_complete_trainrun_serialization():
     trainrun = TrainRunConfig(
         name="test_run",
         pipeline=PipelineConfig(
-            name="test_pipeline",
+            metadata={"name": "test_pipeline"},
             nodes=[{"name": "node1", "class_name": "test.TestNode", "hparams": {}}],
             connections=[
                 {"source": "node1.outputs.data", "target": "node1.inputs.data"}
@@ -33,7 +33,9 @@ def test_complete_trainrun_serialization():
     restored = TrainRunConfig.model_validate_json(json_str)
 
     assert restored.name == trainrun.name
-    assert restored.pipeline.name == trainrun.pipeline.name
+    assert restored.pipeline.metadata is not None
+    assert trainrun.pipeline.metadata is not None
+    assert restored.pipeline.metadata.name == trainrun.pipeline.metadata.name
     assert restored.data.train_ids == trainrun.data.train_ids
     assert json_dict["training"]["max_epochs"] == 10
 

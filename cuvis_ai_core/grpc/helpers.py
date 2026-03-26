@@ -162,8 +162,24 @@ def tensor_to_proto(tensor: torch.Tensor) -> cuvis_ai_pb2.Tensor:
     Raises:
         ValueError: If dtype is not supported
     """
+    if not isinstance(tensor, torch.Tensor):
+        actual_type = f"{type(tensor).__module__}.{type(tensor).__name__}"
+        actual_dtype = getattr(tensor, "dtype", None)
+        actual_shape = getattr(tensor, "shape", None)
+        raise ValueError(
+            "tensor_to_proto expects a torch.Tensor, "
+            f"got {actual_type} (dtype={actual_dtype}, shape={actual_shape}). "
+            "If this is a NumPy array, use numpy_to_proto instead."
+        )
+
     if tensor.dtype not in DTYPE_TORCH_TO_PROTO:
-        raise ValueError(f"Unsupported torch dtype: {tensor.dtype}")
+        supported_dtypes = ", ".join(
+            str(dtype) for dtype in sorted(DTYPE_TORCH_TO_PROTO, key=str)
+        )
+        raise ValueError(
+            f"Unsupported torch dtype: {tensor.dtype}. "
+            f"Supported dtypes: {supported_dtypes}."
+        )
 
     # Convert to numpy first to get raw bytes
     arr = tensor.detach().cpu().numpy()
@@ -497,11 +513,9 @@ def list_available_pipelines(
 
     Returns:
         List of dictionaries with pipeline information:
-        - name: str (relative path without .yaml extension, e.g., "anomaly/adaclip/baseline")
+        - pipeline_path: str (relative path with extension, e.g., "anomaly/adaclip/baseline.yaml")
         - path: str (full path to pipeline file)
         - metadata: dict (pipeline metadata)
-        - tags: list[str] (pipeline tags)
-        - has_weights: bool (whether .pt file exists)
         - weights_path: str (path to .pt file if exists, empty string otherwise)
 
     Raises:
@@ -528,50 +542,79 @@ def list_available_pipelines(
 
         # Check for co-located .pt file
         pt_path = yaml_path.with_suffix(".pt")
-        has_weights = pt_path.exists()
 
-        # Compute name as relative path from base_dir without .yaml extension
+        # Compute pipeline_path as relative path from base_dir with extension.
         rel_path = yaml_path.relative_to(base_dir_path)
-        pipeline_name = rel_path.with_suffix("").as_posix()
+        pipeline_path = rel_path.as_posix()
 
         pipelines.append(
             {
-                "name": pipeline_name,
+                "pipeline_path": pipeline_path,
                 "path": str(yaml_path),
                 "metadata": metadata,
-                "tags": metadata["tags"],
-                "has_weights": has_weights,
-                "weights_path": str(pt_path) if has_weights else "",
+                "weights_path": str(pt_path) if pt_path.exists() else "",
             }
         )
 
     return pipelines
 
 
+def _validate_discovery_pipeline_path(pipeline_path: str) -> str:
+    """Validate a discovery request pipeline path and return canonical form.
+
+    Rules:
+    - Must be relative
+    - Must use forward slashes
+    - Must include .yaml extension
+    - Must not contain '.' or '..' path segments
+    """
+    if not pipeline_path:
+        raise ValueError("pipeline_path must not be empty")
+
+    if "\\" in pipeline_path:
+        raise ValueError("pipeline_path must use '/' separators")
+
+    if pipeline_path.startswith("/"):
+        raise ValueError("pipeline_path must be a relative path")
+
+    path = Path(pipeline_path)
+    if path.is_absolute():
+        raise ValueError("pipeline_path must be a relative path")
+
+    if path.suffix != ".yaml":
+        raise ValueError("pipeline_path must include the .yaml extension")
+
+    parts = pipeline_path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("pipeline_path contains invalid path segments")
+
+    return "/".join(parts)
+
+
 def get_pipeline_info(
-    pipeline_name: str,
+    pipeline_path: str,
     base_dir: str | Path | None = None,
     include_yaml_content: bool = False,
 ) -> dict[str, Any]:
     """Get detailed information about a specific pipeline.
 
     Args:
-        pipeline_name: Pipeline name or relative path (e.g., "statistical_based" or "anomaly/adaclip/baseline")
+        pipeline_path: Relative path with .yaml extension
+            (e.g., "statistical_based.yaml" or "anomaly/adaclip/baseline.yaml")
         base_dir: Base directory for pipeline configs (defaults to server base dir / pipeline)
         include_yaml_content: Whether to include full YAML content in response
 
     Returns:
         Dictionary with pipeline information:
-        - name: str
+        - pipeline_path: str
         - path: str
         - metadata: dict
-        - tags: list[str]
-        - has_weights: bool
         - weights_path: str
         - yaml_content: str (optional)
 
     Raises:
-        FileNotFoundError: If pipeline file cannot be found
+        ValueError: If pipeline_path is invalid
+        FileNotFoundError: If pipeline file cannot be found under base_dir
     """
     # Resolve base directory for relative name computation
     if base_dir is None:
@@ -579,30 +622,33 @@ def get_pipeline_info(
     else:
         base_dir_path = Path(base_dir) if isinstance(base_dir, str) else base_dir
 
-    # Resolve pipeline path
-    yaml_path = resolve_pipeline_path(pipeline_name, base_dir_path)
+    canonical_pipeline_path = _validate_discovery_pipeline_path(pipeline_path)
+    base_dir_resolved = base_dir_path.resolve()
+    yaml_path = (base_dir_resolved / canonical_pipeline_path).resolve()
+
+    try:
+        yaml_path.relative_to(base_dir_resolved)
+    except ValueError as exc:
+        raise ValueError(
+            "pipeline_path must stay within the server pipeline root"
+        ) from exc
+
+    if not yaml_path.exists() or not yaml_path.is_file():
+        raise FileNotFoundError(
+            f"Pipeline configuration not found: {canonical_pipeline_path}"
+        )
 
     # Extract metadata
     metadata = extract_pipeline_metadata(yaml_path)
 
     # Check for weights
     pt_path = yaml_path.with_suffix(".pt")
-    has_weights = pt_path.exists()
-
-    # Compute name as relative path from base_dir when possible
-    try:
-        rel_path = yaml_path.relative_to(base_dir_path)
-        result_name = rel_path.with_suffix("").as_posix()
-    except ValueError:
-        result_name = yaml_path.stem
 
     result = {
-        "name": result_name,
+        "pipeline_path": canonical_pipeline_path,
         "path": str(yaml_path),
         "metadata": metadata,
-        "tags": metadata["tags"],
-        "has_weights": has_weights,
-        "weights_path": str(pt_path) if has_weights else "",
+        "weights_path": str(pt_path) if pt_path.exists() else "",
     }
 
     # Optionally include YAML content

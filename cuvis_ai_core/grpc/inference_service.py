@@ -88,6 +88,19 @@ class InferenceService:
         if inputs.HasField("mask"):
             batch["mask"] = helpers.proto_to_tensor(inputs.mask)
 
+        if inputs.HasField("rgb_image"):
+            batch["rgb_image"] = helpers.proto_to_tensor(inputs.rgb_image)
+
+        if inputs.HasField("frame_id"):
+            frame_id = helpers.proto_to_tensor(inputs.frame_id)
+            if frame_id.numel() > 0:
+                batch["frame_id"] = frame_id
+
+        if inputs.HasField("mesu_index"):
+            mesu_index = helpers.proto_to_tensor(inputs.mesu_index)
+            if mesu_index.numel() > 0:
+                batch["mesu_index"] = mesu_index
+
         # Parse structured inputs (if provided)
         if inputs.HasField("bboxes"):
             batch["bboxes"] = self._parse_bounding_boxes(inputs.bboxes)

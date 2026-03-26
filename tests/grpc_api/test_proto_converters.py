@@ -162,6 +162,30 @@ class TestTorchConversion:
 
         torch.testing.assert_close(result, tensor)
 
+    def test_tensor_to_proto_rejects_numpy_input_with_actionable_error(self):
+        """Test tensor_to_proto fails fast on non-torch input with guidance."""
+        arr = np.zeros((2, 2), dtype=np.float32)
+
+        with pytest.raises(ValueError) as exc:
+            helpers.tensor_to_proto(arr)  # type: ignore[arg-type]
+
+        message = str(exc.value)
+        assert "torch.Tensor" in message
+        assert "numpy.ndarray" in message
+        assert "numpy_to_proto" in message
+
+    def test_tensor_to_proto_lists_supported_dtypes_for_torch_dtype_mismatch(self):
+        """Test unsupported torch dtype errors include supported alternatives."""
+        tensor = torch.ones((2, 2), dtype=torch.complex64)
+
+        with pytest.raises(ValueError) as exc:
+            helpers.tensor_to_proto(tensor)
+
+        message = str(exc.value)
+        assert "Unsupported torch dtype: torch.complex64" in message
+        assert "Supported dtypes:" in message
+        assert "torch.float32" in message
+
 
 class TestProcessingModeMapping:
     """Test ProcessingMode enum mapping"""

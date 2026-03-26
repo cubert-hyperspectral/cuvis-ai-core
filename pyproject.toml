@@ -60,6 +60,7 @@ dependencies = [
     "scikit-image>=0.25.2",
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
+    "scikit-learn>=1.8.0",
 ]
 
 [project.optional-dependencies]
@@ -178,4 +179,6 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-cuvis-ai-schemas = { path = "D:/code-repos/cuvis-ai-schemas/schemas-tracking", editable = true }
+# cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
+cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
+

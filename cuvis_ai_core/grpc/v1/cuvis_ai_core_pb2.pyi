@@ -174,36 +174,22 @@ class PipelineMetadata(_message.Message):
     ) -> None: ...
 
 class PipelineInfo(_message.Message):
-    __slots__ = (
-        "name",
-        "path",
-        "metadata",
-        "tags",
-        "has_weights",
-        "weights_path",
-        "yaml_content",
-    )
-    NAME_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("pipeline_path", "path", "metadata", "weights_path", "yaml_content")
+    PIPELINE_PATH_FIELD_NUMBER: _ClassVar[int]
     PATH_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
-    TAGS_FIELD_NUMBER: _ClassVar[int]
-    HAS_WEIGHTS_FIELD_NUMBER: _ClassVar[int]
     WEIGHTS_PATH_FIELD_NUMBER: _ClassVar[int]
     YAML_CONTENT_FIELD_NUMBER: _ClassVar[int]
-    name: str
+    pipeline_path: str
     path: str
     metadata: PipelineMetadata
-    tags: _containers.RepeatedScalarFieldContainer[str]
-    has_weights: bool
     weights_path: str
     yaml_content: str
     def __init__(
         self,
-        name: _Optional[str] = ...,
+        pipeline_path: _Optional[str] = ...,
         path: _Optional[str] = ...,
         metadata: _Optional[_Union[PipelineMetadata, _Mapping]] = ...,
-        tags: _Optional[_Iterable[str]] = ...,
-        has_weights: _Optional[bool] = ...,
         weights_path: _Optional[str] = ...,
         yaml_content: _Optional[str] = ...,
     ) -> None: ...
@@ -443,25 +429,25 @@ class SchedulerParamsSchema(_message.Message):
         self, parameters: _Optional[_Iterable[_Union[ParamSpec, _Mapping]]] = ...
     ) -> None: ...
 
-class ListAvailablePipelineesRequest(_message.Message):
+class ListAvailablePipelinesRequest(_message.Message):
     __slots__ = ("filter_tag",)
     FILTER_TAG_FIELD_NUMBER: _ClassVar[int]
     filter_tag: str
     def __init__(self, filter_tag: _Optional[str] = ...) -> None: ...
 
-class ListAvailablePipelineesResponse(_message.Message):
-    __slots__ = ("pipelinees",)
-    PIPELINEES_FIELD_NUMBER: _ClassVar[int]
-    pipelinees: _containers.RepeatedCompositeFieldContainer[PipelineInfo]
+class ListAvailablePipelinesResponse(_message.Message):
+    __slots__ = ("pipelines",)
+    PIPELINES_FIELD_NUMBER: _ClassVar[int]
+    pipelines: _containers.RepeatedCompositeFieldContainer[PipelineInfo]
     def __init__(
-        self, pipelinees: _Optional[_Iterable[_Union[PipelineInfo, _Mapping]]] = ...
+        self, pipelines: _Optional[_Iterable[_Union[PipelineInfo, _Mapping]]] = ...
     ) -> None: ...
 
 class GetPipelineInfoRequest(_message.Message):
-    __slots__ = ("pipeline_name",)
-    PIPELINE_NAME_FIELD_NUMBER: _ClassVar[int]
-    pipeline_name: str
-    def __init__(self, pipeline_name: _Optional[str] = ...) -> None: ...
+    __slots__ = ("pipeline_path",)
+    PIPELINE_PATH_FIELD_NUMBER: _ClassVar[int]
+    pipeline_path: str
+    def __init__(self, pipeline_path: _Optional[str] = ...) -> None: ...
 
 class GetPipelineInfoResponse(_message.Message):
     __slots__ = ("pipeline_info",)
