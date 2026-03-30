@@ -1,166 +1,223 @@
-import os
+"""Public dataset registry and downloader for CUVIS.AI.
 
-import gdown
+Downloads datasets from Hugging Face Hub using ``huggingface_hub.snapshot_download``.
+"""
+
+import os
+from pathlib import Path
 
 
 class PublicDatasets:
+    """Registry and downloader for public CUVIS.AI datasets."""
+
     @classmethod
     def download_dataset(
-        cls, dataset_name, *, download_path: str = ".", entries: list = None
+        cls,
+        dataset_name: str,
+        *,
+        download_path: str = ".",
+        force: bool = False,
     ) -> bool:
+        """Download a dataset by name.
+
+        Args:
+            dataset_name: Key in the dataset registry.
+            download_path: Directory to download into.
+            force: Re-download even if the target directory exists.
+
+        Returns:
+            True on success (or if data already present), False on error.
+        """
         try:
             dset = cls._datasets[dataset_name]
         except KeyError:
             print(f"Dataset '{dataset_name}' not found.")
+            print(f"Available: {', '.join(cls._canonical_names())}")
             return False
 
-        if entries is None:
-            to_download = dset[:]
-        else:
-            to_download = []
-            for e in entries:
-                try:
-                    to_download.append(dset[e])
-                except IndexError:
-                    print(f"Entry {e} does not exist in dataset '{dataset_name}'")
+        target_dir = os.path.join(download_path, dset["target_dir"])
 
-        if len(to_download) == 0:
-            print("Nothing to download.")
+        if os.path.isdir(target_dir) and not force:
+            print(f"Dataset '{dataset_name}' already exists at {target_dir}")
+            print("Use force=True to re-download.")
+            return True
+
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            print("huggingface_hub is not installed.")
+            print("Install with: pip install huggingface-hub")
             return False
 
         if not os.path.exists(download_path):
-            print(f"Directory '{download_path}' does not exist. It will be created.")
             os.makedirs(download_path)
-        elif not os.path.isdir(download_path):
-            print(
-                f"Path '{download_path}' cannot be used. It points to an existing file."
+
+        print(f"Downloading '{dataset_name}' from Hugging Face...")
+        print(f"  Repository:  {dset['repo_id']}")
+        print(f"  Size:        {dset['size']}")
+        print(f"  Destination: {target_dir}")
+
+        try:
+            snapshot_download(
+                repo_id=dset["repo_id"],
+                repo_type="dataset",
+                local_dir=target_dir,
             )
+        except Exception as e:
+            print(f"Download failed: {e}")
+            print(f"Manual download: https://huggingface.co/datasets/{dset['repo_id']}")
             return False
 
-        items = []
-        if isinstance(to_download[0], list):
-            for entry in to_download:
-                items.extend(entry)
-            total_items = len(items)
-            print(f"Downloading {total_items} files from dataset '{dataset_name}'")
-            for i in items:
-                try:
-                    gdown.download(
-                        id=i[0], output=os.path.join(download_path, i[1]), resume=True
-                    )
-                except Exception as e:
-                    print("Failed to fetch file:", i[1])
-                    print("Error:", e)
-        else:
-            items = to_download
-            total_items = len(items)
-            print(f"Downloading {total_items} folders from dataset '{dataset_name}'")
-            for i in items:
-                try:
-                    gdown.download_folder(
-                        id=i[0], output=os.path.join(download_path, i[1])
-                    )
-                except Exception as e:
-                    print("Failed to fetch folder:", i[1])
-                    print("Error:", e)
-
+        print(f"Downloaded '{dataset_name}' successfully.")
         return True
 
     @classmethod
-    def list_datasets(cls, verbose: bool = False):
+    def list_datasets(cls, verbose: bool = False) -> None:
+        """Print available datasets.
+
+        Args:
+            verbose: Show extra detail (file listing after download).
+        """
+        seen_ids: set[int] = set()
+        aliases: dict[int, list[str]] = {}
+
+        # Collect aliases
         for name, data in cls._datasets.items():
-            print(f"Dataset '{name}':")
-            if isinstance(data[0], list):
-                print(f" -> Contains {sum([len(d) for d in data])} items")
-                if verbose:
-                    print("  Listing items:")
-                    count = 0
-                    for d in data:
-                        print("    Entry", count)
-                        for i in d:
-                            print("    ", i[1])
-                        count += 1
-            else:
-                print(f" -> Contains {len(data)} datafolder(s)")
-                if verbose:
-                    for d in data:
-                        print("    ", d[1])
+            obj_id = id(data)
+            aliases.setdefault(obj_id, []).append(name)
 
-    _datasets = {
-        "GrowRipe_Samples": [
-            [
-                ("1cNDIG9nsHqGNb-wVsa8O3bVJ_bQ6Ls-b", "GrowRipe_Brix_8_2_A.cu3s"),
-                ("1J0kZiy5Ht6qqETk_vpBPXBX_3dweUuHk", "GrowRipe_Brix_8_2_A.json"),
-                ("1ocRJrRBrqtPpA_wMXYFp1GLOSvtJAOty", "GrowRipe_Brix_8_2_B.cu3s"),
-                ("1bTPfFkoGLnI_FBXsEVnypN3SyFYOo0rD", "GrowRipe_Brix_8_2_B.json"),
-            ],
-            [
-                ("1CRPZ7c5EBoAhPAKp6uIhohUTAHvaZYaY", "GrowRipe_Brix_7_7_A.cu3s"),
-                ("1rDYbRa-dISAjfnSTeb6bO4P9379eOBiG", "GrowRipe_Brix_7_7_A.json"),
-                ("1PjnE3pwGxZPJJFuUriYIF4txlCJ7M2c6", "GrowRipe_Brix_7_7_B.cu3s"),
-                ("1eKKMxIKf9CzJj2f9pSNev-GCNfLTqK9w", "GrowRipe_Brix_7_7_B.json"),
-            ],
-            [
-                ("1P_HKgaBUqOPObd9QMPouzWZCBmes9EKM", "GrowRipe_Brix_7_2_A.cu3s"),
-                ("1tw1zlqn3EYDHssimANxOEUGjHRh2JQ_v", "GrowRipe_Brix_7_2_A.json"),
-                ("15_8dOSnIC6GYWw_Bf9f12zO-pU80Xbi_", "GrowRipe_Brix_7_2_B.cu3s"),
-                ("1y4ZeC1jbPLlZ0EyD1JZI_J866XT3K2Ou", "GrowRipe_Brix_7_2_B.json"),
-            ],
-            [
-                ("1OS7lfA-D051pKOzLtPCZXBxRMFl_hTe_", "GrowRipe_Brix_6_8_A.cu3s"),
-                ("1atPnU4ghyiSHRW6xjnEVk4rnb3Y4c6Ke", "GrowRipe_Brix_6_8_A.json"),
-                ("115K-dZjrXiJq1ykig_eWMGKHNVd7Ps9I", "GrowRipe_Brix_6_8_B.cu3s"),
-                ("1RhAuIpAKFt6OdDGsqdvJ2f20IEryRcN5", "GrowRipe_Brix_6_8_B.json"),
-            ],
-            [
-                ("1B_mbHuVP6sAksB7_gHgbslkAblur8BPF", "GrowRipe_Brix_6_4_A.cu3s"),
-                ("1wUk8RJiG_E5kNYXH-QMzwi4JNyvyL-Yr", "GrowRipe_Brix_6_4_A.json"),
-                ("1TKEKho9GVmIVr2kUL_ANh87h9Fg1JYK6", "GrowRipe_Brix_6_4_B.cu3s"),
-                ("1Iw3QGIR9NPeNn6xDLonWIpCp399MPsAv", "GrowRipe_Brix_6_4_B.json"),
-            ],
-            [
-                ("1cPaz22IIagohswp2ewTUb4F1lG7y-W_H", "GrowRipe_Brix_5_8_A.cu3s"),
-                ("1UtiJR3Hwp_TLn2qUJwXowYYw61okFtUO", "GrowRipe_Brix_5_8_A.json"),
-                ("1ESRL4hy2hahUq2wh-3ElTg4L8WsLJC1Z", "GrowRipe_Brix_5_8_B.cu3s"),
-                ("1paH74cP-dsymBEOgtvD-W8L30xNJ8YN-", "GrowRipe_Brix_5_8_B.json"),
-            ],
-            [
-                ("1IreuvLnwibDtFBhfpp8b4icm-DQhVMYc", "GrowRipe_Brix_5_2_A.cu3s"),
-                ("1O--6cKkLKPQWCb3WtasTPHjQFUVMTckk", "GrowRipe_Brix_5_2_A.json"),
-                ("1lTQ6jC89geGERzBCdiCAlP6yz0YFMO7D", "GrowRipe_Brix_5_2_B.cu3s"),
-                ("1w9ncos1BVLZzwNyaRPZ55WL6HC43kFbT", "GrowRipe_Brix_5_2_B.json"),
-            ],
-            [
-                ("1ZkyvUoXGUDM_yOyr7-9XPg7nXQJQgz_K", "GrowRipe_Brix_4_6_A.cu3s"),
-                ("1SRvdKj8phvb9H_yAidX_RvZFgk0thJOn", "GrowRipe_Brix_4_6_A.json"),
-                ("1j6RM6pHMlSDY6ZpOi2GK0mw8RA_TK8zx", "GrowRipe_Brix_4_6_B.cu3s"),
-                ("1nStSqvcsEYTitK6PXr-AtJBdgvu5BB9L", "GrowRipe_Brix_4_6_B.json"),
-            ],
-        ],
-        "GrowRipe_FULL": [
-            ("1MNitRfQJe9ZsHDRWGvT-7otW6yqmJyU_", "GrowRipe"),
-        ],
-        "Aquarium": [
-            [
-                ("1eFau2tUcke6hx5p1ESvK9X4ImovLkkrj", "Aquarium_Sample.cu3s"),
-            ],
-        ],
-        "Lentils_Small": [
-            [
-                ("1vwj6IC0kTFDaflm_K-SOgf5AKmZKGrxr", "Lentils_000.cu3s"),
-                ("1_nMjSjc6mowGfx4vaDbR6eAkS0I0nGye", "Lentils_000.info"),
-                ("1MXcSPgHi0hl-VM37zDAXuspIs1-PNGff", "Lentils_000.json"),
-            ]
-        ],
+        print(f"{'Name':<25s} {'Size':>8s}  Description")
+        print("-" * 70)
+
+        for name, data in cls._datasets.items():
+            obj_id = id(data)
+            if obj_id in seen_ids:
+                continue
+            seen_ids.add(obj_id)
+
+            aka = [a for a in aliases[obj_id] if a != name]
+            alias_str = f"  (alias: {', '.join(aka)})" if aka else ""
+            print(f"  {name:<23s} {data['size']:>8s}  {data['description']}{alias_str}")
+
+            if verbose:
+                print(f"    repo: {data['repo_id']}")
+                print(f"    dir:  {data['target_dir']}")
+
+    @classmethod
+    def get_target_dir(cls, dataset_name: str) -> str:
+        """Return the target directory name for a dataset.
+
+        Args:
+            dataset_name: Key in the dataset registry.
+
+        Returns:
+            Directory name the dataset downloads into.
+
+        Raises:
+            KeyError: If *dataset_name* is not in the registry.
+        """
+        return cls._datasets[dataset_name]["target_dir"]
+
+    @classmethod
+    def _canonical_names(cls) -> list[str]:
+        """Return dataset names without aliases."""
+        seen: set[int] = set()
+        names: list[str] = []
+        for name, data in cls._datasets.items():
+            obj_id = id(data)
+            if obj_id not in seen:
+                seen.add(obj_id)
+                names.append(name)
+        return names
+
+    # ------------------------------------------------------------------
+    # Dataset registry
+    # ------------------------------------------------------------------
+
+    _datasets: dict[str, dict] = {
+        "Lentils_Anomaly": {
+            "repo_id": "cubert-gmbh/XMR_Lentils",
+            "target_dir": "Lentils",
+            "description": "Lentils anomaly detection dataset",
+            "size": "~200MB",
+        },
+        "Blood_Perfusion": {
+            "repo_id": "cubert-gmbh/XMR_Blood_Perfusion",
+            "target_dir": "XMR_Blood_Perfusion",
+            "description": "XMR blood perfusion reflectance dataset",
+            "size": "~7GB",
+        },
     }
-    # Alias
-    _datasets["Lentils"] = _datasets["Lentils_Small"]
+
+    # Convenience aliases
+    _datasets["lentils"] = _datasets["Lentils_Anomaly"]
+    _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
 
 
-# if __name__ == "__main__":
-#     PublicDatasets.list_datasets(verbose=True)
-#     base_path = "../data/Lentils_SMALL"
-#     data_down = PublicDatasets()
-#     data_down.list_datasets(verbose=True)
-#     #data_down.download_dataset("Lentils_SMALL", download_path=base_path)
-#     data_down.download_dataset("Lentils_2_0_XMR", download_path=base_path)
+def download_data_cli() -> None:
+    """CLI entry point for dataset management (``uv run dataset``)."""
+    import shutil
+
+    import click
+
+    @click.group()
+    def cli() -> None:
+        """CUVIS.AI dataset management."""
+
+    @cli.command("list")
+    @click.option("--verbose", "-v", is_flag=True, help="Show extra detail.")
+    def list_cmd(verbose: bool) -> None:
+        """List available datasets."""
+        PublicDatasets.list_datasets(verbose=verbose)
+
+    @cli.command()
+    @click.argument("name")
+    @click.option(
+        "--data-dir",
+        type=click.Path(path_type=Path),
+        default=Path.cwd() / "data",
+        help="Data directory (default: ./data).",
+    )
+    @click.option("--force", is_flag=True, help="Re-download even if data exists.")
+    def download(name: str, data_dir: Path, force: bool) -> None:
+        """Download a dataset by NAME."""
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        success = PublicDatasets.download_dataset(
+            name,
+            download_path=str(data_dir),
+            force=force,
+        )
+
+        if not success:
+            raise SystemExit(1)
+
+        # Post-download validation
+        try:
+            target = data_dir / PublicDatasets.get_target_dir(name)
+        except KeyError:
+            return
+        if target.exists():
+            cu3s_files = list(target.rglob("*.cu3s"))
+            if cu3s_files:
+                click.echo(f"\nValidation: found {len(cu3s_files)} .cu3s file(s)")
+                for f in cu3s_files[:5]:
+                    click.echo(f"  - {f.relative_to(data_dir)}")
+            else:
+                click.echo("\nWarning: no .cu3s files found in downloaded data")
+
+        # Lentils symlink for case-insensitive access
+        if name.lower() in ("lentils", "lentilsanomaly"):
+            upper = data_dir / "Lentils"
+            lower = data_dir / "lentils"
+            if upper.exists() and not lower.exists():
+                try:
+                    lower.symlink_to("Lentils", target_is_directory=True)
+                    click.echo("Created symlink: lentils -> Lentils")
+                except OSError:
+                    click.echo(
+                        "Could not create symlink, copying Lentils -> lentils ..."
+                    )
+                    shutil.copytree(upper, lower)
+
+    cli()

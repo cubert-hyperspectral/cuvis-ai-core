@@ -53,7 +53,6 @@ dependencies = [
     # Type hints and validation
     "typing-extensions>=4.0.0",
     "pydantic>=2.12.5",
-    "gdown>=5.2.1",
     "dataclass-wizard",
     "dotenv>=0.9.9",
     "ruff>=0.14.11",
@@ -64,6 +63,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hf = [
+    "huggingface-hub>=0.20.0",
+]
 
 dev = [
     "ipykernel",
