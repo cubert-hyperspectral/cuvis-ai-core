@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added parsing support for optional `BoundingBox.object_id` values in gRPC inference batches so runtime SAM3 bbox prompts can preserve stable object IDs.
 - Changed pipeline discovery gRPC handling to `pipeline_path`-based requests/responses (with `.yaml` extension) and added path validation against traversal/absolute inputs.
 - Added `rgb_image`, `frame_id`, and `mesu_index` parsing in inference input batches, with dedicated gRPC tests for present/empty semantics.
 - Hardened tensor conversion diagnostics in gRPC helpers and updated local schema dependency wiring in `pyproject.toml`.

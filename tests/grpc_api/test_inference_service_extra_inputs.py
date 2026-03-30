@@ -106,3 +106,50 @@ def test_parse_mesu_index_absent_or_empty() -> None:
         )
     )
     assert "mesu_index" not in batch_empty
+
+
+def test_parse_bboxes_preserves_optional_object_id() -> None:
+    service = InferenceService(SessionManager())
+
+    inputs = cuvis_ai_pb2.InputBatch(
+        bboxes=cuvis_ai_pb2.BoundingBoxes(
+            boxes=[
+                cuvis_ai_pb2.BoundingBox(
+                    element_id=0,
+                    object_id=17,
+                    x_min=5.0,
+                    y_min=6.0,
+                    x_max=25.0,
+                    y_max=30.0,
+                ),
+                cuvis_ai_pb2.BoundingBox(
+                    element_id=0,
+                    x_min=1.0,
+                    y_min=2.0,
+                    x_max=3.0,
+                    y_max=4.0,
+                ),
+            ]
+        )
+    )
+
+    batch = service._parse_input_batch(inputs)
+
+    assert "bboxes" in batch
+    assert batch["bboxes"] == [
+        {
+            "element_id": 0,
+            "object_id": 17,
+            "x_min": 5.0,
+            "y_min": 6.0,
+            "x_max": 25.0,
+            "y_max": 30.0,
+        },
+        {
+            "element_id": 0,
+            "x_min": 1.0,
+            "y_min": 2.0,
+            "x_max": 3.0,
+            "y_max": 4.0,
+        },
+    ]

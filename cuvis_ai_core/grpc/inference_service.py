@@ -171,16 +171,19 @@ class InferenceService:
         self, bboxes_proto: cuvis_ai_pb2.BoundingBoxes
     ) -> list[dict]:
         """Parse bounding boxes from proto into dictionaries."""
-        return [
-            {
+        parsed_boxes: list[dict] = []
+        for box in bboxes_proto.boxes:
+            parsed = {
                 "element_id": box.element_id,
                 "x_min": box.x_min,
                 "y_min": box.y_min,
                 "x_max": box.x_max,
                 "y_max": box.y_max,
             }
-            for box in bboxes_proto.boxes
-        ]
+            if box.HasField("object_id"):
+                parsed["object_id"] = box.object_id
+            parsed_boxes.append(parsed)
+        return parsed_boxes
 
     def _parse_points(self, points_proto: cuvis_ai_pb2.Points) -> list[dict]:
         """Parse points from proto into dictionaries."""
