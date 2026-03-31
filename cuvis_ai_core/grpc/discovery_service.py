@@ -28,7 +28,7 @@ class DiscoveryService:
             metadata = pipeline_dict["metadata"]
             pipeline_info = cuvis_ai_pb2.PipelineInfo(
                 pipeline_path=pipeline_dict["pipeline_path"],
-                path=pipeline_dict["path"],
+                resolved_path=pipeline_dict["path"],
                 metadata=cuvis_ai_pb2.PipelineMetadata(
                     name=metadata["name"],
                     description=metadata["description"],
@@ -58,7 +58,7 @@ class DiscoveryService:
         metadata = pipeline_dict["metadata"]
         pipeline_info = cuvis_ai_pb2.PipelineInfo(
             pipeline_path=pipeline_dict["pipeline_path"],
-            path=pipeline_dict["path"],
+            resolved_path=pipeline_dict["path"],
             metadata=cuvis_ai_pb2.PipelineMetadata(
                 name=metadata["name"],
                 description=metadata["description"],

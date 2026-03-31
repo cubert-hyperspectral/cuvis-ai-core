@@ -290,7 +290,9 @@ class TestWorkflow4_DiscoverAndInspect:
         session_id = session_response.session_id
 
         # Load discovered pipeline
-        load_pipeline_from_file(grpc_stub, session_id, info_response.pipeline_info.path)
+        load_pipeline_from_file(
+            grpc_stub, session_id, info_response.pipeline_info.resolved_path
+        )
         assert session_id
 
         # Cleanup
