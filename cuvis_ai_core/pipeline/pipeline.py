@@ -806,7 +806,7 @@ class CuvisPipeline:
 
         if reset or self._profiler is None:
             self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
-        elif enabled and self._profiler._skip_first_n != skip_first_n:
+        elif enabled and self._profiler.skip_first_n != skip_first_n:
             # skip_first_n changed without reset — recreate per spec
             self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
 
@@ -861,7 +861,7 @@ class CuvisPipeline:
             Multi-line formatted table ready for logging or printing.
         """
         stats = self.get_profiling_summary(stage=stage)
-        skip_first_n = self._profiler._skip_first_n if self._profiler is not None else 0
+        skip_first_n = self._profiler.skip_first_n if self._profiler is not None else 0
         return format_profiling_table(
             stats, total_frames=total_frames, skip_first_n=skip_first_n
         )

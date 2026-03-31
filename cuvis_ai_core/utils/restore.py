@@ -1,6 +1,5 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
-import time
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -140,7 +139,7 @@ def restore_pipeline(
         # Process all batches (outputs discarded — sink nodes write to disk)
         total_frames = len(data)
         global_step = 0
-        forward_times = []
+        pipeline.set_profiling(enabled=True)
         with torch.no_grad():
             for batch in tqdm(
                 dataloader, total=total_frames, desc="Inference", unit="frame"
@@ -155,18 +154,13 @@ def restore_pipeline(
                     batch_idx=global_step,
                     global_step=global_step,
                 )
-                t0 = time.perf_counter()
                 pipeline.forward(batch=batch, context=context)
-                t1 = time.perf_counter()
-                forward_times.append(t1 - t0)
                 global_step += 1
 
-        avg_time = sum(forward_times) / len(forward_times)
-        total_time = sum(forward_times)
-        fps = global_step / total_time
         logger.info(
-            f"Inference complete: {global_step} frames processed in {total_time:.2f}s "
-            f"(avg forward call: {avg_time * 1000:.1f}ms, {fps:.1f} fps)"
+            pipeline.format_profiling_summary(
+                stage=ExecutionStage.INFERENCE, total_frames=global_step
+            )
         )
 
         # Finalize video outputs from any ToVideoNode in the pipeline

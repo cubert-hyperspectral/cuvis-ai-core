@@ -242,6 +242,11 @@ class PipelineProfiler:
         self._accumulators: dict[tuple[str, str], _ScalarAccumulator] = {}
         self._lock = threading.Lock()
 
+    @property
+    def skip_first_n(self) -> int:
+        """Number of initial samples discarded per accumulator key."""
+        return self._skip_first_n
+
     def record(self, stage_value: str, node_name: str, elapsed_ms: float) -> None:
         """Record a timing sample for the given stage and node."""
         key = (stage_value, node_name)
