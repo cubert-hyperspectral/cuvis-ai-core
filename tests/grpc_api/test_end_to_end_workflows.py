@@ -274,21 +274,25 @@ class TestWorkflow4_DiscoverAndInspect:
             cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="anomaly")
         )
         assert len(anomaly_response.pipelines) >= 1
-        assert any(c.name == "rx_detector" for c in anomaly_response.pipelines)
+        assert any(
+            c.pipeline_path.endswith(".yaml") for c in anomaly_response.pipelines
+        )
 
         # Step 3: GetPipelineInfo for specific pipeline
         info_response = grpc_stub.GetPipelineInfo(
-            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_name="rx_detector")
+            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="rx_detector.yaml")
         )
-        assert info_response.pipeline_info.name == "rx_detector"
-        assert "anomaly" in info_response.pipeline_info.tags
+        assert info_response.pipeline_info.pipeline_path == "rx_detector.yaml"
+        assert "anomaly" in info_response.pipeline_info.metadata.tags
 
         # Step 4: CreateSession based on discovered pipeline using new four-step workflow
         session_response = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_response.session_id
 
         # Load discovered pipeline
-        load_pipeline_from_file(grpc_stub, session_id, info_response.pipeline_info.path)
+        load_pipeline_from_file(
+            grpc_stub, session_id, info_response.pipeline_info.resolved_path
+        )
         assert session_id
 
         # Cleanup

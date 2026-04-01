@@ -220,6 +220,18 @@ class TestNodeStateSerialization:
         assert isinstance(loaded_node.linear_weight, nn.Parameter)
         assert isinstance(loaded_node.linear_bias, nn.Parameter)
 
+    def test_save_pipeline_yaml_only(self, mock_statistical_trainable_node, tmp_path):
+        """Test save_to_file(save_weights=False) writes only YAML config."""
+        pipeline = CuvisPipeline("test_pipeline_yaml_only")
+        mock_node = mock_statistical_trainable_node(input_dim=4, hidden_dim=3)
+        pipeline._graph.add_node(mock_node)
+
+        config_path = tmp_path / "yaml_only_pipeline.yaml"
+        pipeline.save_to_file(config_path, save_weights=False)
+
+        assert config_path.exists()
+        assert not config_path.with_suffix(".pt").exists()
+
     @pytest.mark.gpu
     def test_device_and_dtype_handling(self, mock_statistical_trainable_node):
         """Test that serialization handles device and dtype correctly."""

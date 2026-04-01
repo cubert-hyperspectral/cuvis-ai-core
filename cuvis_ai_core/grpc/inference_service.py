@@ -88,6 +88,19 @@ class InferenceService:
         if inputs.HasField("mask"):
             batch["mask"] = helpers.proto_to_tensor(inputs.mask)
 
+        if inputs.HasField("rgb_image"):
+            batch["rgb_image"] = helpers.proto_to_tensor(inputs.rgb_image)
+
+        if inputs.HasField("frame_id"):
+            frame_id = helpers.proto_to_tensor(inputs.frame_id)
+            if frame_id.numel() > 0:
+                batch["frame_id"] = frame_id
+
+        if inputs.HasField("mesu_index"):
+            mesu_index = helpers.proto_to_tensor(inputs.mesu_index)
+            if mesu_index.numel() > 0:
+                batch["mesu_index"] = mesu_index
+
         # Parse structured inputs (if provided)
         if inputs.HasField("bboxes"):
             batch["bboxes"] = self._parse_bounding_boxes(inputs.bboxes)
@@ -97,6 +110,10 @@ class InferenceService:
 
         if inputs.text_prompt:
             batch["text_prompt"] = inputs.text_prompt
+
+        # Parse extra tensor inputs (node-specific dynamic inputs).
+        for key, tensor_proto in inputs.extra_inputs.items():
+            batch[key] = helpers.proto_to_tensor(tensor_proto)
 
         return batch
 
@@ -154,16 +171,19 @@ class InferenceService:
         self, bboxes_proto: cuvis_ai_pb2.BoundingBoxes
     ) -> list[dict]:
         """Parse bounding boxes from proto into dictionaries."""
-        return [
-            {
+        parsed_boxes: list[dict] = []
+        for box in bboxes_proto.boxes:
+            parsed = {
                 "element_id": box.element_id,
                 "x_min": box.x_min,
                 "y_min": box.y_min,
                 "x_max": box.x_max,
                 "y_max": box.y_max,
             }
-            for box in bboxes_proto.boxes
-        ]
+            if box.HasField("object_id"):
+                parsed["object_id"] = box.object_id
+            parsed_boxes.append(parsed)
+        return parsed_boxes
 
     def _parse_points(self, points_proto: cuvis_ai_pb2.Points) -> list[dict]:
         """Parse points from proto into dictionaries."""

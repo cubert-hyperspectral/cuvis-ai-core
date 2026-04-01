@@ -27,8 +27,8 @@ class DiscoveryService:
         for pipeline_dict in pipelines_list:
             metadata = pipeline_dict["metadata"]
             pipeline_info = cuvis_ai_pb2.PipelineInfo(
-                name=pipeline_dict["name"],
-                path=pipeline_dict["path"],
+                pipeline_path=pipeline_dict["pipeline_path"],
+                resolved_path=pipeline_dict["path"],
                 metadata=cuvis_ai_pb2.PipelineMetadata(
                     name=metadata["name"],
                     description=metadata["description"],
@@ -37,8 +37,6 @@ class DiscoveryService:
                     tags=metadata["tags"],
                     author=metadata["author"],
                 ),
-                tags=pipeline_dict["tags"],
-                has_weights=pipeline_dict["has_weights"],
                 weights_path=pipeline_dict["weights_path"],
             )
             pipeline_infos.append(pipeline_info)
@@ -53,14 +51,14 @@ class DiscoveryService:
     ) -> cuvis_ai_pb2.GetPipelineInfoResponse:
         """Get detailed information about a specific pipeline."""
         pipeline_dict = helpers.get_pipeline_info(
-            pipeline_name=request.pipeline_name,
+            pipeline_path=request.pipeline_path,
             include_yaml_content=True,
         )
 
         metadata = pipeline_dict["metadata"]
         pipeline_info = cuvis_ai_pb2.PipelineInfo(
-            name=pipeline_dict["name"],
-            path=pipeline_dict["path"],
+            pipeline_path=pipeline_dict["pipeline_path"],
+            resolved_path=pipeline_dict["path"],
             metadata=cuvis_ai_pb2.PipelineMetadata(
                 name=metadata["name"],
                 description=metadata["description"],
@@ -69,8 +67,6 @@ class DiscoveryService:
                 tags=metadata["tags"],
                 author=metadata["author"],
             ),
-            tags=pipeline_dict["tags"],
-            has_weights=pipeline_dict["has_weights"],
             weights_path=pipeline_dict["weights_path"],
             yaml_content=pipeline_dict.get("yaml_content", ""),
         )

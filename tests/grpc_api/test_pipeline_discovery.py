@@ -28,8 +28,11 @@ class TestListAvailablePipelines:
         )
 
         assert len(response.pipelines) > 1
-        pipeline_names = {c.name for c in response.pipelines}
-        assert any(c in pipeline_names for c in {"statistical_based", "gradient_based"})
+        pipeline_paths = {c.pipeline_path for c in response.pipelines}
+        assert any(
+            c in pipeline_paths
+            for c in {"statistical_based.yaml", "gradient_based.yaml"}
+        )
 
     def test_list_with_tag_filter_statistical(self, grpc_stub, pipeline_directory):
         response = grpc_stub.ListAvailablePipelines(
@@ -38,11 +41,14 @@ class TestListAvailablePipelines:
 
         # Both pipelines have the "statistical" tag
         assert len(response.pipelines) >= 1
-        pipeline_names = {c.name for c in response.pipelines}
-        assert any(c in pipeline_names for c in {"statistical_based", "gradient_based"})
+        pipeline_paths = {c.pipeline_path for c in response.pipelines}
+        assert any(
+            c in pipeline_paths
+            for c in {"statistical_based.yaml", "gradient_based.yaml"}
+        )
 
         for pipeline in response.pipelines:
-            assert "statistical" in pipeline.tags
+            assert "statistical" in pipeline.metadata.tags
 
     def test_list_with_tag_filter_gradient(self, grpc_stub, pipeline_directory):
         response = grpc_stub.ListAvailablePipelines(
@@ -50,10 +56,12 @@ class TestListAvailablePipelines:
         )
 
         assert len(response.pipelines) > 1
-        pipeline_names = {c.name for c in response.pipelines}
-        assert any(c in pipeline_names for c in {"gradient_based"})
+        pipeline_paths = {c.pipeline_path for c in response.pipelines}
+        assert any(c in pipeline_paths for c in {"gradient_based.yaml"})
 
-        assert all("gradient" in pipeline.tags for pipeline in response.pipelines)
+        assert all(
+            "gradient" in pipeline.metadata.tags for pipeline in response.pipelines
+        )
 
     def test_list_with_unknown_tag(self, grpc_stub, pipeline_directory):
         response = grpc_stub.ListAvailablePipelines(
@@ -83,30 +91,34 @@ class TestListAvailablePipelines:
             cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        pipelines_by_name = {c.name: c for c in response.pipelines}
+        pipelines_by_path = {c.pipeline_path: c for c in response.pipelines}
 
         rx_weights = pipeline_directory / "pipeline" / "statistical_based.pt"
-        assert pipelines_by_name["statistical_based"].has_weights == rx_weights.exists()
+        assert (
+            bool(pipelines_by_path["statistical_based.yaml"].weights_path)
+            == rx_weights.exists()
+        )
         if rx_weights.exists():
-            assert pipelines_by_name["statistical_based"].weights_path
+            assert pipelines_by_path["statistical_based.yaml"].weights_path
             assert (
                 "statistical_based.pt"
-                in pipelines_by_name["statistical_based"].weights_path
+                in pipelines_by_path["statistical_based.yaml"].weights_path
             )
         else:
-            assert not pipelines_by_name["statistical_based"].weights_path
+            assert not pipelines_by_path["statistical_based.yaml"].weights_path
 
         gradient_based_weights = pipeline_directory / "pipeline" / "gradient_based.pt"
         assert (
-            pipelines_by_name["gradient_based"].has_weights
+            bool(pipelines_by_path["gradient_based.yaml"].weights_path)
             == gradient_based_weights.exists()
         )
         if gradient_based_weights.exists():
             assert (
-                "gradient_based.pt" in pipelines_by_name["gradient_based"].weights_path
+                "gradient_based.pt"
+                in pipelines_by_path["gradient_based.yaml"].weights_path
             )
         else:
-            assert not pipelines_by_name["gradient_based"].weights_path
+            assert not pipelines_by_path["gradient_based.yaml"].weights_path
 
 
 class TestSubdirectoryPipelineDiscovery:
@@ -150,10 +162,10 @@ class TestSubdirectoryPipelineDiscovery:
             cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        names = {p.name for p in response.pipelines}
-        assert "top_level" in names
-        assert "anomaly/adaclip/baseline" in names
-        assert "anomaly/rx/statistical" in names
+        names = {p.pipeline_path for p in response.pipelines}
+        assert "top_level.yaml" in names
+        assert "anomaly/adaclip/baseline.yaml" in names
+        assert "anomaly/rx/statistical.yaml" in names
         assert len(response.pipelines) == 3
 
     def test_subdirectory_names_are_relative_paths(
@@ -163,10 +175,10 @@ class TestSubdirectoryPipelineDiscovery:
             cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        names = {p.name for p in response.pipelines}
-        # Names use forward slashes, no .yaml extension
+        names = {p.pipeline_path for p in response.pipelines}
+        # Paths use forward slashes and include .yaml extension.
         for name in names:
-            assert not name.endswith(".yaml")
+            assert name.endswith(".yaml")
             assert "\\" not in name
 
     def test_subdirectory_tag_filter(self, grpc_stub, nested_pipeline_dir):
@@ -174,30 +186,30 @@ class TestSubdirectoryPipelineDiscovery:
             cuvis_ai_pb2.ListAvailablePipelinesRequest(filter_tag="anomaly")
         )
 
-        names = {p.name for p in response.pipelines}
-        assert "anomaly/adaclip/baseline" in names
-        assert "anomaly/rx/statistical" in names
-        assert "top_level" not in names
+        names = {p.pipeline_path for p in response.pipelines}
+        assert "anomaly/adaclip/baseline.yaml" in names
+        assert "anomaly/rx/statistical.yaml" in names
+        assert "top_level.yaml" not in names
 
     def test_subdirectory_weights_detected(self, grpc_stub, nested_pipeline_dir):
         response = grpc_stub.ListAvailablePipelines(
             cuvis_ai_pb2.ListAvailablePipelinesRequest()
         )
 
-        by_name = {p.name: p for p in response.pipelines}
-        assert by_name["anomaly/adaclip/baseline"].has_weights is True
-        assert by_name["anomaly/rx/statistical"].has_weights is False
+        by_path = {p.pipeline_path: p for p in response.pipelines}
+        assert bool(by_path["anomaly/adaclip/baseline.yaml"].weights_path) is True
+        assert bool(by_path["anomaly/rx/statistical.yaml"].weights_path) is False
 
     def test_get_info_for_subdirectory_pipeline(self, grpc_stub, nested_pipeline_dir):
         response = grpc_stub.GetPipelineInfo(
             cuvis_ai_pb2.GetPipelineInfoRequest(
-                pipeline_name="anomaly/adaclip/baseline"
+                pipeline_path="anomaly/adaclip/baseline.yaml"
             )
         )
 
         info = response.pipeline_info
-        assert info.name == "anomaly/adaclip/baseline"
-        assert info.has_weights is True
+        assert info.pipeline_path == "anomaly/adaclip/baseline.yaml"
+        assert bool(info.weights_path) is True
 
 
 class TestGetPipelineInfo:
@@ -205,36 +217,57 @@ class TestGetPipelineInfo:
 
     def test_get_pipeline_info_valid(self, grpc_stub, pipeline_directory):
         response = grpc_stub.GetPipelineInfo(
-            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_name="statistical_based")
+            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="statistical_based.yaml")
         )
 
         info = response.pipeline_info
-        assert info.name == "statistical_based"
+        assert info.pipeline_path == "statistical_based.yaml"
         assert info.metadata.name == "statistical_based"
         assert "statistical training" in info.metadata.description.lower()
-        assert "statistical" in info.tags
-        assert "rx" in info.tags
+        assert "statistical" in info.metadata.tags
+        assert "rx" in info.metadata.tags
         rx_weights = pipeline_directory / "pipeline" / "statistical_based.pt"
-        assert info.has_weights == rx_weights.exists()
+        assert bool(info.weights_path) == rx_weights.exists()
 
     def test_get_pipeline_info_with_yaml_content(self, grpc_stub, pipeline_directory):
         response = grpc_stub.GetPipelineInfo(
-            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_name="gradient_based")
+            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="gradient_based.yaml")
         )
 
         info = response.pipeline_info
-        assert info.name == "gradient_based"
+        assert info.pipeline_path == "gradient_based.yaml"
 
     def test_get_pipeline_info_invalid(self, grpc_stub, pipeline_directory):
         with pytest.raises(grpc.RpcError) as exc:
             grpc_stub.GetPipelineInfo(
-                cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_name="nonexistent")
+                cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="nonexistent.yaml")
             )
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
 
+    def test_get_pipeline_info_rejects_absolute_path(
+        self, grpc_stub, pipeline_directory
+    ):
+        absolute_path = (
+            pipeline_directory / "pipeline" / "statistical_based.yaml"
+        ).resolve()
+        with pytest.raises(grpc.RpcError) as exc:
+            grpc_stub.GetPipelineInfo(
+                cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path=str(absolute_path))
+            )
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    def test_get_pipeline_info_rejects_missing_extension(
+        self, grpc_stub, pipeline_directory
+    ):
+        with pytest.raises(grpc.RpcError) as exc:
+            grpc_stub.GetPipelineInfo(
+                cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="statistical_based")
+            )
+        assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
     def test_get_pipeline_info_metadata(self, grpc_stub, pipeline_directory):
         response = grpc_stub.GetPipelineInfo(
-            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_name="statistical_based")
+            cuvis_ai_pb2.GetPipelineInfoRequest(pipeline_path="statistical_based.yaml")
         )
 
         metadata = response.pipeline_info.metadata
@@ -243,6 +276,6 @@ class TestGetPipelineInfo:
         # created and cuvis_ai_version can be empty string in real pipelines (not set during testing)
         assert metadata.cuvis_ai_version is not None  # Field exists (may be empty)
 
-        tags = response.pipeline_info.tags
+        tags = response.pipeline_info.metadata.tags
         assert "statistical" in tags
         assert "rx" in tags

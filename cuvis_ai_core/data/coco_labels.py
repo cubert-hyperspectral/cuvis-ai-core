@@ -18,16 +18,7 @@ import io
 # from contextlib import contextmanager
 
 
-def RLE2mask(rle: list, mask_width: int, mask_height: int) -> np.ndarray:
-    mask = np.zeros(mask_width * mask_height, np.uint8)
-    ids = 0
-    value = 0
-    for c in rle:
-        mask[ids : ids + c] = value
-        value = not value
-        ids += c
-    mask = mask.reshape((mask_height, mask_width), order="F")
-    return mask.astype(bool, copy=False)
+from cuvis_ai_core.data.rle import decode_rle_mask_for_canvas
 
 
 class SafeWizard(JSONWizard):
@@ -137,6 +128,7 @@ class Annotation(SafeWizard):
     def to_torchvision(self, size: tuple[int, int]) -> dict[str, Any]:
         """Convert COCO-style bbox/segmentation/mask into torchvision tensors."""
         out = copy(self)
+        canvas_height, canvas_width = int(size[0]), int(size[1])
 
         if self.bbox is not None:
             out.bbox = BoundingBoxes(
@@ -155,8 +147,11 @@ class Annotation(SafeWizard):
             out.segmentation = Mask(torch.from_numpy(mask_np))
 
         if self.mask is not None:
-            size = self.mask["size"]
-            mask_np = RLE2mask(self.mask["counts"], size[0], size[1])
+            mask_np = decode_rle_mask_for_canvas(
+                self.mask,
+                target_height=canvas_height,
+                target_width=canvas_width,
+            )
             out.mask = Mask(torch.from_numpy(mask_np))
 
         return out.to_dict_safe()

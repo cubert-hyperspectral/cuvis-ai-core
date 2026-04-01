@@ -28,27 +28,41 @@ def normalize_per_channel_vectorized(
 
 
 def _resolve_measurement_indices(
-    indices: Sequence[int] | Iterable[int] | None, max_index: int = None
+    indices: Sequence[int] | Iterable[int] | None,
+    max_index: int | None = None,
 ) -> list[int]:
-    """Coerce, validate and store  indices."""
-    # print("indices:", indices, "max_index:", max_index)
-    if indices is None and max_index is not None:
+    """Coerce, validate and store indices."""
+
+    if indices is None:
+        if max_index is None:
+            raise ValueError("Either indices or max_index must be provided.")
         resolved = list(range(max_index))
+
     elif isinstance(indices, range):
-        resolved = list(indices)
+        # Interpret range(start, -1) as range(start, max_index)
+        if len(indices) == 0 and indices.step > 0 and indices.stop == -1:
+            if max_index is None:
+                raise ValueError(
+                    "max_index is required when using an open-ended range like range(10, -1)."
+                )
+            resolved = list(range(indices.start, max_index, indices.step))
+        else:
+            resolved = list(indices)
+
     else:
         resolved = list(indices)
 
     if not resolved:
-        if max_index is not None and max_index == 0:
+        if max_index == 0:
             return []
         raise ValueError("At least one index is required.")
 
-    invalid_indices = [idx for idx in resolved if idx < 0 or idx >= max_index]
-    if invalid_indices:
-        raise IndexError(
-            f"Indices {invalid_indices} are out of bounds selection with {max_index} ."
-        )
+    if max_index is not None:
+        invalid_indices = [idx for idx in resolved if idx < 0 or idx >= max_index]
+        if invalid_indices:
+            raise IndexError(
+                f"Indices {invalid_indices} are out of bounds for selection with max_index={max_index}."
+            )
 
     if len(set(resolved)) != len(resolved):
         raise ValueError("Indices contain duplicates; provide unique indices.")

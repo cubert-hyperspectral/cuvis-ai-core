@@ -103,7 +103,7 @@ class TestProtoSerialization:
     def test_trainrun_proto_roundtrip(self):
         trainrun = TrainRunConfig(
             name="test_run",
-            pipeline=PipelineConfig(name="pipe", nodes=[], connections=[]),
+            pipeline=PipelineConfig(nodes=[], connections=[]),
             data=DataConfig(cu3s_file_path="/tmp/file.cu3s"),
             training=TrainingConfig(),
             loss_nodes=["loss1"],
@@ -119,7 +119,7 @@ class TestProtoSerialization:
 def test_trainrun_json_roundtrip():
     trainrun = TrainRunConfig(
         name="json_run",
-        pipeline=PipelineConfig(name="p", nodes=[], connections=[]),
+        pipeline=PipelineConfig(nodes=[], connections=[]),
         data=DataConfig(cu3s_file_path="/path/to/data.cu3s"),
         training=TrainingConfig(max_epochs=10),
         tags={"env": "dev"},

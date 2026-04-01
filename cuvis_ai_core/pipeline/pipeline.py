@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from copy import deepcopy
 from datetime import datetime
@@ -16,10 +17,12 @@ from torch import nn
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
+from cuvis_ai_core.pipeline.profiling import PipelineProfiler, format_profiling_table
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import (
     InputPort,
+    NodeProfilingStats,
     OutputPort,
     PortCompatibilityError,
     PortSpec,
@@ -40,6 +43,11 @@ class CuvisPipeline:
         self._metadata = PipelineMetadata(name=name, cuvis_ai_version=__version__)
         self.strict_runtime_io_validation = strict_runtime_io_validation
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
+
+        # Profiling state (opt-in, zero overhead when disabled)
+        self._profiling_enabled: bool = False
+        self._profiler: PipelineProfiler | None = None
+        self._synchronize_cuda: bool = False
 
     @property
     def name(self) -> str:
@@ -344,6 +352,7 @@ class CuvisPipeline:
         self,
         config_path: str | Path,
         validate_nodes: bool = True,
+        save_weights: bool = True,
         include_optimizer: bool = False,
         include_scheduler: bool = False,
         metadata: PipelineMetadata | None = None,
@@ -351,19 +360,22 @@ class CuvisPipeline:
         """
         Save pipeline configuration and weights to files.
 
-        Creates two files:
+        Creates:
         1. YAML config file (structure, metadata)
-        2. .pt weights file (all node state_dicts)
+        2. Optional .pt weights file (all node state_dicts)
 
         Args:
             config_path: Path for YAML config file
             validate_nodes: If True, validate all nodes support serialization before saving
+                weights
+            save_weights: Whether to save a co-located .pt weights file.
             include_optimizer: Whether to save optimizer state
             include_scheduler: Whether to save scheduler state
             metadata: Pipeline metadata (PipelineMetadata instance with description, tags, etc.)
 
         Raises:
             RuntimeError: If validate_nodes=True and any node doesn't support serialization
+            ValueError: If optimizer/scheduler saving is requested while save_weights=False
 
         Example:
             >>> from cuvis_ai_core.training.config import PipelineMetadata
@@ -377,8 +389,13 @@ class CuvisPipeline:
             ...     )
             ... )
         """
-        # Validate nodes before saving
-        if validate_nodes:
+        if not save_weights and (include_optimizer or include_scheduler):
+            raise ValueError(
+                "include_optimizer/include_scheduler require save_weights=True"
+            )
+
+        # Validate nodes before saving weights
+        if validate_nodes and save_weights:
             invalid_nodes = []
             for node in self.nodes:
                 if hasattr(node, "validate_serialization_support"):
@@ -413,30 +430,32 @@ class CuvisPipeline:
         if metadata:
             config_dict["metadata"].update(metadata.to_dict())
 
-        state_dict: dict[str, Any] = {}
-        for node in self.nodes:
-            if hasattr(node, "state_dict"):
-                state_dict[node.name] = node.state_dict()
-
-        checkpoint: dict[str, Any] = {
-            "state_dict": state_dict,
-            "metadata": config_dict["metadata"],
-        }
-
-        if include_optimizer and hasattr(self, "optimizer"):
-            checkpoint["optimizer_state"] = self.optimizer.state_dict()  # type: ignore[attr-defined]
-
-        if include_scheduler and hasattr(self, "scheduler"):
-            checkpoint["scheduler_state"] = self.scheduler.state_dict()  # type: ignore[attr-defined]
-
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
-        weights_path = config_path.with_suffix(".pt")
-        torch.save(checkpoint, weights_path)
+        if save_weights:
+            state_dict: dict[str, Any] = {}
+            for node in self.nodes:
+                if hasattr(node, "state_dict"):
+                    state_dict[node.name] = node.state_dict()
 
-        logger.info(f"Pipeline saved: Config={config_path}, Weights={weights_path}")
+            checkpoint: dict[str, Any] = {
+                "state_dict": state_dict,
+                "metadata": config_dict["metadata"],
+            }
+
+            if include_optimizer and hasattr(self, "optimizer"):
+                checkpoint["optimizer_state"] = self.optimizer.state_dict()  # type: ignore[attr-defined]
+
+            if include_scheduler and hasattr(self, "scheduler"):
+                checkpoint["scheduler_state"] = self.scheduler.state_dict()  # type: ignore[attr-defined]
+
+            weights_path = config_path.with_suffix(".pt")
+            torch.save(checkpoint, weights_path)
+            logger.info(f"Pipeline saved: Config={config_path}, Weights={weights_path}")
+        else:
+            logger.info(f"Pipeline saved: Config={config_path} (weights skipped)")
 
     def _restore_weights_from_checkpoint(
         self,
@@ -717,8 +736,15 @@ class CuvisPipeline:
             if self.strict_runtime_io_validation:
                 self._validate_runtime_inputs(node, node_inputs)
 
-            # Execute node with context
+            # Execute node with context (profiling wraps only node.forward)
+            t0 = (
+                self._start_profiling_timer(node, node_inputs)
+                if self._profiling_enabled
+                else None
+            )
             outputs = node.forward(**node_inputs, context=context)
+            if t0 is not None:
+                self._stop_profiling_timer(t0, node, node_inputs, execution_stage.value)
 
             if not isinstance(outputs, dict):
                 raise TypeError(
@@ -737,6 +763,165 @@ class CuvisPipeline:
                 port_data[key] = value
 
         return port_data
+
+    # ------------------------------------------------------------------
+    # Profiling API
+    # ------------------------------------------------------------------
+
+    @property
+    def profiling_enabled(self) -> bool:
+        """Whether runtime profiling is currently active."""
+        return self._profiling_enabled
+
+    def set_profiling(
+        self,
+        enabled: bool,
+        *,
+        synchronize_cuda: bool = False,
+        reset: bool = False,
+        skip_first_n: int = 0,
+    ) -> None:
+        """Configure node runtime profiling (full-replace semantics).
+
+        Every call fully specifies the configuration — omitted keyword args
+        receive their defaults.
+
+        Parameters
+        ----------
+        enabled : bool
+            Activate or deactivate profiling.
+        synchronize_cuda : bool
+            If ``True``, call ``torch.cuda.synchronize`` before and after each
+            ``node.forward()`` for accurate GPU wall-clock timing.
+        reset : bool
+            If ``True``, discard all previously accumulated statistics.
+        skip_first_n : int
+            Number of initial samples per node to discard (warm-up skip).
+        """
+        if skip_first_n < 0:
+            raise ValueError(f"skip_first_n must be >= 0, got {skip_first_n}")
+
+        self._synchronize_cuda = synchronize_cuda
+        self._profiling_enabled = enabled
+
+        if reset or self._profiler is None:
+            self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
+        elif enabled and self._profiler.skip_first_n != skip_first_n:
+            # skip_first_n changed without reset — recreate per spec
+            self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
+
+    def reset_profiling(self) -> None:
+        """Clear all accumulated profiling statistics."""
+        if self._profiler is not None:
+            self._profiler.reset()
+
+    def get_profiling_summary(
+        self,
+        stage: ExecutionStage | None = None,
+    ) -> list[NodeProfilingStats]:
+        """Return accumulated profiling stats for all (or filtered) nodes.
+
+        Parameters
+        ----------
+        stage : ExecutionStage or None
+            If provided, only return stats for this execution stage.
+
+        Returns
+        -------
+        list[NodeProfilingStats]
+            Frozen dataclass instances with per-node timing statistics.
+            Empty list if profiling is not enabled or no data collected.
+        """
+        if self._profiler is None:
+            return []
+        stage_value = stage.value if stage is not None else None
+        return self._profiler.snapshot(stage=stage_value)
+
+    def format_profiling_summary(
+        self,
+        stage: ExecutionStage | None = None,
+        *,
+        total_frames: int | None = None,
+    ) -> str:
+        """Return a formatted text table of profiling stats.
+
+        Convenience method that calls :meth:`get_profiling_summary` and
+        formats the result with :func:`format_profiling_table`.
+
+        Parameters
+        ----------
+        stage : ExecutionStage or None
+            If provided, only include stats for this execution stage.
+        total_frames : int or None
+            Total frames/batches processed (shown in the table header).
+
+        Returns
+        -------
+        str
+            Multi-line formatted table ready for logging or printing.
+        """
+        stats = self.get_profiling_summary(stage=stage)
+        skip_first_n = self._profiler.skip_first_n if self._profiler is not None else 0
+        return format_profiling_table(
+            stats, total_frames=total_frames, skip_first_n=skip_first_n
+        )
+
+    # ------------------------------------------------------------------
+    # Profiling timing helpers (private)
+    # ------------------------------------------------------------------
+
+    def _start_profiling_timer(
+        self,
+        node: Node,
+        node_inputs: dict[str, Any],
+    ) -> int:
+        """Pre-forward CUDA sync + high-resolution timestamp.
+
+        Returns the start time in nanoseconds.
+        """
+        if self._synchronize_cuda:
+            device = self._infer_cuda_device(node, node_inputs)
+            if device is not None:
+                torch.cuda.synchronize(device)
+        return time.perf_counter_ns()
+
+    def _stop_profiling_timer(
+        self,
+        t0_ns: int,
+        node: Node,
+        node_inputs: dict[str, Any],
+        stage_value: str,
+    ) -> None:
+        """Post-forward CUDA sync + record elapsed time."""
+        if self._synchronize_cuda:
+            device = self._infer_cuda_device(node, node_inputs)
+            if device is not None:
+                torch.cuda.synchronize(device)
+        elapsed_ms = (time.perf_counter_ns() - t0_ns) / 1_000_000
+        self._profiler.record(stage_value, node.name, elapsed_ms)
+
+    @staticmethod
+    def _infer_cuda_device(
+        node: Node,
+        node_inputs: dict[str, Any],
+    ) -> torch.device | None:
+        """Infer the CUDA device from node parameters/buffers or input tensors.
+
+        Returns ``None`` if no CUDA device is found (CPU-only node).
+        """
+        # Check node parameters first
+        for param in node.parameters():
+            if param.device.type == "cuda":
+                return param.device
+        # Check node buffers
+        for buf in node.buffers():
+            if buf.device.type == "cuda":
+                return buf.device
+        # Check input tensors
+        for v in node_inputs.values():
+            if isinstance(v, torch.Tensor) and v.device.type == "cuda":
+                return v.device
+        return None
 
     def _validate_graph_inputs(
         self,

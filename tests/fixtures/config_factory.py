@@ -84,14 +84,14 @@ def pipeline_factory(tmp_path):
         pipeline_dir.mkdir(exist_ok=True)
 
         if configs:
-            for name, yaml_content, has_weights in configs:
+            for name, yaml_content, create_weights in configs:
                 yaml_path = pipeline_dir / f"{name}.yaml"
                 if isinstance(yaml_content, dict):
                     yaml_path.write_text(yaml.dump(yaml_content))
                 else:
                     yaml_path.write_text(yaml_content)
 
-                if has_weights:
+                if create_weights:
                     weights_path = pipeline_dir / f"{name}.pt"
                     weights_path.write_bytes(b"fake_weights_data")
 

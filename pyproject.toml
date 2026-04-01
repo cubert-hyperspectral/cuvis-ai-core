@@ -31,7 +31,7 @@ classifiers = [
 
 dependencies = [
     "cuvis>=3.5.0",
-    "cuvis-ai-schemas>=0.2.0",
+    "cuvis-ai-schemas>=0.3.0",
     # Core framework dependencies
     "torch>=2.9.1",
     "torchvision",
@@ -47,21 +47,25 @@ dependencies = [
     "loguru>=0.7.0",
     "pyyaml>=6.0",
     "numpy>=1.21.0",
+    "opencv-python>=4.5.0",
     "pillow>=9.0.0",
     "gitpython>=3.1.40",
     # Type hints and validation
     "typing-extensions>=4.0.0",
     "pydantic>=2.12.5",
-    "gdown>=5.2.1",
     "dataclass-wizard",
     "dotenv>=0.9.9",
     "ruff>=0.14.11",
     "scikit-image>=0.25.2",
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
+    "scikit-learn>=1.8.0",
 ]
 
 [project.optional-dependencies]
+hf = [
+    "huggingface-hub>=0.20.0",
+]
 
 dev = [
     "ipykernel",
@@ -177,3 +181,6 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+# cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
+# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
+

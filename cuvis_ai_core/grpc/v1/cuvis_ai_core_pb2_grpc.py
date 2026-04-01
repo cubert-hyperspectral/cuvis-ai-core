@@ -177,6 +177,18 @@ class CuvisAIServiceStub(object):
             response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.FromString,
             _registered_method=True,
         )
+        self.SetProfiling = channel.unary_unary(
+            "/cuvis_ai.v1.CuvisAIService/SetProfiling",
+            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingRequest.SerializeToString,
+            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingResponse.FromString,
+            _registered_method=True,
+        )
+        self.GetProfilingSummary = channel.unary_unary(
+            "/cuvis_ai.v1.CuvisAIService/GetProfilingSummary",
+            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryRequest.SerializeToString,
+            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class CuvisAIServiceServicer(object):
@@ -342,6 +354,18 @@ class CuvisAIServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def SetProfiling(self, request, context):
+        """Profiling"""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def GetProfilingSummary(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_CuvisAIServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -474,6 +498,16 @@ def add_CuvisAIServiceServicer_to_server(servicer, server):
             servicer.ClearPluginCache,
             request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheRequest.FromString,
             response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.SerializeToString,
+        ),
+        "SetProfiling": grpc.unary_unary_rpc_method_handler(
+            servicer.SetProfiling,
+            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingRequest.FromString,
+            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingResponse.SerializeToString,
+        ),
+        "GetProfilingSummary": grpc.unary_unary_rpc_method_handler(
+            servicer.GetProfilingSummary,
+            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryRequest.FromString,
+            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1262,6 +1296,66 @@ class CuvisAIService(object):
             "/cuvis_ai.v1.CuvisAIService/ClearPluginCache",
             cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheRequest.SerializeToString,
             cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def SetProfiling(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/cuvis_ai.v1.CuvisAIService/SetProfiling",
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingRequest.SerializeToString,
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def GetProfilingSummary(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/cuvis_ai.v1.CuvisAIService/GetProfilingSummary",
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryRequest.SerializeToString,
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.GetProfilingSummaryResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -9,6 +9,7 @@ from .discovery_service import DiscoveryService
 from .inference_service import InferenceService
 from .introspection_service import IntrospectionService
 from .pipeline_service import PipelineService
+from .profiling_service import ProfilingService
 from .plugin_service import PluginService
 from .session_manager import SessionManager
 from .session_service import SessionService
@@ -33,6 +34,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
         self.discovery_service = DiscoveryService()
         self.introspection_service = IntrospectionService(self.session_manager)
         self.plugin_service = PluginService(self.session_manager)
+        self.profiling_service = ProfilingService(self.session_manager)
 
     # ------------------------------------------------------------------
     # Session Management
@@ -169,6 +171,17 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
         self, request, context
     ) -> cuvis_ai_pb2.ClearPluginCacheResponse:
         return self.plugin_service.clear_plugin_cache(request, context)
+
+    # ------------------------------------------------------------------
+    # Profiling
+    # ------------------------------------------------------------------
+    def SetProfiling(self, request, context) -> cuvis_ai_pb2.SetProfilingResponse:
+        return self.profiling_service.set_profiling(request, context)
+
+    def GetProfilingSummary(
+        self, request, context
+    ) -> cuvis_ai_pb2.GetProfilingSummaryResponse:
+        return self.profiling_service.get_profiling_summary(request, context)
 
 
 __all__ = ["CuvisAIService"]

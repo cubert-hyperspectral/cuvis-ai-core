@@ -4,7 +4,18 @@
 
 set -e
 
+# Unset GIT_DIR/GIT_WORK_TREE so that uv's internal git fetch calls
+# (for git-based dependencies) don't inherit the hook's git context.
+unset GIT_DIR GIT_WORK_TREE
+
 echo "Running pre-push checks..."
+
+# Sync dev dependencies first
+echo "→ Syncing dev dependencies..."
+if ! uv sync --all-extras; then
+    echo "✗ Dev dependency sync failed. Please check your environment."
+    exit 1
+fi
 
 # Run Ruff formatting first
 echo "→ Running Ruff formatting..."
@@ -20,9 +31,9 @@ if ! uv run ruff check . --fix; then
     exit 1
 fi
 
-# Run pytest with non-GPU tests
-echo "→ Running pytest (excluding GPU tests)..."
-if ! uv run python -m pytest tests/ -v --tb=line -m "not slow and not gpu"; then
+# Run the same test subset as CI
+echo "→ Running pytest (matching CI markers)..."
+if ! uv run python -m pytest tests/ -v --tb=line -m "not slow and not gpu and not stress and not requires_data"; then
     echo "✗ Tests failed. Please fix the failing tests and try again."
     exit 1
 fi

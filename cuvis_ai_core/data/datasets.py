@@ -10,7 +10,8 @@ from loguru import logger
 from skimage.draw import polygon2mask
 from torch.utils.data import Dataset
 
-from cuvis_ai_core.data.coco_labels import Annotation, COCOData, RLE2mask
+from cuvis_ai_core.data.coco_labels import Annotation, COCOData
+from cuvis_ai_core.data.rle import decode_rle_mask_for_canvas
 from cuvis_ai_core.utils.general import _resolve_measurement_indices
 
 
@@ -89,9 +90,10 @@ class SingleCu3sDataset(Dataset):
             measurement_indices, max_index=self._total_measurements
         )
 
+        ids = self.measurement_indices
+        ids_str = str(ids) if len(ids) <= 20 else f"[{ids[0]}..{ids[-1]}]"
         logger.info(
-            f"Loaded cu3s dataset from {cu3s_file_path} with {len(self.measurement_indices)} "
-            f"measurements: {self.measurement_indices}"
+            f"Loaded cu3s dataset from {cu3s_file_path} with {len(ids)} measurements: {ids_str}"
         )
         self.has_labels = (
             annotation_json_path is not None
@@ -119,6 +121,36 @@ class SingleCu3sDataset(Dataset):
     def __len__(self) -> int:
         return len(self.measurement_indices)
 
+    def _resolve_annotation_canvas_size(
+        self, image_id: int, cube_shape: tuple[int, int]
+    ) -> tuple[int, int]:
+        cube_height, cube_width = int(cube_shape[0]), int(cube_shape[1])
+
+        if self._coco is None:
+            return cube_height, cube_width
+
+        images = getattr(self._coco, "images", None)
+        if isinstance(images, list):
+            for image in images:
+                if getattr(image, "id", None) != image_id:
+                    continue
+                try:
+                    return int(image.height), int(image.width)
+                except (AttributeError, TypeError, ValueError):
+                    break
+
+        coco_backend = getattr(self._coco, "_coco", None)
+        image_lookup = getattr(coco_backend, "imgs", None)
+        if isinstance(image_lookup, dict):
+            image_meta = image_lookup.get(image_id)
+            if isinstance(image_meta, dict):
+                try:
+                    return int(image_meta["height"]), int(image_meta["width"])
+                except (KeyError, TypeError, ValueError):
+                    pass
+
+        return cube_height, cube_width
+
     @property
     def wavelengths_nm(self) -> np.ndarray:
         mesu = self.session.get_measurement(0)  # starts the cound from 0
@@ -145,11 +177,23 @@ class SingleCu3sDataset(Dataset):
             if mesu_index in self._coco.image_ids:
                 image_id = self._coco.image_ids[self._coco.image_ids.index(mesu_index)]
                 anns = self._coco.annotations.where(image_id=image_id)
+
+                # COCO polygon coordinates may be in a different coordinate
+                # space than the cube (e.g. cuvis_pilot uses SDK view dims
+                # which can differ from cube dims). Create the mask in the
+                # COCO coordinate space, then resize to match the cube.
+                json_h, json_w = self._resolve_annotation_canvas_size(
+                    image_id=image_id,
+                    cube_shape=(cube_array.shape[0], cube_array.shape[1]),
+                )
+                # cube_h, cube_w = cube_array.shape[0], cube_array.shape[1]
+
                 category_mask = create_mask(
                     annotations=anns,
-                    image_height=cube_array.shape[0],
-                    image_width=cube_array.shape[1],
+                    image_height=json_h,
+                    image_width=json_w,
                 )
+
             else:
                 # Frame index not in available annotations
                 category_mask = np.zeros(cube_array.shape[:2], dtype=np.int32)
@@ -168,6 +212,7 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         train_ids: list[int] | None = None,
         val_ids: list[int] | None = None,
         test_ids: list[int] | None = None,
+        predict_ids: list[int] | None = None,
         batch_size: int = 2,
         processing_mode: str = "Reflectance",
         normalize_to_unit: bool = False,
@@ -186,6 +231,8 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             train_ids: List of measurement indices for training
             val_ids: List of measurement indices for validation
             test_ids: List of measurement indices for testing
+            predict_ids: List of measurement indices for prediction.
+                If omitted, all available measurements are used for predict.
             batch_size: Batch size for dataloaders
             processing_mode: Cuvis processing mode string ("Raw", "Reflectance")
             normalize_to_unit: If True, normalize cube per-channel to [0, 1].
@@ -196,10 +243,12 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         """
         super().__init__()
 
-        # Priority 1: Explicit paths
-        if cu3s_file_path and annotation_json_path:
+        # Priority 1: Explicit CU3S path (annotation path optional)
+        if cu3s_file_path:
             self.cu3s_file_path = Path(cu3s_file_path)
-            self.annotation_json_path = Path(annotation_json_path)
+            self.annotation_json_path = (
+                Path(annotation_json_path) if annotation_json_path else None
+            )
         # Priority 2: Auto-resolve from data_dir + dataset_name
         elif data_dir and dataset_name:
             self.cu3s_file_path, self.annotation_json_path = _resolve_assets(
@@ -207,18 +256,21 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             )
         else:
             raise ValueError(
-                "Must provide either (cu3s_file_path AND annotation_json_path) OR (data_dir AND dataset_name)"
+                "Must provide either cu3s_file_path OR (data_dir AND dataset_name)"
             )
 
         self.batch_size = batch_size
         self.train_ids = train_ids or []
         self.val_ids = val_ids or []
         self.test_ids = test_ids or []
+        # Predict defaults to full-session inference when no explicit IDs are passed.
+        self.predict_ids = list(predict_ids) if predict_ids else None
         self.processing_mode = processing_mode
         self.normalize_to_unit = normalize_to_unit
         self.train_ds: SingleCu3sDataset | None = None
         self.val_ds: SingleCu3sDataset | None = None
         self.test_ds: SingleCu3sDataset | None = None
+        self.predict_ds: SingleCu3sDataset | None = None
 
     def prepare_data(self) -> None:
         # Only download if using auto-resolve mode with Lentils dataset
@@ -226,11 +278,17 @@ class SingleCu3sDataModule(pl.LightningDataModule):
         pass
 
     def setup(self, stage: str | None = None) -> None:
+        annotation_json_path = (
+            str(self.annotation_json_path)
+            if self.annotation_json_path is not None
+            else None
+        )
+
         if stage == "fit" or stage is None:
             if self.train_ids:
                 self.train_ds = SingleCu3sDataset(
                     cu3s_file_path=str(self.cu3s_file_path),
-                    annotation_json_path=str(self.annotation_json_path),
+                    annotation_json_path=annotation_json_path,
                     processing_mode=self.processing_mode,
                     measurement_indices=self.train_ids,
                     normalize_to_unit=self.normalize_to_unit,
@@ -241,7 +299,7 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             if self.val_ids:
                 self.val_ds = SingleCu3sDataset(
                     cu3s_file_path=str(self.cu3s_file_path),
-                    annotation_json_path=str(self.annotation_json_path),
+                    annotation_json_path=annotation_json_path,
                     processing_mode=self.processing_mode,
                     measurement_indices=self.val_ids,
                     normalize_to_unit=self.normalize_to_unit,
@@ -254,9 +312,18 @@ class SingleCu3sDataModule(pl.LightningDataModule):
                 raise ValueError("test_ids must be provided to build the test dataset.")
             self.test_ds = SingleCu3sDataset(
                 cu3s_file_path=str(self.cu3s_file_path),
-                annotation_json_path=str(self.annotation_json_path),
+                annotation_json_path=annotation_json_path,
                 processing_mode=self.processing_mode,
                 measurement_indices=self.test_ids,
+                normalize_to_unit=self.normalize_to_unit,
+            )
+
+        if stage == "predict" or stage is None:
+            self.predict_ds = SingleCu3sDataset(
+                cu3s_file_path=str(self.cu3s_file_path),
+                annotation_json_path=annotation_json_path,
+                processing_mode=self.processing_mode,
+                measurement_indices=self.predict_ids,
                 normalize_to_unit=self.normalize_to_unit,
             )
 
@@ -283,6 +350,15 @@ class SingleCu3sDataModule(pl.LightningDataModule):
             )
         return DataLoader(
             self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
+        )
+
+    def predict_dataloader(self) -> DataLoader:
+        if self.predict_ds is None:
+            raise RuntimeError(
+                "Predict dataset is not initialized. Call setup('predict') first."
+            )
+        return DataLoader(
+            self.predict_ds, shuffle=False, batch_size=self.batch_size, num_workers=0
         )
 
 
@@ -318,11 +394,12 @@ def create_mask(
                 else:
                     write_idx = poly_mask & (category_mask == 0)
                     category_mask[write_idx] = cat_id
-        if isinstance(mask, dict) and len(mask.get("counts", lambda: [])) > 0:
-            mask_width, mask_height = mask.get("size")
-            # decode RLE mask
-            decoded = RLE2mask(
-                mask.get("counts"), mask_width=mask_width, mask_height=mask_height
+        counts = mask.get("counts") if isinstance(mask, dict) else None
+        if counts is not None and len(counts) > 0:
+            decoded = decode_rle_mask_for_canvas(
+                mask,
+                target_height=image_height,
+                target_width=image_width,
             )
 
             if overlap_strategy == "overwrite":

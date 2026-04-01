@@ -200,4 +200,5 @@ experiments/
 /.venv-adaclip-test/
 .history/
 .claude/
+.cursor/
 cuvis-ai-core.code-workspace

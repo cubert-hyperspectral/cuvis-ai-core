@@ -1,9 +1,13 @@
 """Test helper functions in cuvis_ai/grpc/helpers.py."""
 
+from __future__ import annotations
+
 import pytest
 from pydantic import ValidationError
 
+import cuvis_ai_core.grpc.helpers as helpers_mod
 from cuvis_ai_core.grpc.helpers import (
+    _validate_discovery_pipeline_path,
     find_weights_file,
     get_pipeline_info,
     list_available_pipelines,
@@ -64,7 +68,7 @@ class TestPipelineDiscoveryHelpers:
 
         result = list_available_pipelines(base_dir=str(pipeline_dir))
         assert len(result) == 1
-        assert result[0]["name"] == "my_pipeline"
+        assert result[0]["pipeline_path"] == "my_pipeline.yaml"
 
     def test_get_pipeline_info_with_string_base_dir(self, tmp_path):
         """Test get_pipeline_info with base_dir provided as a string."""
@@ -74,13 +78,13 @@ class TestPipelineDiscoveryHelpers:
             "metadata:\n  name: test_pipe\n  tags: [demo]\nnodes: []\nconnections: []\n"
         )
 
-        result = get_pipeline_info("test_pipe", base_dir=str(pipeline_dir))
-        assert result["name"] == "test_pipe"
-        assert result["tags"] == ["demo"]
-        assert result["has_weights"] is False
+        result = get_pipeline_info("test_pipe.yaml", base_dir=str(pipeline_dir))
+        assert result["pipeline_path"] == "test_pipe.yaml"
+        assert result["metadata"]["tags"] == ["demo"]
+        assert result["weights_path"] == ""
 
-    def test_get_pipeline_info_absolute_path_outside_base_dir(self, tmp_path):
-        """Test get_pipeline_info fallback when yaml is outside base_dir."""
+    def test_get_pipeline_info_rejects_absolute_path(self, tmp_path):
+        """Test get_pipeline_info rejects absolute paths."""
         # Create pipeline in a separate directory (outside base_dir)
         external_dir = tmp_path / "external"
         external_dir.mkdir()
@@ -93,9 +97,86 @@ class TestPipelineDiscoveryHelpers:
         base_dir = tmp_path / "base"
         base_dir.mkdir()
 
-        result = get_pipeline_info(str(yaml_file), base_dir=base_dir)
-        # Falls back to yaml_path.stem since file is outside base_dir
-        assert result["name"] == "external_pipe"
+        with pytest.raises(ValueError, match="relative path|must use '/' separators"):
+            get_pipeline_info(str(yaml_file), base_dir=base_dir)
+
+    @pytest.mark.parametrize(
+        ("pipeline_path", "pattern"),
+        [
+            ("", "must not be empty"),
+            ("nested\\pipe.yaml", "use '/' separators"),
+            ("./pipe.yaml", "invalid path segments"),
+            ("nested//pipe.yaml", "invalid path segments"),
+        ],
+    )
+    def test_validate_discovery_pipeline_path_rejects_invalid_inputs(
+        self, pipeline_path: str, pattern: str
+    ) -> None:
+        with pytest.raises(ValueError, match=pattern):
+            _validate_discovery_pipeline_path(pipeline_path)
+
+    def test_get_pipeline_info_rejects_path_escape_outside_base_dir(self, tmp_path):
+        pipeline_dir = tmp_path / "pipelines"
+        pipeline_dir.mkdir()
+        (tmp_path / "outside.yaml").write_text(
+            "metadata:\n  name: outside\n  tags: [demo]\nnodes: []\nconnections: []\n"
+        )
+
+        with pytest.raises(
+            ValueError, match="pipeline_path contains invalid path segments"
+        ):
+            get_pipeline_info("../outside.yaml", base_dir=pipeline_dir)
+
+    def test_validate_discovery_pipeline_path_rejects_rooted_posix_path(self) -> None:
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path("/absolute.yaml")
+
+    def test_validate_discovery_pipeline_path_rejects_absolute_forward_slash_path(
+        self, tmp_path
+    ) -> None:
+        absolute_forward_path = (tmp_path / "pipe.yaml").as_posix()
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path(absolute_forward_path)
+
+    def test_validate_discovery_pipeline_path_rejects_absolute_path_from_path_object(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakePath:
+            suffix = ".yaml"
+
+            def __init__(self, _value: str) -> None:
+                pass
+
+            def is_absolute(self) -> bool:
+                return True
+
+        monkeypatch.setattr(helpers_mod, "Path", _FakePath)
+
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path("drive/absolute.yaml")
+
+    def test_get_pipeline_info_rejects_resolved_path_outside_base_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        base_dir = tmp_path / "pipelines"
+        base_dir.mkdir()
+        outside_yaml = tmp_path / "outside.yaml"
+        outside_yaml.write_text(
+            "metadata:\n  name: outside\n  tags: [demo]\nnodes: []\nconnections: []\n"
+        )
+        original_resolve = helpers_mod.Path.resolve
+
+        def _fake_resolve(path: helpers_mod.Path) -> helpers_mod.Path:
+            if path.as_posix().endswith("nested/link.yaml"):
+                return outside_yaml
+            return original_resolve(path)
+
+        monkeypatch.setattr(helpers_mod.Path, "resolve", _fake_resolve)
+
+        with pytest.raises(
+            ValueError, match="pipeline_path must stay within the server pipeline root"
+        ):
+            get_pipeline_info("nested/link.yaml", base_dir=base_dir)
 
 
 class TestWeightsFileResolution:
