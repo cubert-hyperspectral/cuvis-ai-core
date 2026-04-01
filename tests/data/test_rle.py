@@ -207,6 +207,22 @@ class TestDecodeRleMaskForCanvas:
         assert mask.sum() == 4
         assert "<missing or invalid>" in caplog.text
 
+    def test_warns_for_non_numeric_size_entries(self, monkeypatch, caplog):
+        import cuvis_ai_core.data.rle as rle_mod
+
+        monkeypatch.setattr(rle_mod, "_RLE_SIZE_MISMATCH_WARNING_EMITTED", False)
+        caplog.set_level("WARNING", logger="cuvis_ai_core.data.rle")
+
+        mask = decode_rle_mask_for_canvas(
+            {"counts": [0, 1, 3], "size": ["bad", 2]},
+            target_height=2,
+            target_width=2,
+        )
+
+        assert mask.shape == (2, 2)
+        assert mask.sum() == 1
+        assert "<missing or invalid>" in caplog.text
+
 
 class TestDeprecatedAlias:
     def test_rle2mask_emits_warning(self):

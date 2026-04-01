@@ -7,12 +7,15 @@ Node subclasses (same pattern as test_graph_routing.py).
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from cuvis_ai_core.pipeline.profiling import PipelineProfiler
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.pipeline import PortSpec
 
@@ -296,3 +299,104 @@ class TestFormattingAndSaveGuards:
                 save_weights=False,
                 include_optimizer=True,
             )
+
+    def test_save_to_file_includes_optimizer_and_scheduler_state(self, tmp_path):
+        pipeline = CuvisPipeline("test")
+        pipeline.optimizer = Mock()
+        pipeline.optimizer.state_dict.return_value = {"lr": 0.1}
+        pipeline.scheduler = Mock()
+        pipeline.scheduler.state_dict.return_value = {"gamma": 0.9}
+
+        config_path = tmp_path / "pipeline.yaml"
+        pipeline.save_to_file(
+            config_path,
+            include_optimizer=True,
+            include_scheduler=True,
+        )
+
+        checkpoint = torch.load(config_path.with_suffix(".pt"))
+        assert checkpoint["optimizer_state"] == {"lr": 0.1}
+        assert checkpoint["scheduler_state"] == {"gamma": 0.9}
+
+    def test_set_profiling_recreates_profiler_when_skip_first_n_changes(self) -> None:
+        pipeline, _, _ = _make_single_node_pipeline(_IdentityNode)
+
+        pipeline.set_profiling(enabled=True, skip_first_n=2)
+        pipeline.forward(batch={"x": torch.tensor([1.0])})
+
+        pipeline.set_profiling(enabled=True, skip_first_n=0)
+
+        assert pipeline._profiler is not None
+        assert pipeline._profiler.skip_first_n == 0
+        assert pipeline.get_profiling_summary() == []
+
+    def test_profiling_timers_synchronize_for_cuda_devices(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pipeline, node, _ = _make_single_node_pipeline(_IdentityNode)
+        sync_calls: list[torch.device] = []
+        cuda_device = torch.device("cuda:0")
+
+        monkeypatch.setattr(
+            pipeline,
+            "_infer_cuda_device",
+            lambda _node, _inputs: cuda_device,
+        )
+        monkeypatch.setattr(
+            torch.cuda,
+            "synchronize",
+            lambda device=None: sync_calls.append(device),
+        )
+
+        pipeline._synchronize_cuda = True
+        pipeline._profiler = PipelineProfiler()
+
+        start = pipeline._start_profiling_timer(node, {"x": torch.tensor([1.0])})
+        pipeline._stop_profiling_timer(
+            start,
+            node,
+            {"x": torch.tensor([1.0])},
+            "inference",
+        )
+
+        assert sync_calls == [cuda_device, cuda_device]
+        assert len(pipeline.get_profiling_summary()) == 1
+
+    def test_infer_cuda_device_prefers_params_then_buffers_then_inputs(self) -> None:
+        class _ParamNode:
+            def parameters(self):
+                return [SimpleNamespace(device=torch.device("cuda:1"))]
+
+            def buffers(self):
+                return []
+
+        class _BufferNode:
+            def parameters(self):
+                return []
+
+            def buffers(self):
+                return [SimpleNamespace(device=torch.device("cuda:2"))]
+
+        class _InputCudaTensor(torch.Tensor):
+            @property
+            def device(self) -> torch.device:  # type: ignore[override]
+                return torch.device("cuda:3")
+
+        class _InputNode:
+            def parameters(self):
+                return []
+
+            def buffers(self):
+                return []
+
+        input_tensor = torch.tensor([1.0]).as_subclass(_InputCudaTensor)
+
+        assert CuvisPipeline._infer_cuda_device(_ParamNode(), {}) == torch.device(
+            "cuda:1"
+        )
+        assert CuvisPipeline._infer_cuda_device(_BufferNode(), {}) == torch.device(
+            "cuda:2"
+        )
+        assert CuvisPipeline._infer_cuda_device(
+            _InputNode(), {"x": input_tensor}
+        ) == torch.device("cuda:3")

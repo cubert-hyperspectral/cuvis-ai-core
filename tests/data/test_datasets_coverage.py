@@ -4,6 +4,7 @@ Covers: FPS extraction, processing mode fallback, SpectralRadiance validation.
 """
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock
 
 import numpy as np
@@ -98,6 +99,60 @@ def test_dataset_uses_cube_shape_when_coco_image_metadata_is_unavailable(
 
     assert sample["mask"].shape == sample["cube"].shape[:2]
     assert np.count_nonzero(sample["mask"]) == 0
+
+
+def test_resolve_annotation_canvas_size_uses_cube_shape_without_coco(
+    mock_cuvis_sdk, tmp_path
+):
+    del mock_cuvis_sdk
+    cu3s = tmp_path / "plain.cu3s"
+    cu3s.touch()
+
+    ds = SingleCu3sDataset(str(cu3s), processing_mode="Raw")
+    ds._coco = None
+
+    assert ds._resolve_annotation_canvas_size(image_id=1, cube_shape=(3, 5)) == (
+        3,
+        5,
+    )
+
+
+def test_resolve_annotation_canvas_size_uses_matching_image_metadata(
+    mock_cuvis_sdk, tmp_path
+):
+    del mock_cuvis_sdk
+    cu3s = tmp_path / "meta.cu3s"
+    cu3s.touch()
+
+    ds = SingleCu3sDataset(str(cu3s), processing_mode="Raw")
+    ds._coco = SimpleNamespace(images=[SimpleNamespace(id=7, height=11, width=13)])
+
+    assert ds._resolve_annotation_canvas_size(image_id=7, cube_shape=(3, 5)) == (
+        11,
+        13,
+    )
+
+
+def test_resolve_annotation_canvas_size_falls_back_to_backend_lookup(
+    mock_cuvis_sdk, tmp_path
+):
+    del mock_cuvis_sdk
+    cu3s = tmp_path / "backend.cu3s"
+    cu3s.touch()
+
+    ds = SingleCu3sDataset(str(cu3s), processing_mode="Raw")
+    ds._coco = SimpleNamespace(
+        images=[
+            SimpleNamespace(id=1, height=8, width=8),
+            SimpleNamespace(id=9, height="bad", width=13),
+        ],
+        _coco=SimpleNamespace(imgs={9: {"height": 17, "width": 19}}),
+    )
+
+    assert ds._resolve_annotation_canvas_size(image_id=9, cube_shape=(3, 5)) == (
+        17,
+        19,
+    )
 
 
 def _encode_uncompressed_rle(mask: np.ndarray) -> list[int]:

@@ -278,3 +278,27 @@ def test_download_data_cli_exits_nonzero_on_failed_download(
         download_data_cli()
 
     assert exc_info.value.code == 1
+
+
+def test_download_data_cli_returns_when_target_dir_lookup_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        PublicDatasets, "download_dataset", staticmethod(lambda *args, **kwargs: True)
+    )
+    monkeypatch.setattr(
+        PublicDatasets,
+        "get_target_dir",
+        staticmethod(lambda _name: (_ for _ in ()).throw(KeyError("missing"))),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dataset", "download", "lentils", "--data-dir", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        download_data_cli()
+
+    _assert_cli_success(exc_info)

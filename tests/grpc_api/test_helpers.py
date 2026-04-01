@@ -1,8 +1,11 @@
 """Test helper functions in cuvis_ai/grpc/helpers.py."""
 
+from __future__ import annotations
+
 import pytest
 from pydantic import ValidationError
 
+import cuvis_ai_core.grpc.helpers as helpers_mod
 from cuvis_ai_core.grpc.helpers import (
     _validate_discovery_pipeline_path,
     find_weights_file,
@@ -123,6 +126,40 @@ class TestPipelineDiscoveryHelpers:
             ValueError, match="pipeline_path contains invalid path segments"
         ):
             get_pipeline_info("../outside.yaml", base_dir=pipeline_dir)
+
+    def test_validate_discovery_pipeline_path_rejects_rooted_posix_path(self) -> None:
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path("/absolute.yaml")
+
+    def test_validate_discovery_pipeline_path_rejects_absolute_forward_slash_path(
+        self, tmp_path
+    ) -> None:
+        absolute_forward_path = (tmp_path / "pipe.yaml").as_posix()
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path(absolute_forward_path)
+
+    def test_get_pipeline_info_rejects_resolved_path_outside_base_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        base_dir = tmp_path / "pipelines"
+        base_dir.mkdir()
+        outside_yaml = tmp_path / "outside.yaml"
+        outside_yaml.write_text(
+            "metadata:\n  name: outside\n  tags: [demo]\nnodes: []\nconnections: []\n"
+        )
+        original_resolve = helpers_mod.Path.resolve
+
+        def _fake_resolve(path: helpers_mod.Path) -> helpers_mod.Path:
+            if path.as_posix().endswith("nested/link.yaml"):
+                return outside_yaml
+            return original_resolve(path)
+
+        monkeypatch.setattr(helpers_mod.Path, "resolve", _fake_resolve)
+
+        with pytest.raises(
+            ValueError, match="pipeline_path must stay within the server pipeline root"
+        ):
+            get_pipeline_info("nested/link.yaml", base_dir=base_dir)
 
 
 class TestWeightsFileResolution:

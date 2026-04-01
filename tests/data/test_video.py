@@ -249,6 +249,22 @@ def test_video_iterator_raises_when_cv2_fallback_cannot_open(
         video_mod.VideoIterator(str(video_path))
 
 
+def test_video_iterator_disables_random_access_when_length_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "unknown.mp4"
+    video_path.touch()
+
+    monkeypatch.setattr(video_mod, "_import_torchcodec", lambda: _DecoderWithFrames)
+    monkeypatch.setattr(video_mod, "len", lambda _decoder: -1, raising=False)
+
+    iterator = video_mod.VideoIterator(str(video_path))
+
+    assert iterator.enable_random_access is False
+    assert len(iterator) == 0
+
+
 def test_video_frame_dataset_and_datamodule_behaviour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

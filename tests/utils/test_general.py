@@ -18,6 +18,10 @@ def test_resolve_measurement_indices_expands_open_ended_range() -> None:
     assert _resolve_measurement_indices(range(2, -1), max_index=6) == [2, 3, 4, 5]
 
 
+def test_resolve_measurement_indices_keeps_regular_range() -> None:
+    assert _resolve_measurement_indices(range(1, 4), max_index=10) == [1, 2, 3]
+
+
 def test_resolve_measurement_indices_open_ended_range_requires_max_index() -> None:
     with pytest.raises(
         ValueError, match="max_index is required when using an open-ended range"

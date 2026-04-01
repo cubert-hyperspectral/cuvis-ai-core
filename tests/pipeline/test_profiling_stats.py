@@ -13,6 +13,7 @@ import pytest
 
 from cuvis_ai_core.pipeline.profiling import (
     PipelineProfiler,
+    _P2MedianEstimator,
     _ScalarAccumulator,
     format_profiling_table,
 )
@@ -94,6 +95,30 @@ class TestScalarAccumulator:
         assert snap["count"] == 1
         assert snap["mean_ms"] == 42.0
         assert snap["std_ms"] == 0.0
+
+    def test_p2_estimator_empty_median_is_zero(self) -> None:
+        estimator = _P2MedianEstimator()
+        assert estimator.median == 0.0
+
+    def test_p2_estimator_falls_back_to_linear_update(self, monkeypatch) -> None:
+        estimator = _P2MedianEstimator()
+        for value in [1.0, 2.0, 3.0, 4.0, 5.0]:
+            estimator.add(value)
+
+        parabolic_calls = 0
+
+        def _fake_parabolic(self, _i: int, _d: int) -> float:
+            nonlocal parabolic_calls
+            parabolic_calls += 1
+            return 10_000.0
+
+        monkeypatch.setattr(_P2MedianEstimator, "_parabolic", _fake_parabolic)
+
+        for _ in range(10):
+            estimator.add(100.0)
+
+        assert parabolic_calls > 0
+        assert estimator.median < 10_000.0
 
 
 class TestSkipFirstN:
