@@ -138,7 +138,9 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     assert len(fake_pipeline.forward_calls) == 2
     assert [ctx.batch_idx for _, ctx in fake_pipeline.forward_calls] == [0, 1]
     assert [ctx.global_step for _, ctx in fake_pipeline.forward_calls] == [0, 1]
-    assert all(batch["cube"].device.type == "cpu" for batch, _ in fake_pipeline.forward_calls)
+    assert all(
+        batch["cube"].device.type == "cpu" for batch, _ in fake_pipeline.forward_calls
+    )
     assert fake_pipeline.summary_calls == [(ExecutionStage.INFERENCE, 2)]
     assert fake_pipeline.video_node.close_calls == 1
     assert tqdm_calls == [{"total": 2, "desc": "Inference", "unit": "frame"}]

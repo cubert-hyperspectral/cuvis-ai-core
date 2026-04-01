@@ -22,7 +22,9 @@ def _install_fake_hf(
     monkeypatch.setitem(sys.modules, "huggingface_hub", module)
 
 
-def test_download_dataset_rejects_unknown_name(capsys: pytest.CaptureFixture[str]) -> None:
+def test_download_dataset_rejects_unknown_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     assert PublicDatasets.download_dataset("missing") is False
 
     out = capsys.readouterr().out
@@ -38,7 +40,9 @@ def test_download_dataset_skips_existing_directory(
     target = tmp_path / PublicDatasets.get_target_dir("lentils")
     target.mkdir(parents=True)
 
-    assert PublicDatasets.download_dataset("lentils", download_path=str(tmp_path)) is True
+    assert (
+        PublicDatasets.download_dataset("lentils", download_path=str(tmp_path)) is True
+    )
 
     out = capsys.readouterr().out
     assert "already exists" in out
@@ -79,7 +83,9 @@ def test_download_dataset_success_and_failure_paths(
 ) -> None:
     calls: list[dict[str, str]] = []
 
-    def _fake_snapshot_download(*, repo_id: str, repo_type: str, local_dir: str) -> None:
+    def _fake_snapshot_download(
+        *, repo_id: str, repo_type: str, local_dir: str
+    ) -> None:
         calls.append(
             {"repo_id": repo_id, "repo_type": repo_type, "local_dir": local_dir}
         )
