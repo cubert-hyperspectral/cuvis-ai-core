@@ -31,9 +31,9 @@ if ! uv run ruff check . --fix; then
     exit 1
 fi
 
-# Run pytest with non-GPU tests
-echo "→ Running pytest (excluding GPU tests)..."
-if ! uv run python -m pytest tests/ -v --tb=line -m "not slow and not gpu"; then
+# Run the same test subset as CI
+echo "→ Running pytest (matching CI markers)..."
+if ! uv run python -m pytest tests/ -v --tb=line -m "not slow and not gpu and not stress and not requires_data"; then
     echo "✗ Tests failed. Please fix the failing tests and try again."
     exit 1
 fi
