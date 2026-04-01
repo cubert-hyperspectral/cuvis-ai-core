@@ -138,6 +138,19 @@ def test_import_torchcodec_raises_helpful_message(
         video_mod._import_torchcodec()
 
 
+def test_import_torchcodec_handles_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        video_mod.importlib,
+        "import_module",
+        lambda _name: (_ for _ in ()).throw(OSError("missing shared library")),
+    )
+
+    with pytest.raises(ImportError, match="Install FFmpeg"):
+        video_mod._import_torchcodec()
+
+
 def test_video_iterator_torchcodec_backend_and_frame_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -212,6 +225,28 @@ def test_video_iterator_falls_back_to_cv2(
     assert missing_frame["image"].shape == (1, 1, 3)
     assert fail_cap.position == 3
     assert fail_cap.released is True
+
+
+def test_video_iterator_raises_when_cv2_fallback_cannot_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "broken.mp4"
+    video_path.touch()
+
+    monkeypatch.setattr(
+        video_mod,
+        "_import_torchcodec",
+        lambda: (_ for _ in ()).throw(ImportError("missing torchcodec")),
+    )
+    monkeypatch.setattr(
+        video_mod.cv2,
+        "VideoCapture",
+        lambda _path: _FakeCapture(opened=False),
+    )
+
+    with pytest.raises(RuntimeError, match="failed to open"):
+        video_mod.VideoIterator(str(video_path))
 
 
 def test_video_frame_dataset_and_datamodule_behaviour(

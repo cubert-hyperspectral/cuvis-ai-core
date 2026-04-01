@@ -267,3 +267,32 @@ class TestLifecycle:
         pipeline.forward(batch={"x": torch.tensor([1.0])})
         for s in pipeline.get_profiling_summary():
             assert s.count == 2
+
+
+class TestFormattingAndSaveGuards:
+    def test_format_profiling_summary_includes_header_metadata(self) -> None:
+        pipeline, n1, n2 = _make_single_node_pipeline(_IdentityNode)
+
+        pipeline.set_profiling(enabled=True, skip_first_n=2)
+        for _ in range(3):
+            pipeline.forward(batch={"x": torch.tensor([1.0])})
+
+        table = pipeline.format_profiling_summary(total_frames=3)
+
+        assert "Profiling Summary (3 frames, skip_first_n=2)" in table
+        assert n1.name in table
+        assert n2.name in table
+        assert "TOTAL" in table
+
+    def test_save_to_file_requires_weights_for_optimizer_or_scheduler(self, tmp_path):
+        pipeline = CuvisPipeline("test")
+
+        with pytest.raises(
+            ValueError,
+            match="include_optimizer/include_scheduler require save_weights=True",
+        ):
+            pipeline.save_to_file(
+                tmp_path / "pipeline.yaml",
+                save_weights=False,
+                include_optimizer=True,
+            )

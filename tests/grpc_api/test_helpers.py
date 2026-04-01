@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from cuvis_ai_core.grpc.helpers import (
+    _validate_discovery_pipeline_path,
     find_weights_file,
     get_pipeline_info,
     list_available_pipelines,
@@ -95,6 +96,33 @@ class TestPipelineDiscoveryHelpers:
 
         with pytest.raises(ValueError, match="relative path|must use '/' separators"):
             get_pipeline_info(str(yaml_file), base_dir=base_dir)
+
+    @pytest.mark.parametrize(
+        ("pipeline_path", "pattern"),
+        [
+            ("", "must not be empty"),
+            ("nested\\pipe.yaml", "use '/' separators"),
+            ("./pipe.yaml", "invalid path segments"),
+            ("nested//pipe.yaml", "invalid path segments"),
+        ],
+    )
+    def test_validate_discovery_pipeline_path_rejects_invalid_inputs(
+        self, pipeline_path: str, pattern: str
+    ) -> None:
+        with pytest.raises(ValueError, match=pattern):
+            _validate_discovery_pipeline_path(pipeline_path)
+
+    def test_get_pipeline_info_rejects_path_escape_outside_base_dir(self, tmp_path):
+        pipeline_dir = tmp_path / "pipelines"
+        pipeline_dir.mkdir()
+        (tmp_path / "outside.yaml").write_text(
+            "metadata:\n  name: outside\n  tags: [demo]\nnodes: []\nconnections: []\n"
+        )
+
+        with pytest.raises(
+            ValueError, match="pipeline_path contains invalid path segments"
+        ):
+            get_pipeline_info("../outside.yaml", base_dir=pipeline_dir)
 
 
 class TestWeightsFileResolution:

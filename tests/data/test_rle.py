@@ -13,6 +13,7 @@ from cuvis_ai_core.data.rle import (
     coco_rle_decode,
     coco_rle_encode,
     coco_rle_to_bbox,
+    decode_rle_mask_for_canvas,
     rle_list_to_mask,
 )
 
@@ -158,6 +159,53 @@ class TestCocoRleToBbox:
         rle = coco_rle_encode(mask)
         bbox = coco_rle_to_bbox(rle)
         assert bbox == pytest.approx([0.0, 0.0, 0.0, 0.0])
+
+    def test_area_and_bbox_from_uncompressed_counts(self):
+        mask = np.zeros((4, 5), dtype=np.uint8)
+        mask[1:3, 2:5] = 1
+
+        flat = mask.flatten(order="F")
+        counts: list[int] = []
+        current = 0
+        run = 0
+        for value in flat:
+            if int(value) == current:
+                run += 1
+                continue
+            counts.append(run)
+            current = int(value)
+            run = 1
+        counts.append(run)
+
+        rle = {"size": [4, 5], "counts": counts}
+        assert coco_rle_area(rle) == 6
+        assert coco_rle_to_bbox(rle) == pytest.approx([2.0, 1.0, 3.0, 2.0])
+
+
+class TestDecodeRleMaskForCanvas:
+    def test_rejects_non_list_counts(self):
+        with pytest.raises(TypeError, match="list-based RLE"):
+            decode_rle_mask_for_canvas(
+                {"size": [2, 2], "counts": "compressed"},
+                target_height=2,
+                target_width=2,
+            )
+
+    def test_warns_for_missing_or_invalid_size(self, monkeypatch, caplog):
+        import cuvis_ai_core.data.rle as rle_mod
+
+        monkeypatch.setattr(rle_mod, "_RLE_SIZE_MISMATCH_WARNING_EMITTED", False)
+        caplog.set_level("WARNING", logger="cuvis_ai_core.data.rle")
+
+        mask = decode_rle_mask_for_canvas(
+            {"counts": [0, 4], "size": "bad-size"},
+            target_height=2,
+            target_width=2,
+        )
+
+        assert mask.shape == (2, 2)
+        assert mask.sum() == 4
+        assert "<missing or invalid>" in caplog.text
 
 
 class TestDeprecatedAlias:

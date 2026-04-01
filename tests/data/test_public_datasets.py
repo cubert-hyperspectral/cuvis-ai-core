@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import builtins
+import shutil
 import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from cuvis_ai_core.data.public_datasets import PublicDatasets
+from cuvis_ai_core.data.public_datasets import PublicDatasets, download_data_cli
 
 
 def _install_fake_hf(
@@ -20,6 +21,10 @@ def _install_fake_hf(
     module = ModuleType("huggingface_hub")
     module.snapshot_download = download_fn
     monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+
+
+def _assert_cli_success(exc_info: pytest.ExceptionInfo[SystemExit]) -> None:
+    assert exc_info.value.code in (0, None)
 
 
 def test_download_dataset_rejects_unknown_name(
@@ -143,3 +148,133 @@ def test_list_datasets_verbose_and_canonical_names(
     assert "(alias: blood_perfusion)" in out
     assert "repo:" in out
     assert "dir:" in out
+
+
+def test_download_data_cli_lists_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["dataset", "list", "--verbose"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        download_data_cli()
+
+    _assert_cli_success(exc_info)
+    out = capsys.readouterr().out
+    assert "Lentils_Anomaly" in out
+    assert "Blood_Perfusion" in out
+    assert "repo:" in out
+
+
+def test_download_data_cli_validates_and_creates_lentils_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    created_links: list[tuple[Path, str, bool]] = []
+    path_type = type(tmp_path)
+    original_exists = path_type.exists
+
+    def _fake_download_dataset(
+        name: str, *, download_path: str = ".", force: bool = False
+    ) -> bool:
+        del force
+        target = Path(download_path) / PublicDatasets.get_target_dir(name)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "sample.cu3s").write_text("", encoding="utf-8")
+        return True
+
+    def _fake_symlink_to(self: Path, target: str, target_is_directory: bool = False):
+        created_links.append((self, target, target_is_directory))
+
+    def _fake_exists(self: Path) -> bool:
+        if self.parent == tmp_path and self.name == "lentils":
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(
+        PublicDatasets, "download_dataset", staticmethod(_fake_download_dataset)
+    )
+    monkeypatch.setattr(Path, "symlink_to", _fake_symlink_to)
+    monkeypatch.setattr(path_type, "exists", _fake_exists)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dataset", "download", "lentils", "--data-dir", str(tmp_path), "--force"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        download_data_cli()
+
+    _assert_cli_success(exc_info)
+    assert created_links == [(tmp_path / "lentils", "Lentils", True)]
+
+
+def test_download_data_cli_copies_when_symlink_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    copied: list[tuple[Path, Path]] = []
+    path_type = type(tmp_path)
+    original_exists = path_type.exists
+
+    def _fake_download_dataset(
+        name: str, *, download_path: str = ".", force: bool = False
+    ) -> bool:
+        del force
+        target = Path(download_path) / PublicDatasets.get_target_dir(name)
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+
+    def _failing_symlink(self: Path, target: str, target_is_directory: bool = False):
+        del self, target, target_is_directory
+        raise OSError("no symlink privileges")
+
+    def _fake_copytree(src: Path | str, dst: Path | str) -> None:
+        src_path = Path(src)
+        dst_path = Path(dst)
+        copied.append((src_path, dst_path))
+        dst_path.mkdir(parents=True, exist_ok=True)
+
+    def _fake_exists(self: Path) -> bool:
+        if self.parent == tmp_path and self.name == "lentils":
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(
+        PublicDatasets, "download_dataset", staticmethod(_fake_download_dataset)
+    )
+    monkeypatch.setattr(Path, "symlink_to", _failing_symlink)
+    monkeypatch.setattr(path_type, "exists", _fake_exists)
+    monkeypatch.setattr(shutil, "copytree", _fake_copytree)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dataset", "download", "lentils", "--data-dir", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        download_data_cli()
+
+    _assert_cli_success(exc_info)
+    assert copied == [(tmp_path / "Lentils", tmp_path / "lentils")]
+
+
+def test_download_data_cli_exits_nonzero_on_failed_download(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        PublicDatasets,
+        "download_dataset",
+        staticmethod(lambda *args, **kwargs: False),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["dataset", "download", "blood_perfusion", "--data-dir", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        download_data_cli()
+
+    assert exc_info.value.code == 1

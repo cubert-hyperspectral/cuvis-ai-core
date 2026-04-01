@@ -119,6 +119,14 @@ def _build_pipeline() -> tuple[CuvisPipeline, PredictSourceNode, PredictSinkNode
     return pipeline, source, sink
 
 
+class _LenRaises:
+    def __iter__(self):
+        yield {"value": torch.tensor([[1.0]])}
+
+    def __len__(self) -> int:
+        raise TypeError("unknown length")
+
+
 def test_predictor_runs_inference_with_context_and_hooks() -> None:
     pipeline, source, sink = _build_pipeline()
     datamodule = PredictDataModule(
@@ -219,3 +227,71 @@ def test_predictor_tqdm_disable_follows_tty_state(
 
     assert captured_disable == [expected_disable]
     assert sink.forward_calls == 2
+
+
+def test_predictor_helper_methods_cover_batch_estimation_and_iteration() -> None:
+    loader = DataLoader(
+        DictDataset(torch.tensor([[1.0], [2.0]])),
+        batch_size=1,
+        shuffle=False,
+    )
+    mapping = {"first": loader, "skip": None}
+    iterable = [loader, None]
+
+    assert Predictor._estimate_total_batches(loader, None) == 2
+    assert Predictor._estimate_total_batches(mapping, max_batches=1) == 1
+    assert Predictor._estimate_total_batches(iterable, max_batches=None) == 2
+    assert Predictor._estimate_total_batches({"bad": _LenRaises()}, None) is None
+
+    mapping_batches = [
+        batch["value"].item() for batch in Predictor._iter_batches(mapping)
+    ]
+    iterable_batches = [
+        batch["value"].item() for batch in Predictor._iter_batches(iterable)
+    ]
+
+    assert mapping_batches == [1.0, 2.0]
+    assert iterable_batches == [1.0, 2.0]
+
+    with pytest.raises(TypeError, match="predict_dataloader\\(\\) must return"):
+        list(Predictor._iter_batches(123))
+
+
+def test_predictor_progress_bar_disables_for_missing_or_broken_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoIsatty:
+        pass
+
+    class _BrokenIsatty:
+        def isatty(self) -> bool:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _NoIsatty())
+    assert Predictor._should_disable_progress_bar() is True
+
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _BrokenIsatty())
+    assert Predictor._should_disable_progress_bar() is True
+
+
+def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors() -> (
+    None
+):
+    pipeline, source, _ = _build_pipeline()
+    source.register_buffer("device_probe", torch.tensor([1.0], dtype=torch.float32))
+    predictor = Predictor(
+        pipeline=pipeline,
+        datamodule=PredictDataModule(values=torch.tensor([[1.0]])),
+    )
+
+    assert predictor._get_pipeline_device().type == "cpu"
+
+    moved = predictor._move_batch_to_device(
+        {
+            "value": torch.tensor([[1.0]], dtype=torch.float32),
+            "meta": "keep-me",
+        }
+    )
+
+    assert moved["value"].device.type == "cpu"
+    assert moved["meta"] == "keep-me"
