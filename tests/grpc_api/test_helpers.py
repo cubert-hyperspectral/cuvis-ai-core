@@ -138,6 +138,23 @@ class TestPipelineDiscoveryHelpers:
         with pytest.raises(ValueError, match="relative path"):
             _validate_discovery_pipeline_path(absolute_forward_path)
 
+    def test_validate_discovery_pipeline_path_rejects_absolute_path_from_path_object(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakePath:
+            suffix = ".yaml"
+
+            def __init__(self, _value: str) -> None:
+                pass
+
+            def is_absolute(self) -> bool:
+                return True
+
+        monkeypatch.setattr(helpers_mod, "Path", _FakePath)
+
+        with pytest.raises(ValueError, match="relative path"):
+            _validate_discovery_pipeline_path("drive/absolute.yaml")
+
     def test_get_pipeline_info_rejects_resolved_path_outside_base_dir(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:

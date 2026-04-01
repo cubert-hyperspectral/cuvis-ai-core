@@ -155,6 +155,25 @@ def test_resolve_annotation_canvas_size_falls_back_to_backend_lookup(
     )
 
 
+def test_resolve_annotation_canvas_size_falls_back_to_cube_shape_on_invalid_backend_data(
+    mock_cuvis_sdk, tmp_path
+):
+    del mock_cuvis_sdk
+    cu3s = tmp_path / "backend-invalid.cu3s"
+    cu3s.touch()
+
+    ds = SingleCu3sDataset(str(cu3s), processing_mode="Raw")
+    ds._coco = SimpleNamespace(
+        images=[SimpleNamespace(id=9, height="bad", width=13)],
+        _coco=SimpleNamespace(imgs={9: {"height": "still-bad"}}),
+    )
+
+    assert ds._resolve_annotation_canvas_size(image_id=9, cube_shape=(3, 5)) == (
+        3,
+        5,
+    )
+
+
 def _encode_uncompressed_rle(mask: np.ndarray) -> list[int]:
     """Encode binary mask to uncompressed COCO RLE counts (column-major)."""
     flat = mask.astype(np.uint8).flatten(order="F")
