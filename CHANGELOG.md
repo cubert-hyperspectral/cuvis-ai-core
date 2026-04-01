@@ -2,13 +2,17 @@
 
 ## [Unreleased]
 
-- Added parsing support for optional `BoundingBox.object_id` values in gRPC inference batches so runtime SAM3 bbox prompts can preserve stable object IDs.
-- Changed pipeline discovery gRPC handling to `pipeline_path`-based requests/responses (with `.yaml` extension) and added path validation against traversal/absolute inputs.
-- Added `rgb_image`, `frame_id`, and `mesu_index` parsing in inference input batches, with dedicated gRPC tests for present/empty semantics.
-- Hardened tensor conversion diagnostics in gRPC helpers and updated local schema dependency wiring in `pyproject.toml`.
-- Improved pipeline state serialization behavior to better preserve node state handling across save/load paths.
-- Added/updated serialization tests covering current node-state persistence scenarios.
-- Added `.cursor/` to `.gitignore` to keep local editor workspace artifacts out of commits.
+## 0.3.0 - 2026-04-01
+
+- Added `cuvis_ai_core.training.Predictor` with predict-mode datamodule inference support and progress reporting that disables cleanly in non-interactive environments.
+- Added automatic per-node runtime profiling APIs, summary formatting utilities, and gRPC profiling service endpoints for pipeline execution.
+- Added public dataset download helpers and CLI-facing exports in `cuvis_ai_core.data`.
+- Added RLE and video data utilities, hardened COCO mask decoding against swapped or missing canvas sizes, and guarded video datamodule setup against predict-time reinitialization.
+- Changed gRPC pipeline discovery and lookup to use `pipeline_path` values, with path validation and alignment to the released schema field names.
+- Added inference parsing support for `rgb_image`, `frame_id`, `mesu_index`, and optional `BoundingBox.object_id` values in batch inputs.
+- Improved pipeline node-state serialization behavior, extra pipeline input handling, and restore utilities for long-running inference workflows.
+- Switched core schema resolution to the published `cuvis-ai-schemas>=0.3.0` package and removed the local editable override from dependency wiring.
+- Updated CI and release workflows to use `codecov/codecov-action@v6`, `actions/upload-artifact@v7`, and `actions/download-artifact@v8` while preserving container git safe-directory handling.
 
 ## 0.2.0 - 2026-02-27
 
