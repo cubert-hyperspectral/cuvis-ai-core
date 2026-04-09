@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.3.2 - 2026-04-09
+
+- Fixed torchvision wheel hash mismatch caused by inconsistent PyTorch CDN content across regions.
+
 ## 0.3.0 - 2026-04-01
 
 - Added `cuvis_ai_core.training.Predictor` with predict-mode datamodule inference support and progress reporting that disables cleanly in non-interactive environments.
