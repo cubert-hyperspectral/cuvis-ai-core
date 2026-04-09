@@ -203,7 +203,7 @@ class ProductionServer:
         self.logger.info("Server shutdown complete")
 
 
-def serve() -> None:
+def serve() -> None:  # pragma: no cover
     """Start the production gRPC server with configuration from environment."""
     load_dotenv(override=True)
 
