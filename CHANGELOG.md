@@ -5,6 +5,7 @@
 ## 0.3.3 - 2026-04-09
 
 - Switched from `opencv-python` to `opencv-python-headless` to avoid file-locking conflicts when plugins install headless variant at runtime on Windows.
+- Increased default gRPC max message size from 200 MB to 300 MB to match the client default.
 
 ## 0.3.2 - 2026-04-09
 

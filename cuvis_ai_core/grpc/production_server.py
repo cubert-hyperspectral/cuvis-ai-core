@@ -216,7 +216,7 @@ def serve() -> None:
 
     port = int(os.getenv("GRPC_PORT", "50051"))
     max_workers = int(os.getenv("GRPC_MAX_WORKERS", "10"))
-    max_msg_size = int(os.getenv("GRPC_MAX_MSG_SIZE", 200 * 1024 * 1024))  # 200 MB
+    max_msg_size = int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024))  # 300 MB
     use_tls = os.getenv("GRPC_USE_TLS", "false").lower() == "true"
     tls_cert_path = os.getenv("GRPC_TLS_CERT_PATH")
     tls_key_path = os.getenv("GRPC_TLS_KEY_PATH")
