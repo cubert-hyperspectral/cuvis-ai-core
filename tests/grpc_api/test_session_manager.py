@@ -103,6 +103,24 @@ class TestSessionManager:
         gc_collect.assert_called_once_with()
         empty_cache.assert_called_once_with()
 
+    def test_cleanup_pipeline_tolerates_cleanup_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = SessionManager()
+        pipeline = MagicMock()
+        pipeline.cleanup.side_effect = RuntimeError("boom")
+        session_id = manager.create_session(pipeline=pipeline)
+
+        monkeypatch.setattr("cuvis_ai_core.grpc.session_manager.gc.collect", MagicMock())
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
+            lambda: False,
+        )
+
+        manager.close_session(session_id)
+
+        pipeline.cleanup.assert_called_once_with()
+
     def test_set_pipeline_cleans_up_previous_pipeline(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

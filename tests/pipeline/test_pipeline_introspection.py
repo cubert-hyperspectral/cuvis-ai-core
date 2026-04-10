@@ -18,6 +18,18 @@ class _CleanupNode(Node):
         return {}
 
 
+class _FailingCleanupNode(Node):
+    def __init__(self, name: str = "failing_node") -> None:
+        super().__init__(name=name)
+
+    def cleanup(self) -> None:
+        raise RuntimeError("cleanup exploded")
+
+    def forward(self, **inputs: Any) -> dict[str, Any]:
+        del inputs
+        return {}
+
+
 class TestPipelineIntrospection:
     """Test Pipeline introspection methods with O(N+E) complexity."""
 
@@ -228,3 +240,15 @@ class TestPipelineIntrospection:
         assert pipeline._profiler is None
         assert pipeline._profiling_enabled is False
         assert pipeline._synchronize_cuda is False
+
+    def test_cleanup_tolerates_node_failure(self) -> None:
+        pipeline = CuvisPipeline("test_failing_cleanup")
+        good_node = _CleanupNode(name="good")
+        bad_node = _FailingCleanupNode(name="bad")
+        pipeline._graph.add_node(bad_node)
+        pipeline._graph.add_node(good_node)
+
+        pipeline.cleanup()
+
+        assert good_node.cleaned is True
+        assert list(pipeline.nodes) == []
