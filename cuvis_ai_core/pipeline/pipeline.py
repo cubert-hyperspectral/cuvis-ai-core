@@ -457,6 +457,33 @@ class CuvisPipeline:
         else:
             logger.info(f"Pipeline saved: Config={config_path} (weights skipped)")
 
+    def cleanup(self) -> None:
+        """Release node-held runtime state and drop graph references.
+
+        This is intended for terminal teardown paths such as gRPC session close
+        or pipeline replacement. After cleanup the pipeline should be treated as
+        disposed and not reused.
+        """
+        nodes = list(self._graph.nodes())
+        for node in reversed(nodes):
+            try:
+                node.cleanup()
+            except Exception as exc:
+                logger.warning(
+                    "Pipeline cleanup: node '{}' cleanup failed: {}",
+                    node.name,
+                    exc,
+                )
+
+        self._validation_cache.clear()
+        if "_sorted_nodes" in self.__dict__:
+            del self.__dict__["_sorted_nodes"]
+
+        self._profiler = None
+        self._profiling_enabled = False
+        self._synchronize_cuda = False
+        self._graph = nx.MultiDiGraph()
+
     def _restore_weights_from_checkpoint(
         self,
         weights_path: str | Path,

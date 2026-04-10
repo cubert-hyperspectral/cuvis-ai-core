@@ -1,5 +1,33 @@
+from typing import Any
+
+from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from tests.fixtures import LentilsAnomalyDataNode, MinMaxNormalizer, SoftChannelSelector
+
+
+class _CleanupNode(Node):
+    def __init__(self, name: str = "cleanup_node") -> None:
+        self.cleaned = False
+        super().__init__(name=name)
+
+    def cleanup(self) -> None:
+        self.cleaned = True
+
+    def forward(self, **inputs: Any) -> dict[str, Any]:
+        del inputs
+        return {}
+
+
+class _FailingCleanupNode(Node):
+    def __init__(self, name: str = "failing_node") -> None:
+        super().__init__(name=name)
+
+    def cleanup(self) -> None:
+        raise RuntimeError("cleanup exploded")
+
+    def forward(self, **inputs: Any) -> dict[str, Any]:
+        del inputs
+        return {}
 
 
 class TestPipelineIntrospection:
@@ -193,3 +221,34 @@ class TestPipelineIntrospection:
         # Intermediate nodes should not appear
         assert "data_0.cube" not in output_specs  # Connected
         assert "norm_1.normalized" not in output_specs  # Connected
+
+    def test_cleanup_releases_nodes_and_clears_caches(self) -> None:
+        pipeline = CuvisPipeline("test_cleanup")
+        node = _CleanupNode(name="cleanup_node")
+        pipeline._graph.add_node(node)
+        pipeline._validation_cache[("cleanup_node", frozenset(), None)] = None
+        _ = pipeline._sorted_nodes
+        pipeline._profiling_enabled = True
+        pipeline._synchronize_cuda = True
+
+        pipeline.cleanup()
+
+        assert node.cleaned is True
+        assert list(pipeline.nodes) == []
+        assert pipeline._validation_cache == {}
+        assert "_sorted_nodes" not in pipeline.__dict__
+        assert pipeline._profiler is None
+        assert pipeline._profiling_enabled is False
+        assert pipeline._synchronize_cuda is False
+
+    def test_cleanup_tolerates_node_failure(self) -> None:
+        pipeline = CuvisPipeline("test_failing_cleanup")
+        good_node = _CleanupNode(name="good")
+        bad_node = _FailingCleanupNode(name="bad")
+        pipeline._graph.add_node(bad_node)
+        pipeline._graph.add_node(good_node)
+
+        pipeline.cleanup()
+
+        assert good_node.cleaned is True
+        assert list(pipeline.nodes) == []

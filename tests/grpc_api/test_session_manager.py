@@ -1,4 +1,5 @@
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -75,6 +76,71 @@ class TestSessionManager:
         manager = SessionManager()
         with pytest.raises(ValueError):
             manager.close_session("unknown")
+
+    def test_close_session_cleans_up_pipeline(self, monkeypatch: pytest.MonkeyPatch):
+        manager = SessionManager()
+        pipeline = MagicMock()
+        trainer = MagicMock()
+        session_id = manager.create_session(pipeline=pipeline)
+        manager.get_session(session_id).trainer = trainer
+
+        gc_collect = MagicMock(return_value=0)
+        empty_cache = MagicMock()
+        monkeypatch.setattr("cuvis_ai_core.grpc.session_manager.gc.collect", gc_collect)
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.empty_cache",
+            empty_cache,
+        )
+
+        manager.close_session(session_id)
+
+        pipeline.cleanup.assert_called_once_with()
+        trainer.cleanup.assert_called_once_with()
+        gc_collect.assert_called_once_with()
+        empty_cache.assert_called_once_with()
+
+    def test_cleanup_pipeline_tolerates_cleanup_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = SessionManager()
+        pipeline = MagicMock()
+        pipeline.cleanup.side_effect = RuntimeError("boom")
+        session_id = manager.create_session(pipeline=pipeline)
+
+        monkeypatch.setattr("cuvis_ai_core.grpc.session_manager.gc.collect", MagicMock())
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
+            lambda: False,
+        )
+
+        manager.close_session(session_id)
+
+        pipeline.cleanup.assert_called_once_with()
+
+    def test_set_pipeline_cleans_up_previous_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        manager = SessionManager()
+        old_pipeline = MagicMock()
+        new_pipeline = MagicMock()
+        session_id = manager.create_session(pipeline=old_pipeline)
+
+        gc_collect = MagicMock(return_value=0)
+        monkeypatch.setattr("cuvis_ai_core.grpc.session_manager.gc.collect", gc_collect)
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
+            lambda: False,
+        )
+
+        manager.set_pipeline(session_id, new_pipeline, pipeline_config=None)
+
+        old_pipeline.cleanup.assert_called_once_with()
+        gc_collect.assert_called_once_with()
+        assert manager.get_session(session_id).pipeline is new_pipeline
 
     def test_get_session_updates_last_accessed(self):
         manager = SessionManager()

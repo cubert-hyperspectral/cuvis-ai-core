@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import torch
 from loguru import logger
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
@@ -112,6 +114,36 @@ class SessionManager:
         state.last_accessed = time.time()
         return state
 
+    @staticmethod
+    def _cleanup_pipeline(pipeline: CuvisPipeline | None) -> None:
+        """Best-effort pipeline teardown for session close or replacement."""
+        if pipeline is None:
+            return
+
+        try:
+            pipeline.cleanup()
+        except Exception as exc:
+            logger.warning("Pipeline cleanup failed during session teardown: {}", exc)
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def set_pipeline(
+        self,
+        session_id: str,
+        pipeline: CuvisPipeline | None,
+        pipeline_config: PipelineConfig | None = None,
+    ) -> None:
+        """Attach a pipeline to a session, cleaning up any previous pipeline."""
+        session = self.get_session(session_id)
+        old_pipeline = session.pipeline
+        if old_pipeline is not None and old_pipeline is not pipeline:
+            self._cleanup_pipeline(old_pipeline)
+
+        session.pipeline = pipeline
+        session.pipeline_config = pipeline_config
+
     def set_search_paths(
         self, session_id: str, paths: list[str], append: bool = True
     ) -> tuple[list[str], list[str]]:
@@ -166,9 +198,18 @@ class SessionManager:
             except Exception:
                 # Cleanup best-effort; avoid cascading errors
                 pass
+        state.trainer = None
+
+        pipeline = state.pipeline
+        state.pipeline = None
+        state.pipeline_config = None
+        self._cleanup_pipeline(pipeline)
 
         # Clear plugin tracking (GC will handle registry cleanup automatically)
         state.loaded_plugins.clear()
+        state.data_config = None
+        state.training_config = None
+        state.trainrun_config = None
 
         logger.info(f"Closed session: {session_id}")
 
