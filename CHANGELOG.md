@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.3.4 - 2026-04-10
+
 - Added `Node.cleanup()` virtual method for releasing runtime resources held by individual nodes.
 - Added `CuvisPipeline.cleanup()` that tears down nodes in reverse order, clears validation and profiling caches, and resets the graph.
 - Added `SessionManager.set_pipeline()` that cleans up the previous pipeline before attaching a replacement, preventing GPU memory leaks on pipeline swap.
