@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Added `Node.cleanup()` virtual method for releasing runtime resources held by individual nodes.
+- Added `CuvisPipeline.cleanup()` that tears down nodes in reverse order, clears validation and profiling caches, and resets the graph.
+- Added `SessionManager.set_pipeline()` that cleans up the previous pipeline before attaching a replacement, preventing GPU memory leaks on pipeline swap.
+- Fixed gRPC session teardown to eagerly release GPU-backed resources via `gc.collect()` and `torch.cuda.empty_cache()` instead of waiting for deferred garbage collection.
+- Fixed `close_session()` to explicitly nullify trainer, pipeline, and config references so they become eligible for immediate collection.
+- Changed `SetupPipeline` and `RestorePipeline` gRPC handlers to route through `SessionManager.set_pipeline()` instead of directly assigning `session.pipeline`.
+- Added tests for session pipeline cleanup, pipeline replacement cleanup, and pipeline introspection teardown.
+
 ## 0.3.3 - 2026-04-09
 
 - Switched from `opencv-python` to `opencv-python-headless` to avoid file-locking conflicts when plugins install headless variant at runtime on Windows.

@@ -120,8 +120,11 @@ class PipelineService:
             # Move pipeline to GPU if available
             if torch.cuda.is_available():
                 pipeline = pipeline.to("cuda")
-            session.pipeline = pipeline
-            session.pipeline_config = trainrun_config.pipeline
+            self.session_manager.set_pipeline(
+                request.session_id,
+                pipeline,
+                pipeline_config=trainrun_config.pipeline,
+            )
 
         # Set session configurations
         session.data_config = trainrun_config.data
@@ -229,8 +232,11 @@ class PipelineService:
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
 
-        session.pipeline = pipeline
-        session.pipeline_config = pipeline_config
+        self.session_manager.set_pipeline(
+            request.session_id,
+            pipeline,
+            pipeline_config=pipeline_config,
+        )
 
         metadata_proto = (
             pipeline_config.metadata.to_proto()

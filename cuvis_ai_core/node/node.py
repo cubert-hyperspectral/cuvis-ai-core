@@ -282,6 +282,14 @@ class Node(nn.Module, ABC, Serializable):
 
         return True, "OK"
 
+    def cleanup(self) -> None:
+        """Release runtime resources held by the node.
+
+        Nodes with external handles or large cached state can override this hook.
+        The default implementation is intentionally a no-op.
+        """
+        return None
+
     @abstractmethod
     def forward(self, **inputs: Any) -> dict[str, Any]:
         """Execute node computation returning a dictionary of named outputs."""
