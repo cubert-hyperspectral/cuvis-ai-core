@@ -1,4 +1,4 @@
-# Cuvis-AI Core Framework
+# Cuvis.AI Core
 
 
 
@@ -14,9 +14,15 @@
 
 ## Overview
 
-**cuvis-ai-core** is the foundational framework that powers the [cuvis-ai](https://github.com/cubert-hyperspectral/cuvis-ai) machine learning pipeline for hyperspectral image analysis. This repository provides the core infrastructure and building blocks that enable flexible, extensible AI workflows for hyperspectral measurements.
+Cuvis.AI is an opensource and extensible framework for building AI powered processing pipelines for hyperspectral video data.
 
-While the [cuvis-ai](https://github.com/cubert-hyperspectral/cuvis-ai) repository contains domain-specific nodes and pre-built models for tasks like anomaly detection and classification, **cuvis-ai-core** provides the essential framework components:
+It allows you to process and structure spectral data, train and apply machine learning models, visualize and interpret results, and deploy applications in real time environments.
+
+Pipelines are built from reusable modular nodes and can be extended with custom plugins or external integrations.
+
+Cuvis.AI bridges the gap between hyperspectral hardware and real world applications and enables faster development, testing, and deployment of new solutions.
+
+**cuvis-ai-core** is the foundational framework underneath Cuvis.AI. While the [cuvis-ai](https://github.com/cubert-hyperspectral/cuvis-ai) repository contains the catalog of domain-specific nodes and pre-built models, **cuvis-ai-core** provides the essential infrastructure that makes those modular pipelines work:
 
 - **Node System**: Base classes for creating processing nodes with typed input/output ports
 - **Pipeline Infrastructure**: Graph-based pipeline orchestration, execution, and visualization
