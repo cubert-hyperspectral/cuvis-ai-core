@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fixed `_convert_port_spec_to_proto` so `PortSpec(dtype=torch.Tensor, …)` (the generic-tensor marker) resolves to `D_TYPE_UNSPECIFIED` instead of raising "Unsupported numpy dtype"; the dedicated branch was previously shadowed by a `hasattr(spec.dtype, "dtype")` check because `torch.Tensor` exposes a class-level `dtype` descriptor. Nodes declaring generic-tensor ports (e.g. `CU3SDataNode.INPUT_SPECS["cube"]`) now return populated port specs from `ListAvailableNodes`.
+- Added unit tests for `_convert_port_spec_to_proto` covering torch dtypes, the `torch.Tensor` marker, numpy scalar classes, Python builtins, unsupported inputs, and symbolic shape dimensions.
+
 ## 0.3.4 - 2026-04-10
 
 - Added `Node.cleanup()` virtual method for releasing runtime resources held by individual nodes.

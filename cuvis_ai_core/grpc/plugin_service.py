@@ -39,6 +39,12 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
             proto_dtype = DTYPE_TORCH_TO_PROTO[spec.dtype]
         else:
             raise ValueError(f"Unsupported torch dtype: {spec.dtype}")
+    # Handle torch.Tensor as a generic tensor type (use UNSPECIFIED).
+    # Must precede the hasattr check below: torch.Tensor exposes a `dtype`
+    # descriptor at the class level, so the hasattr branch would otherwise
+    # catch it and fail np.dtype conversion.
+    elif spec.dtype is torch.Tensor:
+        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
     # Try numpy dtype mapping
     elif hasattr(spec.dtype, "dtype"):
         # Handle numpy scalar types (np.int32, np.float32, etc.)
@@ -47,9 +53,6 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
             proto_dtype = DTYPE_NUMPY_TO_PROTO[np_dtype]
         else:
             raise ValueError(f"Unsupported numpy dtype: {spec.dtype}")
-    # Handle torch.Tensor as a generic tensor type (use UNSPECIFIED)
-    elif spec.dtype is torch.Tensor:
-        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
     # Handle Python built-in types (dict, str, list, etc.) as UNSPECIFIED
     elif isinstance(spec.dtype, type):
         # Python types like dict, str, list, tuple, etc.

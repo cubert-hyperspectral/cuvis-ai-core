@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
 import torch
+from cuvis_ai_schemas.pipeline import PortSpec
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
+from cuvis_ai_core.grpc.plugin_service import _convert_port_spec_to_proto
 
 
 class TestProtoToNumpy:
@@ -234,3 +236,87 @@ class TestProcessingModeMapping:
         assert cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE == 2
         assert cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT == 3
         assert cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE == 4
+
+
+class TestConvertPortSpecToProto:
+    """Test PortSpec → proto PortSpec conversion"""
+
+    def test_concrete_torch_dtype_float32(self):
+        """torch.float32 dtype maps to D_TYPE_FLOAT32"""
+        spec = PortSpec(dtype=torch.float32, shape=(-1, -1))
+
+        result = _convert_port_spec_to_proto(spec, name="cube")
+
+        assert result.name == "cube"
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert list(result.shape) == [-1, -1]
+
+    def test_concrete_torch_dtype_int64_scalar_shape(self):
+        """torch.int64 with scalar shape maps to D_TYPE_INT64, empty shape list"""
+        spec = PortSpec(dtype=torch.int64, shape=())
+
+        result = _convert_port_spec_to_proto(spec, name="index")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_INT64
+        assert list(result.shape) == []
+
+    def test_generic_torch_tensor_dtype_is_unspecified(self):
+        """torch.Tensor (the class) as a generic-tensor marker maps to UNSPECIFIED.
+
+        Regression: the torch.Tensor branch used to sit after a
+        hasattr(spec.dtype, "dtype") check. torch.Tensor exposes a `dtype`
+        descriptor at the class level, so the hasattr branch captured it
+        first and raised "Unsupported numpy dtype: <class 'torch.Tensor'>".
+        """
+        spec = PortSpec(dtype=torch.Tensor, shape=(-1, -1, -1, -1))
+
+        result = _convert_port_spec_to_proto(spec, name="cube")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert list(result.shape) == [-1, -1, -1, -1]
+
+    def test_numpy_scalar_class_int32(self):
+        """np.int32 (a numpy scalar class) maps to D_TYPE_INT32"""
+        spec = PortSpec(dtype=np.int32, shape=(-1,))
+
+        result = _convert_port_spec_to_proto(spec, name="wavelengths")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_INT32
+        assert list(result.shape) == [-1]
+
+    def test_python_builtin_type_is_unspecified(self):
+        """Python builtin types (dict, str, list) map to UNSPECIFIED"""
+        spec = PortSpec(dtype=dict, shape=())
+
+        result = _convert_port_spec_to_proto(spec, name="metadata")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_unsupported_dtype_raises(self):
+        """Non-type, non-dtype values raise ValueError"""
+        spec = PortSpec(dtype="not-a-dtype", shape=())
+
+        with pytest.raises(ValueError, match="Unsupported"):
+            _convert_port_spec_to_proto(spec, name="bad")
+
+    def test_symbolic_string_shape_dim_coerced_to_minus_one(self):
+        """Symbolic shape dimensions (str, e.g. 'batch') are coerced to -1"""
+        spec = PortSpec(dtype=torch.float32, shape=(-1, "batch", 10))
+
+        result = _convert_port_spec_to_proto(spec, name="features")
+
+        assert list(result.shape) == [-1, -1, 10]
+
+    def test_optional_and_description_passthrough(self):
+        """optional and description fields are copied onto the proto message"""
+        spec = PortSpec(
+            dtype=torch.float32,
+            shape=(-1,),
+            optional=True,
+            description="frame index",
+        )
+
+        result = _convert_port_spec_to_proto(spec, name="mesu_index")
+
+        assert result.optional is True
+        assert result.description == "frame index"
