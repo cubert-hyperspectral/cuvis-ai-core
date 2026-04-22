@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## 0.4.1 - 2026-04-22
+
 - Removed the SHA-256 hash from the `torchvision==0.26.0+cu128` manylinux_x86_64 wheel entry in `uv.lock`, matching the existing unhashed precedent for the aarch64 and win_amd64 torchvision wheels. PyTorch's R2 CDN periodically re-publishes wheels under the same URL with slightly different build metadata, which drifts the sha256 and breaks every CI job at `uv sync`; this normalization eliminates the recurring hash-mismatch failure for torchvision.
 - Updated README logo reference to the `github.com/.../blob/...?raw=true` form for the cuvis.sdk banner image.
+- Retitled the README to "Cuvis.AI Core" and added a Cuvis.AI umbrella-framework introduction; reframed the cuvis-ai-core description as the infrastructure layer beneath Cuvis.AI. Capability bullets unchanged.
 
 ## 0.4.0 - 2026-04-22
 
