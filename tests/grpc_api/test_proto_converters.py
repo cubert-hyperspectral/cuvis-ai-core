@@ -238,6 +238,46 @@ class TestProcessingModeMapping:
         assert cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE == 4
 
 
+class TestDtypeToProto:
+    """Test the shared dtype → proto enum dispatch."""
+
+    def test_concrete_torch_dtype(self):
+        assert helpers.dtype_to_proto(torch.float32) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert helpers.dtype_to_proto(torch.int64) == cuvis_ai_pb2.D_TYPE_INT64
+        assert helpers.dtype_to_proto(torch.bool) == cuvis_ai_pb2.D_TYPE_BOOL
+
+    def test_torch_tensor_is_unspecified(self):
+        """torch.Tensor (the class) maps to UNSPECIFIED, not raising."""
+        assert helpers.dtype_to_proto(torch.Tensor) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_numpy_dtype_instance(self):
+        assert helpers.dtype_to_proto(np.dtype("float32")) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert helpers.dtype_to_proto(np.dtype("int32")) == cuvis_ai_pb2.D_TYPE_INT32
+
+    def test_numpy_scalar_class(self):
+        assert helpers.dtype_to_proto(np.int32) == cuvis_ai_pb2.D_TYPE_INT32
+        assert helpers.dtype_to_proto(np.float64) == cuvis_ai_pb2.D_TYPE_FLOAT64
+        assert helpers.dtype_to_proto(np.uint16) == cuvis_ai_pb2.D_TYPE_UINT16
+
+    def test_python_builtin_types_are_unspecified(self):
+        assert helpers.dtype_to_proto(dict) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert helpers.dtype_to_proto(str) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert helpers.dtype_to_proto(list) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_unsupported_torch_dtype_raises(self):
+        # complex64 is not in the torch→proto mapping
+        with pytest.raises(ValueError, match="Unsupported torch dtype"):
+            helpers.dtype_to_proto(torch.complex64)
+
+    def test_unsupported_numpy_dtype_raises(self):
+        with pytest.raises(ValueError, match="Unsupported numpy dtype"):
+            helpers.dtype_to_proto(np.complex64)
+
+    def test_non_type_non_dtype_raises(self):
+        with pytest.raises(ValueError, match="Unsupported"):
+            helpers.dtype_to_proto("not-a-dtype")
+
+
 class TestConvertPortSpecToProto:
     """Test PortSpec → proto PortSpec conversion"""
 

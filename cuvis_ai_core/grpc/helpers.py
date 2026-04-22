@@ -83,6 +83,58 @@ STRING_TO_POINT_TYPE = {
 }
 
 
+def dtype_to_proto(dtype: Any) -> int:
+    """Map a Python dtype-like value to a proto ``D_TYPE_*`` enum.
+
+    Single dispatch used by both the tensor serializers and the plugin
+    port-spec converter so the two sites cannot drift.
+
+    Supported inputs (checked in order):
+        - ``torch.dtype`` instance (e.g. ``torch.float32``)
+        - ``torch.Tensor`` class itself — generic-tensor marker, maps to
+          ``D_TYPE_UNSPECIFIED``. Must precede the numpy branch because
+          ``torch.Tensor`` exposes a class-level ``dtype`` descriptor.
+        - ``np.dtype`` instance (e.g. ``np.dtype('float32')``)
+        - numpy scalar class (e.g. ``np.int32``), i.e. any ``type``
+          subclass of ``np.generic``
+        - any other ``type`` (``dict``, ``str``, ``list``, …) — maps to
+          ``D_TYPE_UNSPECIFIED``
+
+    Raises:
+        ValueError: If dtype is not supported.
+    """
+    # Concrete torch dtype (e.g. torch.float32, torch.int64)
+    if isinstance(dtype, torch.dtype):
+        if dtype in DTYPE_TORCH_TO_PROTO:
+            return DTYPE_TORCH_TO_PROTO[dtype]
+        raise ValueError(f"Unsupported torch dtype: {dtype}")
+
+    # Generic-tensor marker: the torch.Tensor class itself.
+    # Must precede numpy-scalar handling — torch.Tensor has a class-level
+    # ``dtype`` descriptor, so a ``hasattr`` check would catch it first.
+    if dtype is torch.Tensor:
+        return cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    # numpy dtype instance (e.g. np.dtype('float32'))
+    if isinstance(dtype, np.dtype):
+        if dtype in DTYPE_NUMPY_TO_PROTO:
+            return DTYPE_NUMPY_TO_PROTO[dtype]
+        raise ValueError(f"Unsupported numpy dtype: {dtype}")
+
+    # numpy scalar class (e.g. np.int32, np.float32)
+    if isinstance(dtype, type) and issubclass(dtype, np.generic):
+        np_dtype = np.dtype(dtype)
+        if np_dtype in DTYPE_NUMPY_TO_PROTO:
+            return DTYPE_NUMPY_TO_PROTO[np_dtype]
+        raise ValueError(f"Unsupported numpy dtype: {dtype}")
+
+    # Other Python builtin types (dict, str, list, tuple, …)
+    if isinstance(dtype, type):
+        return cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    raise ValueError(f"Unsupported dtype type: {type(dtype)}")
+
+
 def proto_to_numpy(tensor_proto: cuvis_ai_pb2.Tensor, copy: bool = True) -> np.ndarray:
     """Convert proto Tensor to numpy array.
 
