@@ -270,8 +270,15 @@ class TestDtypeToProto:
             helpers.dtype_to_proto(torch.complex64)
 
     def test_unsupported_numpy_dtype_raises(self):
+        """Numpy scalar class not in the mapping raises (e.g. np.complex64)."""
         with pytest.raises(ValueError, match="Unsupported numpy dtype"):
             helpers.dtype_to_proto(np.complex64)
+
+    def test_unsupported_numpy_dtype_instance_raises(self):
+        """np.dtype instance not in the mapping raises (distinct branch from
+        the numpy scalar class path)."""
+        with pytest.raises(ValueError, match="Unsupported numpy dtype"):
+            helpers.dtype_to_proto(np.dtype("complex64"))
 
     def test_non_type_non_dtype_raises(self):
         with pytest.raises(ValueError, match="Unsupported"):
