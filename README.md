@@ -2,7 +2,7 @@
 
 
 
-![image](https://raw.githubusercontent.com/cubert-hyperspectral/cuvis.sdk/main/branding/logo/banner.png)
+![image](https://github.com/cubert-hyperspectral/cuvis.sdk/blob/main/branding/logo/banner.png?raw=true)
 
 [![PyPI version](https://img.shields.io/pypi/v/cuvis-ai-core.svg)](https://pypi.org/project/cuvis-ai-core/)
 [![CI Status](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml/badge.svg)](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml)
