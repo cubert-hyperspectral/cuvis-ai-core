@@ -60,6 +60,7 @@ dependencies = [
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
+    "gdown>=6.0.0",
 ]
 
 [project.optional-dependencies]

@@ -35,7 +35,7 @@ class IntrospectionService:
         input_specs = {
             name: cuvis_ai_pb2.TensorSpec(
                 name=spec.get("name", name),
-                shape=list(spec.get("shape", [])),
+                shape=self._normalize_shape(spec.get("shape", [])),
                 dtype=self._dtype_str_to_proto(spec.get("dtype")),
                 required=bool(spec.get("required", False)),
             )
@@ -64,7 +64,7 @@ class IntrospectionService:
         output_specs = {
             name: cuvis_ai_pb2.TensorSpec(
                 name=spec.get("name", name),
-                shape=list(spec.get("shape", [])),
+                shape=self._normalize_shape(spec.get("shape", [])),
                 dtype=self._dtype_str_to_proto(spec.get("dtype")),
                 required=bool(spec.get("required", False)),
             )
@@ -136,6 +136,23 @@ class IntrospectionService:
             "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
         }
         return dtype_map.get((dtype_str or "").lower(), cuvis_ai_pb2.D_TYPE_UNSPECIFIED)
+
+    def _normalize_shape(self, shape: object) -> list[int]:
+        """Coerce symbolic/non-integer shape entries to -1 for gRPC TensorSpec."""
+        if not isinstance(shape, (list, tuple)):
+            return []
+
+        normalized: list[int] = []
+        for dim in shape:
+            if isinstance(dim, bool):
+                # bool is a subclass of int; treat as unknown dimension
+                normalized.append(-1)
+            elif isinstance(dim, int):
+                normalized.append(dim)
+            else:
+                # Symbolic/unknown dimensions (e.g. "output_channels")
+                normalized.append(-1)
+        return normalized
 
 
 __all__ = ["IntrospectionService"]
