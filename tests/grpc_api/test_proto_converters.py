@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
 import torch
+from cuvis_ai_schemas.pipeline import PortSpec
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
+from cuvis_ai_core.grpc.plugin_service import _convert_port_spec_to_proto
 
 
 class TestProtoToNumpy:
@@ -234,3 +236,134 @@ class TestProcessingModeMapping:
         assert cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE == 2
         assert cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT == 3
         assert cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE == 4
+
+
+class TestDtypeToProto:
+    """Test the shared dtype → proto enum dispatch."""
+
+    def test_concrete_torch_dtype(self):
+        assert helpers.dtype_to_proto(torch.float32) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert helpers.dtype_to_proto(torch.int64) == cuvis_ai_pb2.D_TYPE_INT64
+        assert helpers.dtype_to_proto(torch.bool) == cuvis_ai_pb2.D_TYPE_BOOL
+
+    def test_torch_tensor_is_unspecified(self):
+        """torch.Tensor (the class) maps to UNSPECIFIED, not raising."""
+        assert helpers.dtype_to_proto(torch.Tensor) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_numpy_dtype_instance(self):
+        assert helpers.dtype_to_proto(np.dtype("float32")) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert helpers.dtype_to_proto(np.dtype("int32")) == cuvis_ai_pb2.D_TYPE_INT32
+
+    def test_numpy_scalar_class(self):
+        assert helpers.dtype_to_proto(np.int32) == cuvis_ai_pb2.D_TYPE_INT32
+        assert helpers.dtype_to_proto(np.float64) == cuvis_ai_pb2.D_TYPE_FLOAT64
+        assert helpers.dtype_to_proto(np.uint16) == cuvis_ai_pb2.D_TYPE_UINT16
+
+    def test_python_builtin_types_are_unspecified(self):
+        assert helpers.dtype_to_proto(dict) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert helpers.dtype_to_proto(str) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert helpers.dtype_to_proto(list) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_unsupported_torch_dtype_raises(self):
+        # complex64 is not in the torch→proto mapping
+        with pytest.raises(ValueError, match="Unsupported torch dtype"):
+            helpers.dtype_to_proto(torch.complex64)
+
+    def test_unsupported_numpy_dtype_raises(self):
+        """Numpy scalar class not in the mapping raises (e.g. np.complex64)."""
+        with pytest.raises(ValueError, match="Unsupported numpy dtype"):
+            helpers.dtype_to_proto(np.complex64)
+
+    def test_unsupported_numpy_dtype_instance_raises(self):
+        """np.dtype instance not in the mapping raises (distinct branch from
+        the numpy scalar class path)."""
+        with pytest.raises(ValueError, match="Unsupported numpy dtype"):
+            helpers.dtype_to_proto(np.dtype("complex64"))
+
+    def test_non_type_non_dtype_raises(self):
+        with pytest.raises(ValueError, match="Unsupported"):
+            helpers.dtype_to_proto("not-a-dtype")
+
+
+class TestConvertPortSpecToProto:
+    """Test PortSpec → proto PortSpec conversion"""
+
+    def test_concrete_torch_dtype_float32(self):
+        """torch.float32 dtype maps to D_TYPE_FLOAT32"""
+        spec = PortSpec(dtype=torch.float32, shape=(-1, -1))
+
+        result = _convert_port_spec_to_proto(spec, name="cube")
+
+        assert result.name == "cube"
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert list(result.shape) == [-1, -1]
+
+    def test_concrete_torch_dtype_int64_scalar_shape(self):
+        """torch.int64 with scalar shape maps to D_TYPE_INT64, empty shape list"""
+        spec = PortSpec(dtype=torch.int64, shape=())
+
+        result = _convert_port_spec_to_proto(spec, name="index")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_INT64
+        assert list(result.shape) == []
+
+    def test_generic_torch_tensor_dtype_is_unspecified(self):
+        """torch.Tensor (the class) as a generic-tensor marker maps to UNSPECIFIED.
+
+        Regression: the torch.Tensor branch used to sit after a
+        hasattr(spec.dtype, "dtype") check. torch.Tensor exposes a `dtype`
+        descriptor at the class level, so the hasattr branch captured it
+        first and raised "Unsupported numpy dtype: <class 'torch.Tensor'>".
+        """
+        spec = PortSpec(dtype=torch.Tensor, shape=(-1, -1, -1, -1))
+
+        result = _convert_port_spec_to_proto(spec, name="cube")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+        assert list(result.shape) == [-1, -1, -1, -1]
+
+    def test_numpy_scalar_class_int32(self):
+        """np.int32 (a numpy scalar class) maps to D_TYPE_INT32"""
+        spec = PortSpec(dtype=np.int32, shape=(-1,))
+
+        result = _convert_port_spec_to_proto(spec, name="wavelengths")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_INT32
+        assert list(result.shape) == [-1]
+
+    def test_python_builtin_type_is_unspecified(self):
+        """Python builtin types (dict, str, list) map to UNSPECIFIED"""
+        spec = PortSpec(dtype=dict, shape=())
+
+        result = _convert_port_spec_to_proto(spec, name="metadata")
+
+        assert result.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+    def test_unsupported_dtype_raises(self):
+        """Non-type, non-dtype values raise ValueError"""
+        spec = PortSpec(dtype="not-a-dtype", shape=())
+
+        with pytest.raises(ValueError, match="Unsupported"):
+            _convert_port_spec_to_proto(spec, name="bad")
+
+    def test_symbolic_string_shape_dim_coerced_to_minus_one(self):
+        """Symbolic shape dimensions (str, e.g. 'batch') are coerced to -1"""
+        spec = PortSpec(dtype=torch.float32, shape=(-1, "batch", 10))
+
+        result = _convert_port_spec_to_proto(spec, name="features")
+
+        assert list(result.shape) == [-1, -1, 10]
+
+    def test_optional_and_description_passthrough(self):
+        """optional and description fields are copied onto the proto message"""
+        spec = PortSpec(
+            dtype=torch.float32,
+            shape=(-1,),
+            optional=True,
+            description="frame index",
+        )
+
+        result = _convert_port_spec_to_proto(spec, name="mesu_index")
+
+        assert result.optional is True
+        assert result.description == "frame index"

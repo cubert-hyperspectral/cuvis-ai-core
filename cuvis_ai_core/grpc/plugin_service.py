@@ -4,12 +4,10 @@ from __future__ import annotations
 
 
 import grpc
-import numpy as np
-import torch
 from loguru import logger
 
 from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
-from cuvis_ai_core.grpc.helpers import DTYPE_NUMPY_TO_PROTO, DTYPE_TORCH_TO_PROTO
+from cuvis_ai_core.grpc.helpers import dtype_to_proto
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_schemas.pipeline import PortSpec
@@ -30,32 +28,9 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
     Raises:
         ValueError: If dtype cannot be mapped or shape contains non-int values
     """
-    # Map Python dtype to proto DType enum
-    proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
-
-    # Try torch dtype mapping first
-    if isinstance(spec.dtype, torch.dtype):
-        if spec.dtype in DTYPE_TORCH_TO_PROTO:
-            proto_dtype = DTYPE_TORCH_TO_PROTO[spec.dtype]
-        else:
-            raise ValueError(f"Unsupported torch dtype: {spec.dtype}")
-    # Try numpy dtype mapping
-    elif hasattr(spec.dtype, "dtype"):
-        # Handle numpy scalar types (np.int32, np.float32, etc.)
-        np_dtype = np.dtype(spec.dtype)
-        if np_dtype in DTYPE_NUMPY_TO_PROTO:
-            proto_dtype = DTYPE_NUMPY_TO_PROTO[np_dtype]
-        else:
-            raise ValueError(f"Unsupported numpy dtype: {spec.dtype}")
-    # Handle torch.Tensor as a generic tensor type (use UNSPECIFIED)
-    elif spec.dtype is torch.Tensor:
-        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
-    # Handle Python built-in types (dict, str, list, etc.) as UNSPECIFIED
-    elif isinstance(spec.dtype, type):
-        # Python types like dict, str, list, tuple, etc.
-        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
-    else:
-        raise ValueError(f"Unsupported dtype type: {type(spec.dtype)}")
+    # Map Python dtype to proto DType enum via shared helper so this site
+    # cannot drift from the tensor serializers in grpc.helpers.
+    proto_dtype = dtype_to_proto(spec.dtype)
 
     # Convert shape tuple to list of int64
     # Symbolic dimensions (strings like "output_channels") are converted to -1 (dynamic)
