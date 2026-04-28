@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from torch import nn
 
-from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.enums import ExecutionStage, NodeCategory, NodeTag
 from cuvis_ai_schemas.execution import InputStream
 from cuvis_ai_schemas.pipeline import InputPort, OutputPort, PortSpec
 
@@ -61,6 +61,26 @@ class Node(nn.Module, ABC, Serializable):
     INPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
     OUTPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
     TRAINABLE_BUFFERS: tuple[str, ...] = ()
+
+    # Node taxonomy metadata (ALL-5187). Subclasses override on the class body;
+    # populated values are surfaced over gRPC via NodeInfo and consumed by the
+    # palette / visualizer. Defaults are deliberately permissive so unannotated
+    # nodes still compile — runtime warns at pipeline-add time.
+    _category: NodeCategory = NodeCategory.UNSPECIFIED
+    _tags: frozenset[NodeTag] = frozenset()
+    _icon_name: str | None = None
+
+    @classmethod
+    def get_category(cls) -> NodeCategory:
+        return cls._category
+
+    @classmethod
+    def get_tags(cls) -> frozenset[NodeTag]:
+        return cls._tags
+
+    @classmethod
+    def get_icon_name(cls) -> str | None:
+        return cls._icon_name
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Validate TRAINABLE_BUFFERS declaration at class definition time."""
