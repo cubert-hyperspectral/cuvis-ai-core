@@ -31,7 +31,7 @@ classifiers = [
 
 dependencies = [
     "cuvis>=3.5.0",
-    "cuvis-ai-schemas>=0.3.0",
+    "cuvis-ai-schemas[proto]>=0.3.0",
     # Core framework dependencies
     "torch>=2.9.1",
     "torchvision",
@@ -181,6 +181,10 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+# Path source while ALL-5187 phase 1 schemas changes (NodeCategory / NodeTag /
+# NodeInfo fields 7-9) are unreleased. Switch to a `>=0.4.0` PyPI constraint
+# once `v0.4.0` is tagged at PR-close.
+cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-icons", editable = true }
 # cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
 # cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
 
