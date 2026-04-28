@@ -392,6 +392,13 @@ class TestNode(Node):
         assert builtin_node.source == "builtin"
         assert builtin_node.plugin_name == ""
 
+        # ALL-5187: every NodeInfo carries metadata fields. Default for
+        # unannotated nodes is UNSPECIFIED + empty tags + the bundled
+        # unspecified.svg (non-empty bytes).
+        assert builtin_node.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+        assert list(builtin_node.tags) == []
+        assert len(builtin_node.icon_svg) > 0
+
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
         """Test listing nodes includes session plugin nodes."""
         # Create session
@@ -457,6 +464,10 @@ class PluginTestNode(Node):
             assert (
                 plugin_node.full_path == "available_nodes_plugin.nodes.PluginTestNode"
             )
+            # ALL-5187: plugin nodes also carry the new metadata fields.
+            assert plugin_node.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+            assert list(plugin_node.tags) == []
+            assert len(plugin_node.icon_svg) > 0
         finally:
             sys.path.remove(str(tmp_path))
 
@@ -471,6 +482,118 @@ class PluginTestNode(Node):
         # Verify response structure (count may be 0 if no cache exists)
         assert isinstance(response.cleared_count, int)
         assert response.cleared_count >= 0
+
+    def test_list_available_nodes_populates_explicit_metadata(self):
+        """A node with _category and _tags set surfaces those exact values over the wire."""
+        session_id = self.session_manager.create_session()
+
+        from cuvis_ai_core.node import Node
+        from cuvis_ai_schemas.enums import NodeCategory, NodeTag
+
+        @NodeRegistry.register
+        class AnnotatedNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+            _category = NodeCategory.MODEL
+            _tags = frozenset({NodeTag.HYPERSPECTRAL, NodeTag.LEARNABLE, NodeTag.TORCH})
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
+        response = self.plugin_service.list_available_nodes(request, self.mock_context)
+
+        annotated = next(
+            n for n in response.nodes if n.class_name == "AnnotatedNode"
+        )
+        assert annotated.category == cuvis_ai_pb2.NODE_CATEGORY_MODEL
+
+        # Tags arrive sorted by proto int (deterministic wire output).
+        from cuvis_ai_schemas.grpc.conversions import (
+            node_tag_to_proto,
+            proto_to_node_tag,
+        )
+
+        wire_ints = list(annotated.tags)
+        assert wire_ints == sorted(wire_ints), wire_ints
+        assert set(wire_ints) == {
+            node_tag_to_proto(NodeTag.HYPERSPECTRAL),
+            node_tag_to_proto(NodeTag.LEARNABLE),
+            node_tag_to_proto(NodeTag.TORCH),
+        }
+        # Round-trip back to NodeTag members.
+        recovered = {proto_to_node_tag(i) for i in wire_ints}
+        assert recovered == {NodeTag.HYPERSPECTRAL, NodeTag.LEARNABLE, NodeTag.TORCH}
+        # Icon falls back to the schemas-default model.svg (non-empty real SVG).
+        assert len(annotated.icon_svg) > 0
+
+    def test_list_available_nodes_survives_broken_get_tags(self, monkeypatch):
+        """A node whose get_tags() raises must still appear in the response with empty tags."""
+        session_id = self.session_manager.create_session()
+
+        from cuvis_ai_core.node import Node
+
+        @NodeRegistry.register
+        class BrokenTagsNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            @classmethod
+            def get_tags(cls):
+                raise RuntimeError("intentional failure")
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
+        response = self.plugin_service.list_available_nodes(request, self.mock_context)
+
+        broken = next(n for n in response.nodes if n.class_name == "BrokenTagsNode")
+        assert list(broken.tags) == []
+        # Other fields still resolve to safe defaults; gRPC handler did not crash.
+        assert broken.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+        assert len(broken.icon_svg) > 0
+
+    def test_resolve_package_root_handles_inspect_failure(self, monkeypatch):
+        """If inspect.getfile raises, _resolve_package_root falls back to None."""
+        from cuvis_ai_core.grpc import plugin_service
+
+        def _raise(_x):
+            raise TypeError("not a real module")
+
+        monkeypatch.setattr(plugin_service.inspect, "getfile", _raise)
+
+        from cuvis_ai_core.node import Node
+
+        class NoFile(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        assert plugin_service._resolve_package_root(NoFile) is None
+
+    def test_extract_node_metadata_returns_safe_defaults_for_none(self):
+        """Lookup-failure path: None class still produces a valid (cat, tags, icon) triple."""
+        from cuvis_ai_core.grpc import plugin_service
+
+        category, tags, icon = plugin_service._extract_node_metadata(
+            None, class_name="MissingClass"
+        )
+        assert category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+        assert tags == []
+        # Falls back to the bundled unspecified.svg.
+        assert len(icon) > 0
 
     def test_session_isolation(self, tmp_path, create_plugin_pyproject):
         """Test that plugin loading in one session doesn't affect another."""
