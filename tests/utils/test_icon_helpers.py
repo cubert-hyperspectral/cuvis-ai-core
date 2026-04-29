@@ -1,4 +1,4 @@
-"""Tests for the icon resolution chain (ALL-5187 phase 2)."""
+"""Tests for the icon resolution chain."""
 
 from __future__ import annotations
 
@@ -12,7 +12,11 @@ from cuvis_ai_schemas.enums import NodeCategory
 
 
 def _bundled_icon_bytes(category: NodeCategory) -> bytes:
-    asset = resources.files("cuvis_ai_schemas.extensions.ui") / "icons" / f"{category.value}.svg"
+    asset = (
+        resources.files("cuvis_ai_schemas.extensions.ui")
+        / "icons"
+        / f"{category.value}.svg"
+    )
     return asset.read_bytes()
 
 
@@ -74,7 +78,9 @@ def test_get_node_icon_resolves_for_every_category(category: NodeCategory) -> No
     assert len(out) > 0
 
 
-def test_get_node_icon_returns_empty_bytes_when_schemas_assets_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_node_icon_returns_empty_bytes_when_schemas_assets_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If the schemas package can't be located the helper returns b\"\" rather than raising."""
 
     def _raise(_pkg: str):

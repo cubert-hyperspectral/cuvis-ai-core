@@ -1,4 +1,4 @@
-"""Tests for the pipeline-add-node metadata warning (ALL-5187 phase 2)."""
+"""Tests for the pipeline-add-node metadata warning."""
 
 from __future__ import annotations
 

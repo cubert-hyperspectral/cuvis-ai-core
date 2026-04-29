@@ -276,6 +276,49 @@ def test_predictor_progress_bar_disables_for_missing_or_broken_stderr(
     assert Predictor._should_disable_progress_bar() is True
 
 
+def test_predictor_progress_bar_stays_enabled_inside_ipython(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inside a Jupyter / IPython kernel `get_ipython()` returns a non-None shell;
+    the progress bar must remain enabled even when stderr.isatty() is False."""
+    import sys as _sys
+    from types import ModuleType
+
+    fake_ipython = ModuleType("IPython")
+    fake_ipython.get_ipython = lambda: object()
+    monkeypatch.setitem(_sys.modules, "IPython", fake_ipython)
+
+    class _NotATty:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _NotATty())
+
+    assert Predictor._should_disable_progress_bar() is False
+
+
+def test_predictor_progress_bar_falls_through_when_ipython_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If IPython is importable but `get_ipython()` returns None (e.g. plain
+    Python that has IPython installed), the IPython branch falls through to
+    the stderr/TTY check."""
+    import sys as _sys
+    from types import ModuleType
+
+    fake_ipython = ModuleType("IPython")
+    fake_ipython.get_ipython = lambda: None
+    monkeypatch.setitem(_sys.modules, "IPython", fake_ipython)
+
+    class _NotATty:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _NotATty())
+
+    assert Predictor._should_disable_progress_bar() is True
+
+
 def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors() -> (
     None
 ):

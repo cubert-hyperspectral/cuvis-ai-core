@@ -20,8 +20,8 @@ def get_node_icon(
     Resolution order:
       1. Per-node SVG: ``{package_root}/assets/node_icons/{icon_name or class_name}.svg``
       2. Category-default SVG: ``cuvis_ai_schemas/extensions/ui/icons/{category.value}.svg``
-         (Phase 1 ships all 13 defaults including ``unspecified.svg``, so this branch
-         hits in production for every category.)
+         (cuvis-ai-schemas ships all 13 defaults including ``unspecified.svg``, so
+         this branch hits in production for every category.)
       3. Empty bytes — only when both branches miss (e.g. someone has stripped the
          icons folder from the schemas wheel).
     """

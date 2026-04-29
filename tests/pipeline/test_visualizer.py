@@ -226,14 +226,14 @@ class TripleProducer(Node):
     INPUT_SPECS: dict[str, PortSpec] = {}
     OUTPUT_SPECS = {
         "alpha": PortSpec(torch.float32, (-1,)),
-        "beta":  PortSpec(torch.int64,   (-1,)),
-        "gamma": PortSpec(torch.bool,    (-1,)),
+        "beta": PortSpec(torch.int64, (-1,)),
+        "gamma": PortSpec(torch.bool, (-1,)),
     }
 
     def forward(self, **_):
         return {
             "alpha": torch.zeros(1),
-            "beta":  torch.zeros(1, dtype=torch.int64),
+            "beta": torch.zeros(1, dtype=torch.int64),
             "gamma": torch.zeros(1, dtype=torch.bool),
         }
 
@@ -241,8 +241,8 @@ class TripleProducer(Node):
 class TripleConsumer(Node):
     INPUT_SPECS = {
         "alpha": PortSpec(torch.float32, (-1,)),
-        "beta":  PortSpec(torch.int64,   (-1,)),
-        "gamma": PortSpec(torch.bool,    (-1,)),
+        "beta": PortSpec(torch.int64, (-1,)),
+        "gamma": PortSpec(torch.bool, (-1,)),
     }
     OUTPUT_SPECS: dict[str, PortSpec] = {}
 
@@ -257,7 +257,7 @@ def test_card_style_emits_one_wire_per_port_with_anchors():
     producer = TripleProducer(name="prod")
     consumer = TripleConsumer(name="cons")
     pipeline.connect(producer.outputs.alpha, consumer.inputs.alpha)
-    pipeline.connect(producer.outputs.beta,  consumer.inputs.beta)
+    pipeline.connect(producer.outputs.beta, consumer.inputs.beta)
     pipeline.connect(producer.outputs.gamma, consumer.inputs.gamma)
 
     visualizer = PipelineVisualizer(pipeline)
@@ -270,12 +270,36 @@ def test_card_style_emits_one_wire_per_port_with_anchors():
     assert len(edge_lines) == 3, edge_lines
 
     # Each edge is anchored to its specific port dot.
-    assert any('"prod":"out_alpha":e -> "cons":"in_alpha":w' in line for line in edge_lines)
-    assert any('"prod":"out_beta":e -> "cons":"in_beta":w' in line for line in edge_lines)
-    assert any('"prod":"out_gamma":e -> "cons":"in_gamma":w' in line for line in edge_lines)
+    assert any(
+        '"prod":"out_alpha":e -> "cons":"in_alpha":w' in line for line in edge_lines
+    )
+    assert any(
+        '"prod":"out_beta":e -> "cons":"in_beta":w' in line for line in edge_lines
+    )
+    assert any(
+        '"prod":"out_gamma":e -> "cons":"in_gamma":w' in line for line in edge_lines
+    )
 
     # Each wire carries its own dtype color, none are merged stripes.
     for line in edge_lines:
         assert 'color="' in line
         # Single hex color, not the "#aaa:#bbb:#ccc" stripe form.
         assert line.count(":") <= 4  # 2x node:port:compass only
+
+
+def test_format_edge_label_returns_empty_in_card_mode():
+    """Card mode (`dedupe_matching_ports=True, include_port_types=False`) suppresses
+    the edge label because port names are rendered beside each dot inside the
+    node card. ``_format_edge_label`` must return an empty string immediately."""
+    pipeline, source, sink = _build_pipeline()
+    visualizer = PipelineVisualizer(pipeline)
+
+    edge_data = {"from_port": "data", "to_port": "data"}
+    label = visualizer._format_edge_label(
+        source,
+        sink,
+        edge_data,
+        include_port_types=False,
+        dedupe_matching_ports=True,
+    )
+    assert label == ""

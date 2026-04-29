@@ -62,10 +62,10 @@ class Node(nn.Module, ABC, Serializable):
     OUTPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
     TRAINABLE_BUFFERS: tuple[str, ...] = ()
 
-    # Node taxonomy metadata (ALL-5187). Subclasses override on the class body;
-    # populated values are surfaced over gRPC via NodeInfo and consumed by the
-    # palette / visualizer. Defaults are deliberately permissive so unannotated
-    # nodes still compile — runtime warns at pipeline-add time.
+    # Node taxonomy metadata. Subclasses override on the class body; populated
+    # values are surfaced over gRPC via NodeInfo and consumed by the palette /
+    # visualizer. Defaults are deliberately permissive so unannotated nodes
+    # still compile — runtime warns at pipeline-add time.
     _category: NodeCategory = NodeCategory.UNSPECIFIED
     _tags: frozenset[NodeTag] = frozenset()
     _icon_name: str | None = None

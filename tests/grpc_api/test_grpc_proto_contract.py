@@ -62,7 +62,7 @@ def test_load_weights_oneof():
 
 
 def test_node_info_carries_metadata_fields():
-    """NodeInfo must expose icon_svg / category / tags (ALL-5187 phase 1)."""
+    """NodeInfo must expose icon_svg / category / tags."""
     field_names = {f.name for f in cuvis_ai_pb2.NodeInfo.DESCRIPTOR.fields}
     assert {"icon_svg", "category", "tags"}.issubset(field_names), field_names
 
@@ -111,7 +111,15 @@ def test_proto_conversions_module_importable():
     )
     from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 
-    assert node_category_to_proto(NodeCategory.MODEL) == cuvis_ai_pb2.NODE_CATEGORY_MODEL
-    assert proto_to_node_category(cuvis_ai_pb2.NODE_CATEGORY_MODEL) is NodeCategory.MODEL
-    assert node_tag_to_proto(NodeTag.HYPERSPECTRAL) == cuvis_ai_pb2.NODE_TAG_HYPERSPECTRAL
-    assert proto_to_node_tag(cuvis_ai_pb2.NODE_TAG_HYPERSPECTRAL) is NodeTag.HYPERSPECTRAL
+    assert (
+        node_category_to_proto(NodeCategory.MODEL) == cuvis_ai_pb2.NODE_CATEGORY_MODEL
+    )
+    assert (
+        proto_to_node_category(cuvis_ai_pb2.NODE_CATEGORY_MODEL) is NodeCategory.MODEL
+    )
+    assert (
+        node_tag_to_proto(NodeTag.HYPERSPECTRAL) == cuvis_ai_pb2.NODE_TAG_HYPERSPECTRAL
+    )
+    assert (
+        proto_to_node_tag(cuvis_ai_pb2.NODE_TAG_HYPERSPECTRAL) is NodeTag.HYPERSPECTRAL
+    )
