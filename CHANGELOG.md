@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Added `NodeCategory`, `NodeTag`, and `_icon_name` ClassVars on `Node` base, with `get_category()` / `get_tags()` / `get_icon_name()` accessors. Defaults to `NodeCategory.UNSPECIFIED` and an empty tag set so unannotated subclasses still compile (ALL-5187 phase 2).
+- Added `cuvis_ai_core/utils/icon_helpers.py` with a per-node SVG → schemas-default icon resolution chain backing `NodeInfo.icon_svg`.
+- Added `MissingNodeMetadataWarning`: pipelines emit a once-per-class warning when a node lacks explicit `_category` / `_tags`, including a copy-pasteable remediation hint with concrete `NodeCategory` / `NodeTag` examples. `frozenset({NodeTag.UNSPECIFIED})` is treated as missing.
+- Changed `list_available_nodes` gRPC to populate `NodeInfo.category`, `tags`, and `icon_svg`. Class lookup runs in its own try-block so a lookup failure no longer crashes port-spec extraction; metadata extraction is independently safe and falls back to `(UNSPECIFIED, [], unspecified.svg)` on any per-node error.
+- Added `style="card"` mode to `PipelineVisualizer.to_graphviz`: rounded category-coloured cards via Graphviz HTML-table labels, with per-port colored dots wired through HTML `PORT` anchors so each edge attaches to a specific port (no bundled multi-edges) and per-edge dtype colors from `cuvis_ai_schemas.extensions.ui.port_display`.
+- **Breaking**: Removed the legacy `style="classic"` visualizer mode along with its `node_shape`, `node_colors`, and `node_type_resolver` knobs. Card layout is now the only output.
+- Repointed `resolve_display` and `is_plugin` from the deleted local `cuvis_ai_core/pipeline/node_display.py` to the canonical `cuvis_ai_schemas.extensions.ui.node_display`. The schemas-side `is_plugin` reads only from `registry.plugin_registry` — the local copy's `__display__["plugin"]` opt-in is gone (no production consumers).
+- Bumped `cuvis-ai-schemas` floor to `>=0.4.0` from PyPI; removed the editable `schemas-icons` worktree path source.
+- Fixed `_convert_port_spec_to_proto` so `PortSpec(dtype=torch.Tensor, …)` resolves to `D_TYPE_UNSPECIFIED` instead of raising; previously the dedicated branch was shadowed by a `hasattr(spec.dtype, "dtype")` check because `torch.Tensor` exposes a class-level `dtype` descriptor.
+- Consolidated the dtype → proto dispatch into `cuvis_ai_core.grpc.helpers.dtype_to_proto`; the port-spec converter now delegates so the two paths cannot drift.
+- Fixed `Predictor.predict()` tqdm progress bar inside Jupyter kernels by switching to `from tqdm.auto import tqdm` and short-circuiting `_should_disable_progress_bar()` when `IPython.get_ipython()` is not None, before the TTY check.
+
 ## 0.4.1 - 2026-04-22
 
 - Removed the SHA-256 hash from the `torchvision==0.26.0+cu128` manylinux_x86_64 wheel entry in `uv.lock`, matching the existing unhashed precedent for the aarch64 and win_amd64 torchvision wheels. PyTorch's R2 CDN periodically re-publishes wheels under the same URL with slightly different build metadata, which drifts the sha256 and breaks every CI job at `uv sync`; this normalization eliminates the recurring hash-mismatch failure for torchvision.
