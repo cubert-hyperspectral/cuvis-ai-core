@@ -44,10 +44,6 @@ def test_graphviz_supports_phase3_styling():
     visualizer = PipelineVisualizer(pipeline)
 
     dot = visualizer.to_graphviz(
-        node_type_resolver=lambda node: "producer"
-        if isinstance(node, ProducerNode)
-        else "consumer",
-        node_colors={"producer": "#cfe2ff", "consumer": "#fde2e1"},
         group_by_stage=True,
         stage_labels={ExecutionStage.TRAIN.value: "Training"},
         show_port_types=True,
@@ -56,8 +52,6 @@ def test_graphviz_supports_phase3_styling():
         show_execution_stage=True,
     )
 
-    assert 'fillcolor="#cfe2ff"' in dot
-    assert 'fillcolor="#fde2e1"' in dot
     assert 'subgraph "cluster_train"' in dot
     assert 'label="Training"' in dot
     assert "data (Tensor [-1, 3]) -> data (Tensor [-1, 3])" in dot
@@ -146,30 +140,13 @@ def test_normalize_stage_with_enum():
     )
 
 
-def test_classic_style_unchanged_when_style_omitted():
-    """Default behaviour must stay byte-identical to the pre-card-mode output."""
+def test_card_renders_html_table_label():
     pipeline, *_ = _build_pipeline()
     visualizer = PipelineVisualizer(pipeline)
 
-    dot_default = visualizer.to_graphviz()
-    dot_classic = visualizer.to_graphviz(style="classic")
+    dot = visualizer.to_graphviz()
 
-    assert dot_default == dot_classic
-    # Classic output keeps the plain-box shape and quoted labels.
-    assert "node [shape=box];" in dot_default
-    assert 'label="source' in dot_default
-    # No HTML-table scaffolding leaks into classic output.
-    assert "<TABLE" not in dot_default
-    assert "STYLE=\"ROUNDED\"" not in dot_default
-
-
-def test_card_style_renders_html_table_label():
-    pipeline, *_ = _build_pipeline()
-    visualizer = PipelineVisualizer(pipeline)
-
-    dot = visualizer.to_graphviz(style="card")
-
-    # Outer DOT wiring switches to plaintext so the HTML table IS the node.
+    # Outer DOT wiring uses plaintext so the HTML table IS the node.
     assert "node [shape=plaintext];" in dot
     assert 'shape="plaintext"' in dot
     # HTML-label markers are present (angle-bracketed, not quoted).
@@ -183,12 +160,12 @@ def test_card_style_renders_html_table_label():
     assert "Node 2" in dot
 
 
-def test_card_style_uses_port_anchors_and_drops_edge_label():
-    """Card mode attaches edges to port dots via HTML PORT ids, no edge label."""
+def test_card_uses_port_anchors_and_drops_edge_label():
+    """Card output attaches edges to port dots via HTML PORT ids, no edge label."""
     pipeline, *_ = _build_pipeline()
     visualizer = PipelineVisualizer(pipeline)
 
-    dot = visualizer.to_graphviz(style="card")
+    dot = visualizer.to_graphviz()
 
     # Edge anchors: source output port → target input port (with compass pts).
     assert '"source":"out_data":e -> "sink":"in_data":w' in dot
@@ -199,28 +176,28 @@ def test_card_style_uses_port_anchors_and_drops_edge_label():
     assert ">data</FONT>" in dot
 
 
-def test_card_style_keeps_port_types_when_requested():
+def test_card_keeps_port_types_when_requested():
     """show_port_types=True overrides the dedupe and shows the full label."""
     pipeline, *_ = _build_pipeline()
     visualizer = PipelineVisualizer(pipeline)
 
-    dot = visualizer.to_graphviz(style="card", show_port_types=True)
+    dot = visualizer.to_graphviz(show_port_types=True)
 
     assert "data (Tensor [-1, 3]) -> data (Tensor [-1, 3])" in dot
 
 
-def test_card_style_omits_plugin_pill_for_unknown_classes_by_default():
+def test_card_omits_plugin_pill_for_unknown_classes_by_default():
     """Unknown classes (including built-in catalog nodes) must NOT get the
     Plugin pill unless a ``NodeRegistry`` instance lists them as plugins."""
     pipeline, *_ = _build_pipeline()
     visualizer = PipelineVisualizer(pipeline)
 
-    dot = visualizer.to_graphviz(style="card")
+    dot = visualizer.to_graphviz()
 
     assert "Plugin" not in dot
 
 
-def test_card_style_marks_plugins_when_registry_lists_them():
+def test_card_marks_plugins_when_registry_lists_them():
     """Passing a NodeRegistry with the class in plugin_registry adds the pill."""
     from cuvis_ai_core.utils.node_registry import NodeRegistry
 
@@ -228,32 +205,21 @@ def test_card_style_marks_plugins_when_registry_lists_them():
     registry = NodeRegistry()
     registry.plugin_registry["ProducerNode"] = ProducerNode
 
-    dot = PipelineVisualizer(pipeline).to_graphviz(
-        style="card", node_registry=registry
-    )
+    dot = PipelineVisualizer(pipeline).to_graphviz(node_registry=registry)
 
     assert "Plugin" in dot
 
 
-def test_card_style_show_node_name_adds_subtitle():
+def test_card_show_node_name_adds_subtitle():
     pipeline, *_ = _build_pipeline()
     visualizer = PipelineVisualizer(pipeline)
 
-    dot_without = visualizer.to_graphviz(style="card", show_node_name=False)
-    dot_with = visualizer.to_graphviz(style="card", show_node_name=True)
+    dot_without = visualizer.to_graphviz(show_node_name=False)
+    dot_with = visualizer.to_graphviz(show_node_name=True)
 
     # Node name "source" only appears under card title when the flag is on.
     # (It still appears as the dot identifier "source" -> "sink" in both.)
     assert dot_with.count("source") > dot_without.count("source")
-
-
-def test_pipeline_visualize_forwards_card_style():
-    """CuvisPipeline.visualize should pass `style` through to to_graphviz."""
-    pipeline, *_ = _build_pipeline()
-
-    dot = pipeline.visualize(format="graphviz", style="card")
-
-    assert "label=<<TABLE" in dot
 
 
 class TripleProducer(Node):
@@ -295,7 +261,7 @@ def test_card_style_emits_one_wire_per_port_with_anchors():
     pipeline.connect(producer.outputs.gamma, consumer.inputs.gamma)
 
     visualizer = PipelineVisualizer(pipeline)
-    dot = visualizer.to_graphviz(style="card")
+    dot = visualizer.to_graphviz()
 
     edge_lines = [
         line for line in dot.splitlines() if '"prod"' in line and "->" in line

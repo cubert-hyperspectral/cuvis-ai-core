@@ -46,11 +46,6 @@ class PipelineVisualizer:
         *,
         graph_name: str | None = None,
         rankdir: str = "LR",
-        node_shape: str = "box",
-        include_node_class: bool = True,
-        node_type_resolver: NodeTypeResolver | None = None,
-        node_colors: Mapping[str, str] | None = None,
-        default_node_color: str | None = "#f8f9fb",
         group_by_stage: bool = False,
         stage_labels: Mapping[str, str] | None = None,
         show_port_types: bool = False,
@@ -58,33 +53,25 @@ class PipelineVisualizer:
         graph_attributes: Mapping[str, Any] | None = None,
         node_attributes: Mapping[str, Any] | None = None,
         edge_attributes: Mapping[str, Any] | None = None,
-        style: str = "classic",
         show_node_name: bool = False,
         node_registry: NodeRegistry | None = None,
     ) -> str:
-        """Return a DOT string describing the pipeline graph.
+        """Return a DOT string describing the pipeline graph as category-coloured cards.
 
-        Two visual styles are supported:
-
-        * ``style="classic"`` (default): rectangular nodes with plain text
-          labels. Existing behaviour, byte-identical to prior releases.
-        * ``style="card"``: HTML-table labels rendering rounded category-
-          colored cards with an optional "Plugin" pill and per-port dtype
-          dots, plus edge-label dedup when both ports share a name.
+        Each node renders as a rounded HTML-table card with category colour, emoji,
+        per-port dtype dots, and an optional "Plugin" pill (when ``node_registry``
+        identifies the node as plugin-sourced). Edges are dtype-coloured and skip
+        labels when both ports share a name (set ``show_port_types=True`` to force
+        ``port: dtype`` labels and disable dtype edge colouring).
         """
-
-        card_mode = style == "card"
-        if card_mode:
-            node_shape = "plaintext"
 
         title = self._sanitize_identifier(
             graph_name or self.pipeline.name or "CuvisPipeline"
         )
         lines: list[str] = [f"digraph {title} {{"]
 
-        # Global graph defaults
         lines.append(f"    rankdir={rankdir};")
-        lines.append(f"    node [shape={node_shape}];")
+        lines.append("    node [shape=plaintext];")
 
         if graph_attributes:
             lines.extend(self._format_graphviz_attributes(graph_attributes))
@@ -92,13 +79,8 @@ class PipelineVisualizer:
             attr_line = self._compose_attribute_list(edge_attributes)
             lines.append(f"    edge [{attr_line}];")
 
-        node_entries: dict[Node, str] = {}
-        node_type_resolver = node_type_resolver or (
-            lambda node: node.__class__.__name__
-        )
-        node_colors = node_colors or {}
         stage_labels = {**DEFAULT_STAGE_LABELS, **(stage_labels or {})}
-        node_type_lookup: dict[Node, str] = {}
+        node_entries: dict[Node, str] = {}
 
         for index, node in enumerate(self._graph.nodes, start=1):
             identifier = self._dot_identifier(node)
@@ -107,44 +89,20 @@ class PipelineVisualizer:
                 if show_execution_stage
                 else None
             )
-            node_type = node_type_resolver(node)
-            node_type_lookup[node] = node_type
-
-            if card_mode:
-                html_label = self._format_card_label(
-                    node,
-                    index=index,
-                    show_node_name=show_node_name,
-                    stage_text=stage_text,
-                    registry=node_registry,
-                )
-                attrs = [
-                    f"label=<{html_label}>",
-                    'shape="plaintext"',
-                    'margin="0"',
-                ]
-                if node_attributes:
-                    attrs.extend(self._format_inline_attributes(node_attributes))
-                node_entries[node] = f'"{identifier}" [{", ".join(attrs)}];'
-                continue
-
-            label = self._escape_label(
-                self._format_node_label(
-                    node,
-                    include_node_class,
-                    stage_text=stage_text,
-                )
+            html_label = self._format_card_label(
+                node,
+                index=index,
+                show_node_name=show_node_name,
+                stage_text=stage_text,
+                registry=node_registry,
             )
-
-            attrs = [f'label="{label}"']
-            fill = node_colors.get(node_type, default_node_color)
-            if fill:
-                attrs.append('style="filled"')
-                attrs.append(f'fillcolor="{self._escape_label(str(fill))}"')
-
+            attrs = [
+                f"label=<{html_label}>",
+                'shape="plaintext"',
+                'margin="0"',
+            ]
             if node_attributes:
                 attrs.extend(self._format_inline_attributes(node_attributes))
-
             node_entries[node] = f'"{identifier}" [{", ".join(attrs)}];'
 
         if group_by_stage:
@@ -174,24 +132,24 @@ class PipelineVisualizer:
                 target,
                 edge_data,
                 include_port_types=show_port_types,
-                dedupe_matching_ports=card_mode and not show_port_types,
+                dedupe_matching_ports=not show_port_types,
             )
 
             src_anchor = (
                 f':"{self._port_anchor_id(from_port, is_output=True)}":e'
-                if card_mode and from_port
+                if from_port
                 else ""
             )
             dst_anchor = (
                 f':"{self._port_anchor_id(to_port, is_output=False)}":w'
-                if card_mode and to_port
+                if to_port
                 else ""
             )
 
             attrs: list[str] = []
             if edge_label:
                 attrs.append(f'label="{self._escape_label(edge_label)}"')
-            if card_mode and not show_port_types:
+            if not show_port_types:
                 spec = self._resolve_port_spec(source, from_port, is_output=True)
                 color = self._dtype_hex_color(spec.dtype if spec else None)
                 attrs.extend([f'color="{color}"', "penwidth=1.5"])
@@ -304,8 +262,6 @@ class PipelineVisualizer:
         *,
         format: str = "png",
         rankdir: str = "LR",
-        node_shape: str = "box",
-        include_node_class: bool = True,
         engine: str = "dot",
         **graphviz_kwargs: Any,
     ) -> Path:
@@ -315,8 +271,6 @@ class PipelineVisualizer:
 
         dot_source = self.to_graphviz(
             rankdir=rankdir,
-            node_shape=node_shape,
-            include_node_class=include_node_class,
             **graphviz_kwargs,
         )
 
