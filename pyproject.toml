@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cuvis-ai-core"
 dynamic = ["version"]
-description = "Cuvis-AI Core Framework"
+description = "Cuvis.AI Core Framework"
 authors = [
     {name = "Cubert GmbH", email = "cuvis.ai@cubert-gmbh.com"}
 ]
@@ -31,7 +31,7 @@ classifiers = [
 
 dependencies = [
     "cuvis>=3.5.0",
-    "cuvis-ai-schemas>=0.3.0",
+    "cuvis-ai-schemas[proto]>=0.4.0",
     # Core framework dependencies
     "torch>=2.9.1",
     "torchvision",
@@ -181,6 +181,7 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-icons", editable = true }
 # cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
 # cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
 

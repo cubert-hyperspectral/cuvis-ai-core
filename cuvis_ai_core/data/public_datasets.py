@@ -147,11 +147,19 @@ class PublicDatasets:
             "description": "XMR blood perfusion reflectance dataset",
             "size": "~7GB",
         },
+        "Demo_Object_Tracking": {
+            "repo_id": "cubert-gmbh/XMR_Demo_Object_Tracking",
+            "target_dir": "XMR_Demo_Object_Tracking",
+            "description": "Hyperspectral multi-person tracking demo — passive SAM3 and active spectral-ink sessions",
+            "size": "~25GB",
+        },
     }
 
     # Convenience aliases
     _datasets["lentils"] = _datasets["Lentils_Anomaly"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
+    _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]
+    _datasets["demo-object-tracking"] = _datasets["Demo_Object_Tracking"]
 
 
 def download_data_cli() -> None:

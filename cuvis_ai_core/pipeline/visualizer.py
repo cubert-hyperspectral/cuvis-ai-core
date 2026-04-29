@@ -9,8 +9,21 @@ from loguru import logger
 
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_schemas.enums import ExecutionStage
+from cuvis_ai_schemas.extensions.ui.node_display import is_plugin, resolve_display
 from cuvis_ai_schemas.pipeline import PortSpec
+
+try:
+    from cuvis_ai_schemas.extensions.ui.port_display import (
+        DEFAULT_COLOR as _DTYPE_DEFAULT_RGB,
+    )
+    from cuvis_ai_schemas.extensions.ui.port_display import (
+        DTYPE_COLORS as _DTYPE_COLORS,
+    )
+except ImportError:  # schemas extension is optional
+    _DTYPE_COLORS = {}
+    _DTYPE_DEFAULT_RGB = (200, 200, 200)
 
 NodeTypeResolver = Callable[[Node], str]
 
@@ -35,11 +48,6 @@ class PipelineVisualizer:
         *,
         graph_name: str | None = None,
         rankdir: str = "LR",
-        node_shape: str = "box",
-        include_node_class: bool = True,
-        node_type_resolver: NodeTypeResolver | None = None,
-        node_colors: Mapping[str, str] | None = None,
-        default_node_color: str | None = "#f8f9fb",
         group_by_stage: bool = False,
         stage_labels: Mapping[str, str] | None = None,
         show_port_types: bool = False,
@@ -47,17 +55,25 @@ class PipelineVisualizer:
         graph_attributes: Mapping[str, Any] | None = None,
         node_attributes: Mapping[str, Any] | None = None,
         edge_attributes: Mapping[str, Any] | None = None,
+        show_node_name: bool = False,
+        node_registry: NodeRegistry | None = None,
     ) -> str:
-        """Return a DOT string describing the pipeline graph."""
+        """Return a DOT string describing the pipeline graph as category-coloured cards.
+
+        Each node renders as a rounded HTML-table card with category colour, emoji,
+        per-port dtype dots, and an optional "Plugin" pill (when ``node_registry``
+        identifies the node as plugin-sourced). Edges are dtype-coloured and skip
+        labels when both ports share a name (set ``show_port_types=True`` to force
+        ``port: dtype`` labels and disable dtype edge colouring).
+        """
 
         title = self._sanitize_identifier(
             graph_name or self.pipeline.name or "CuvisPipeline"
         )
         lines: list[str] = [f"digraph {title} {{"]
 
-        # Global graph defaults
         lines.append(f"    rankdir={rankdir};")
-        lines.append(f"    node [shape={node_shape}];")
+        lines.append("    node [shape=plaintext];")
 
         if graph_attributes:
             lines.extend(self._format_graphviz_attributes(graph_attributes))
@@ -65,40 +81,30 @@ class PipelineVisualizer:
             attr_line = self._compose_attribute_list(edge_attributes)
             lines.append(f"    edge [{attr_line}];")
 
-        node_entries: dict[Node, str] = {}
-        node_type_resolver = node_type_resolver or (
-            lambda node: node.__class__.__name__
-        )
-        node_colors = node_colors or {}
         stage_labels = {**DEFAULT_STAGE_LABELS, **(stage_labels or {})}
-        node_type_lookup: dict[Node, str] = {}
+        node_entries: dict[Node, str] = {}
 
-        for node in self._graph.nodes:
+        for index, node in enumerate(self._graph.nodes, start=1):
             identifier = self._dot_identifier(node)
             stage_text = (
                 self._format_execution_stage_text(node, stage_labels)
                 if show_execution_stage
                 else None
             )
-            label = self._escape_label(
-                self._format_node_label(
-                    node,
-                    include_node_class,
-                    stage_text=stage_text,
-                )
+            html_label = self._format_card_label(
+                node,
+                index=index,
+                show_node_name=show_node_name,
+                stage_text=stage_text,
+                registry=node_registry,
             )
-            node_type = node_type_resolver(node)
-            node_type_lookup[node] = node_type
-
-            attrs: list[str] = [f'label="{label}"']
-            fill = node_colors.get(node_type, default_node_color)
-            if fill:
-                attrs.append('style="filled"')
-                attrs.append(f'fillcolor="{self._escape_label(str(fill))}"')
-
+            attrs = [
+                f"label=<{html_label}>",
+                'shape="plaintext"',
+                'margin="0"',
+            ]
             if node_attributes:
                 attrs.extend(self._format_inline_attributes(node_attributes))
-
             node_entries[node] = f'"{identifier}" [{", ".join(attrs)}];'
 
         if group_by_stage:
@@ -118,19 +124,42 @@ class PipelineVisualizer:
                 lines.append(f"    {entry}")
 
         for source, target, edge_data in self._graph.edges(data=True):
+            src_id = self._dot_identifier(source)
+            dst_id = self._dot_identifier(target)
+            from_port = edge_data.get("from_port") or ""
+            to_port = edge_data.get("to_port") or ""
+
             edge_label = self._format_edge_label(
                 source,
                 target,
                 edge_data,
                 include_port_types=show_port_types,
+                dedupe_matching_ports=not show_port_types,
             )
-            src = self._dot_identifier(source)
-            dst = self._dot_identifier(target)
+
+            src_anchor = (
+                f':"{self._port_anchor_id(from_port, is_output=True)}":e'
+                if from_port
+                else ""
+            )
+            dst_anchor = (
+                f':"{self._port_anchor_id(to_port, is_output=False)}":w'
+                if to_port
+                else ""
+            )
+
+            attrs: list[str] = []
             if edge_label:
-                label = self._escape_label(edge_label)
-                lines.append(f'    "{src}" -> "{dst}" [label="{label}"];')
-            else:
-                lines.append(f'    "{src}" -> "{dst}";')
+                attrs.append(f'label="{self._escape_label(edge_label)}"')
+            if not show_port_types:
+                spec = self._resolve_port_spec(source, from_port, is_output=True)
+                color = self._dtype_hex_color(spec.dtype if spec else None)
+                attrs.extend([f'color="{color}"', "penwidth=1.5"])
+
+            attr_str = f" [{', '.join(attrs)}]" if attrs else ""
+            lines.append(
+                f'    "{src_id}"{src_anchor} -> "{dst_id}"{dst_anchor}{attr_str};'
+            )
 
         lines.append("}")
         return "\n".join(lines)
@@ -235,8 +264,6 @@ class PipelineVisualizer:
         *,
         format: str = "png",
         rankdir: str = "LR",
-        node_shape: str = "box",
-        include_node_class: bool = True,
         engine: str = "dot",
         **graphviz_kwargs: Any,
     ) -> Path:
@@ -246,8 +273,6 @@ class PipelineVisualizer:
 
         dot_source = self.to_graphviz(
             rankdir=rankdir,
-            node_shape=node_shape,
-            include_node_class=include_node_class,
             **graphviz_kwargs,
         )
 
@@ -320,9 +345,15 @@ class PipelineVisualizer:
         *,
         include_port_types: bool,
         mermaid: bool = False,
+        dedupe_matching_ports: bool = False,
     ) -> str:
         from_port = edge_data.get("from_port") or ""
         to_port = edge_data.get("to_port") or ""
+
+        # In card mode the port names are already rendered beside each dot
+        # inside the node card, so no edge label is needed.
+        if dedupe_matching_ports and not include_port_types:
+            return ""
 
         from_spec = (
             self._resolve_port_spec(source, from_port, is_output=True)
@@ -473,6 +504,151 @@ class PipelineVisualizer:
         if not normalized or ExecutionStage.ALWAYS.value in normalized:
             return {ExecutionStage.ALWAYS.value}
         return normalized
+
+    def _format_card_label(
+        self,
+        node: Node,
+        *,
+        index: int,
+        show_node_name: bool,
+        stage_text: str | None,
+        registry: NodeRegistry | None = None,
+    ) -> str:
+        display = resolve_display(node)
+        title = self._escape_html(display.get("label") or node.__class__.__name__)
+        emoji = self._escape_html(display.get("emoji", ""))
+        fill = display["fill"]
+        border = display["border"]
+
+        plugin_cell = (
+            self._pill_html("Plugin", "#E8A33D")
+            if is_plugin(node, registry=registry)
+            else ""
+        )
+
+        # Header spans the full card width via COLSPAN, laying out "Node N"
+        # and the optional Plugin pill inside a nested 2-cell table so the
+        # pill only takes as much width as its text.
+        header_inner = (
+            '<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0">'
+            "<TR>"
+            '<TD ALIGN="LEFT">'
+            f'<FONT COLOR="#888888" POINT-SIZE="9">Node {index}</FONT>'
+            "</TD>"
+            f'<TD ALIGN="RIGHT">{plugin_cell}</TD>'
+            "</TR></TABLE>"
+        )
+        header_row = f'<TR><TD COLSPAN="3" CELLPADDING="6">{header_inner}</TD></TR>'
+
+        body_rows: list[str] = [
+            f'<TR><TD CELLPADDING="4"><FONT POINT-SIZE="18">{emoji}</FONT></TD></TR>',
+            f'<TR><TD CELLPADDING="2"><B><FONT POINT-SIZE="12">{title}</FONT></B></TD></TR>',
+        ]
+        if show_node_name and node.name != node.__class__.__name__:
+            body_rows.append(
+                f'<TR><TD CELLPADDING="2">'
+                f'<FONT COLOR="#888888" POINT-SIZE="9">{self._escape_html(node.name)}</FONT>'
+                "</TD></TR>"
+            )
+        if stage_text:
+            body_rows.append(
+                f'<TR><TD CELLPADDING="2">'
+                f'<FONT COLOR="#888888" POINT-SIZE="8">Stage: {self._escape_html(stage_text)}</FONT>'
+                "</TD></TR>"
+            )
+
+        inner_body = (
+            '<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">'
+            + "".join(body_rows)
+            + "</TABLE>"
+        )
+
+        input_dots = self._port_dots_html(node, is_output=False)
+        output_dots = self._port_dots_html(node, is_output=True)
+
+        # CELLPADDING="0" on the outer port TDs pushes the dot knots flush
+        # against the card's outer border so wires appear to attach AT the
+        # edge rather than inset inside the card body.
+        body_row = (
+            "<TR>"
+            f'<TD CELLPADDING="0" VALIGN="MIDDLE">{input_dots}</TD>'
+            f'<TD CELLPADDING="10" VALIGN="MIDDLE" ALIGN="CENTER">{inner_body}</TD>'
+            f'<TD CELLPADDING="0" VALIGN="MIDDLE">{output_dots}</TD>'
+            "</TR>"
+        )
+
+        return (
+            f'<TABLE BORDER="1" COLOR="{border}" CELLBORDER="0" CELLSPACING="0" '
+            f'CELLPADDING="0" BGCOLOR="{fill}" STYLE="ROUNDED">'
+            f"{header_row}{body_row}</TABLE>"
+        )
+
+    def _port_dots_html(self, node: Node, *, is_output: bool) -> str:
+        ports = getattr(node, "_output_ports" if is_output else "_input_ports", None)
+        if not ports:
+            return "&nbsp;"
+
+        rows: list[str] = []
+        for port_name, port in ports.items():
+            spec = getattr(port, "spec", None)
+            color = self._dtype_hex_color(spec.dtype if spec else None)
+            safe_name = self._escape_html(port_name)
+            port_id = self._port_anchor_id(port_name, is_output=is_output)
+
+            dot_td = (
+                f'<TD BGCOLOR="{color}" CELLPADDING="2" '
+                f'PORT="{port_id}" TITLE="{safe_name}">'
+                '<FONT POINT-SIZE="6">  </FONT>'
+                "</TD>"
+            )
+            name_align = "RIGHT" if is_output else "LEFT"
+            name_td = (
+                f'<TD CELLPADDING="2" ALIGN="{name_align}">'
+                f'<FONT POINT-SIZE="9" COLOR="#555555">{safe_name}</FONT>'
+                "</TD>"
+            )
+            if is_output:
+                rows.append(f"<TR>{name_td}{dot_td}</TR>")
+            else:
+                rows.append(f"<TR>{dot_td}{name_td}</TR>")
+
+        return (
+            '<TABLE BORDER="0" CELLBORDER="0" '
+            'CELLSPACING="4" CELLPADDING="0">' + "".join(rows) + "</TABLE>"
+        )
+
+    @staticmethod
+    def _port_anchor_id(port_name: str, *, is_output: bool) -> str:
+        prefix = "out_" if is_output else "in_"
+        return prefix + PipelineVisualizer._sanitize_identifier(
+            port_name, allow_dash=False
+        )
+
+    @staticmethod
+    def _pill_html(text: str, color: str) -> str:
+        safe = PipelineVisualizer._escape_html(text)
+        return (
+            f'<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">'
+            f'<TR><TD BGCOLOR="{color}" CELLPADDING="3">'
+            f'<FONT COLOR="white" POINT-SIZE="8"><B>{safe}</B></FONT>'
+            f"</TD></TR></TABLE>"
+        )
+
+    @staticmethod
+    def _dtype_hex_color(dtype: Any) -> str:
+        key = PipelineVisualizer._format_dtype(dtype) if dtype is not None else ""
+        rgb = _DTYPE_COLORS.get(key, _DTYPE_DEFAULT_RGB)
+        return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+    @staticmethod
+    def _escape_html(value: str) -> str:
+        return (
+            str(value)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
 
 
 def visualize_pipeline(

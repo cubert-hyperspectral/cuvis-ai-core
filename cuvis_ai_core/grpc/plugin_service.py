@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
 
 import grpc
 from loguru import logger
@@ -10,9 +12,15 @@ from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
 from cuvis_ai_core.grpc.helpers import dtype_to_proto
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_config import PluginManifest
+from cuvis_ai_schemas.enums import NodeCategory
+from cuvis_ai_schemas.grpc.conversions import (
+    node_category_to_proto,
+    node_tag_to_proto,
+)
+from cuvis_ai_schemas.pipeline import PortSpec
 
 
 def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortSpec:
@@ -56,6 +64,91 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
         optional=spec.optional,
         description=spec.description,
     )
+
+
+def _resolve_package_root(node_class: type) -> Path | None:
+    """Return the package root that owns ``node_class`` if it carries an
+    ``assets/node_icons/`` folder, otherwise ``None``.
+
+    The walk stops after a small bound (8 levels) to avoid pathological
+    loops on broken symlinks. Returns ``None`` when ``inspect.getfile``
+    can't resolve a real file (e.g. for plugins loaded from frozen modules
+    or in-memory exec) — the icon helper falls through to the schemas
+    default in that case.
+    """
+    try:
+        source_path = Path(inspect.getfile(node_class)).resolve()
+    except (TypeError, OSError):
+        return None
+
+    for ancestor in (source_path, *source_path.parents)[:9]:
+        candidate = ancestor / "assets" / "node_icons"
+        if candidate.is_dir():
+            return ancestor
+    return None
+
+
+def _extract_node_metadata(
+    node_class: type | None, *, class_name: str
+) -> tuple[int, list[int], bytes]:
+    """Resolve (category proto-int, sorted tag proto-ints, icon SVG bytes).
+
+    Independently safe: any exception inside ``get_category`` /
+    ``get_tags`` / ``get_icon_name`` / icon resolution is logged and
+    falls back to ``(NODE_CATEGORY_UNSPECIFIED, [], unspecified.svg)``,
+    so a misbehaving plugin never breaks ``list_available_nodes``. ``None``
+    for ``node_class`` (lookup failure upstream) takes the same path.
+    """
+    if node_class is None:
+        category = NodeCategory.UNSPECIFIED
+        tag_ints: list[int] = []
+        icon_svg = get_node_icon(
+            class_name=class_name,
+            icon_name=None,
+            category=category,
+            package_root=None,
+        )
+        return node_category_to_proto(category), tag_ints, icon_svg
+
+    try:
+        category = node_class.get_category()
+    except Exception as e:
+        logger.warning(
+            f"Failed to read category for node '{class_name}': {e}",
+            exc_info=True,
+        )
+        category = NodeCategory.UNSPECIFIED
+
+    try:
+        tags = node_class.get_tags()
+        tag_ints = sorted(node_tag_to_proto(tag) for tag in tags)
+    except Exception as e:
+        logger.warning(
+            f"Failed to read tags for node '{class_name}': {e}",
+            exc_info=True,
+        )
+        tag_ints = []
+
+    try:
+        icon_name = node_class.get_icon_name()
+    except Exception:
+        icon_name = None
+
+    try:
+        icon_svg = get_node_icon(
+            class_name=class_name,
+            icon_name=icon_name,
+            category=category,
+            package_root=_resolve_package_root(node_class),
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to resolve icon for node '{class_name}': {e}",
+            exc_info=True,
+        )
+        icon_svg = b""
+
+    return node_category_to_proto(category), tag_ints, icon_svg
 
 
 class PluginService:
@@ -195,17 +288,34 @@ class PluginService:
 
         # Built-in nodes
         for class_name in NodeRegistry.list_builtin_nodes():
-            # Get the node class to extract port specs
+            # Class lookup runs in its own try so a failure doesn't leave
+            # node_class undefined for the metadata extractor below.
             try:
                 node_class = NodeRegistry.get_builtin_class(class_name)
-                input_specs, output_specs = self._extract_port_specs(node_class)
             except Exception as e:
                 logger.warning(
-                    f"Failed to extract port specs for builtin node '{class_name}': {e}",
-                    exc_info=True,  # Include full traceback
+                    f"Failed to resolve builtin node class '{class_name}': {e}",
+                    exc_info=True,
                 )
+                node_class = None
+
+            if node_class is not None:
+                try:
+                    input_specs, output_specs = self._extract_port_specs(node_class)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to extract port specs for builtin node '{class_name}': {e}",
+                        exc_info=True,
+                    )
+                    input_specs = {}
+                    output_specs = {}
+            else:
                 input_specs = {}
                 output_specs = {}
+
+            category, tags, icon_svg = _extract_node_metadata(
+                node_class, class_name=class_name
+            )
 
             nodes.append(
                 cuvis_ai_pb2.NodeInfo(
@@ -215,6 +325,9 @@ class PluginService:
                     plugin_name="",
                     input_specs=input_specs,
                     output_specs=output_specs,
+                    icon_svg=icon_svg,
+                    category=category,
+                    tags=tags,
                 )
             )
 
@@ -236,17 +349,34 @@ class PluginService:
                 if plugin_name:
                     break
 
-            # Get the node class to extract port specs
+            # Class lookup runs in its own try so a failure doesn't leave
+            # node_class undefined for the metadata extractor below.
             try:
                 node_class = session.node_registry.plugin_registry[class_name]
-                input_specs, output_specs = self._extract_port_specs(node_class)
             except Exception as e:
                 logger.warning(
-                    f"Failed to extract port specs for plugin node '{class_name}': {e}",
-                    exc_info=True,  # Include full traceback
+                    f"Failed to resolve plugin node class '{class_name}': {e}",
+                    exc_info=True,
                 )
+                node_class = None
+
+            if node_class is not None:
+                try:
+                    input_specs, output_specs = self._extract_port_specs(node_class)
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to extract port specs for plugin node '{class_name}': {e}",
+                        exc_info=True,
+                    )
+                    input_specs = {}
+                    output_specs = {}
+            else:
                 input_specs = {}
                 output_specs = {}
+
+            category, tags, icon_svg = _extract_node_metadata(
+                node_class, class_name=class_name
+            )
 
             nodes.append(
                 cuvis_ai_pb2.NodeInfo(
@@ -256,6 +386,9 @@ class PluginService:
                     plugin_name=plugin_name,
                     input_specs=input_specs,
                     output_specs=output_specs,
+                    icon_svg=icon_svg,
+                    category=category,
+                    tags=tags,
                 )
             )
 
