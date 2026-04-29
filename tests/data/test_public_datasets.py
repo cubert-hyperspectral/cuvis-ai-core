@@ -143,9 +143,10 @@ def test_list_datasets_verbose_and_canonical_names(
     PublicDatasets.list_datasets(verbose=True)
 
     out = capsys.readouterr().out
-    assert canonical == ["Lentils_Anomaly", "Blood_Perfusion"]
+    assert canonical == ["Lentils_Anomaly", "Blood_Perfusion", "Demo_Object_Tracking"]
     assert "(alias: lentils)" in out
     assert "(alias: blood_perfusion)" in out
+    assert "alias: demo_object_tracking" in out
     assert "repo:" in out
     assert "dir:" in out
 

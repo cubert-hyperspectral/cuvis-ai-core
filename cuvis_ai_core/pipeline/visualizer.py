@@ -18,7 +18,9 @@ try:
     from cuvis_ai_schemas.extensions.ui.port_display import (
         DEFAULT_COLOR as _DTYPE_DEFAULT_RGB,
     )
-    from cuvis_ai_schemas.extensions.ui.port_display import DTYPE_COLORS as _DTYPE_COLORS
+    from cuvis_ai_schemas.extensions.ui.port_display import (
+        DTYPE_COLORS as _DTYPE_COLORS,
+    )
 except ImportError:  # schemas extension is optional
     _DTYPE_COLORS = {}
     _DTYPE_DEFAULT_RGB = (200, 200, 200)
@@ -536,11 +538,7 @@ class PipelineVisualizer:
             f'<TD ALIGN="RIGHT">{plugin_cell}</TD>'
             "</TR></TABLE>"
         )
-        header_row = (
-            '<TR><TD COLSPAN="3" CELLPADDING="6">'
-            f"{header_inner}"
-            "</TD></TR>"
-        )
+        header_row = f'<TR><TD COLSPAN="3" CELLPADDING="6">{header_inner}</TD></TR>'
 
         body_rows: list[str] = [
             f'<TR><TD CELLPADDING="4"><FONT POINT-SIZE="18">{emoji}</FONT></TD></TR>',
@@ -616,9 +614,7 @@ class PipelineVisualizer:
 
         return (
             '<TABLE BORDER="0" CELLBORDER="0" '
-            'CELLSPACING="4" CELLPADDING="0">'
-            + "".join(rows)
-            + "</TABLE>"
+            'CELLSPACING="4" CELLPADDING="0">' + "".join(rows) + "</TABLE>"
         )
 
     @staticmethod

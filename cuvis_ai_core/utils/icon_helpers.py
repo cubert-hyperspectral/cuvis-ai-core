@@ -26,7 +26,9 @@ def get_node_icon(
          icons folder from the schemas wheel).
     """
     if package_root is not None:
-        per_node = package_root / "assets" / "node_icons" / f"{icon_name or class_name}.svg"
+        per_node = (
+            package_root / "assets" / "node_icons" / f"{icon_name or class_name}.svg"
+        )
         if per_node.is_file():
             return per_node.read_bytes()
 
