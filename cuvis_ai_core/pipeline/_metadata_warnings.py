@@ -47,10 +47,21 @@ def warn_if_metadata_missing(node: Node) -> None:
         return
 
     fields = " and ".join(issues)
+    examples: list[str] = []
+    if "_category" in issues:
+        examples.append(
+            "    _category = NodeCategory.TRANSFORM  # graph role: SOURCE / SINK / "
+            "TRANSFORM / MODEL / LOSS / METRIC / REGULARIZER / OPTIMIZER / "
+            "SCHEDULER / RUNNER / CONTROL / VISUALIZER"
+        )
+    if "_tags" in issues:
+        examples.append(
+            "    _tags = frozenset({NodeTag.HYPERSPECTRAL, NodeTag.PREPROCESSING})  "
+            "# any modality / task / lifecycle / property / backend tags that apply"
+        )
     warnings.warn(
-        f"Node class {cls.__module__}.{cls.__qualname__} is missing "
-        f"explicit {fields}. Set them on the class body — see "
-        f"ALL-5187 phase 3 for the decision flowchart.",
+        f"Node class {cls.__module__}.{cls.__qualname__} is missing explicit "
+        f"{fields}. Declare on the class body, e.g.:\n" + "\n".join(examples),
         MissingNodeMetadataWarning,
         stacklevel=3,
     )

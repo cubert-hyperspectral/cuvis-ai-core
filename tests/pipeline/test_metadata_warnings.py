@@ -126,8 +126,8 @@ def test_warning_suppressible_via_catch_warnings():
     assert relevant == []
 
 
-def test_warning_message_points_at_phase_3_doc():
-    """The remediation hint references the phase 3 decision flowchart."""
+def test_warning_message_includes_remediation_example():
+    """The warning shows the exact ClassVars to set, not a doc reference."""
     Bare = _bare_unannotated_class()
     pipeline = CuvisPipeline("p")
 
@@ -137,4 +137,9 @@ def test_warning_message_points_at_phase_3_doc():
 
     relevant = [w for w in caught if issubclass(w.category, MissingNodeMetadataWarning)]
     assert len(relevant) == 1
-    assert "ALL-5187" in str(relevant[0].message)
+    msg = str(relevant[0].message)
+    assert "_category = NodeCategory." in msg
+    assert "_tags = frozenset" in msg
+    # The message must be self-contained — no internal task / phase references.
+    assert "ALL-5187" not in msg
+    assert "phase" not in msg.lower()
