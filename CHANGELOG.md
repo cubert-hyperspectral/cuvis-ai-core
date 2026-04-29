@@ -4,7 +4,7 @@
 
 ## 0.5.0 - 2026-04-29
 
-- Added `NodeCategory`, `NodeTag`, and `_icon_name` ClassVars on `Node` base, with `get_category()` / `get_tags()` / `get_icon_name()` accessors. Defaults to `NodeCategory.UNSPECIFIED` and an empty tag set so unannotated subclasses still compile (ALL-5187 phase 2).
+- Added `NodeCategory`, `NodeTag`, and `_icon_name` ClassVars on `Node` base, with `get_category()` / `get_tags()` / `get_icon_name()` accessors. Defaults to `NodeCategory.UNSPECIFIED` and an empty tag set so unannotated subclasses still compile.
 - Added `cuvis_ai_core/utils/icon_helpers.py` with a per-node SVG → schemas-default icon resolution chain backing `NodeInfo.icon_svg`.
 - Added `MissingNodeMetadataWarning`: pipelines emit a once-per-class warning when a node lacks explicit `_category` / `_tags`, including a copy-pasteable remediation hint with concrete `NodeCategory` / `NodeTag` examples. `frozenset({NodeTag.UNSPECIFIED})` is treated as missing.
 - Changed `list_available_nodes` gRPC to populate `NodeInfo.category`, `tags`, and `icon_svg`. Class lookup runs in its own try-block so a lookup failure no longer crashes port-spec extraction; metadata extraction is independently safe and falls back to `(UNSPECIFIED, [], unspecified.svg)` on any per-node error.
