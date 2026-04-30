@@ -319,6 +319,34 @@ def test_predictor_progress_bar_falls_through_when_ipython_returns_none(
     assert Predictor._should_disable_progress_bar() is True
 
 
+def test_predictor_progress_bar_handles_missing_ipython(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headless environments without IPython installed: the import raises
+    ImportError, the helper falls through to the TTY check (returns True
+    when stderr is non-TTY)."""
+    import builtins
+    import sys as _sys
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "IPython":
+            raise ImportError("no IPython on this Python")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setitem(_sys.modules, "IPython", None)
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    class _NotATty:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr(predictor_mod.sys, "stderr", _NotATty())
+
+    assert Predictor._should_disable_progress_bar() is True
+
+
 def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors() -> (
     None
 ):

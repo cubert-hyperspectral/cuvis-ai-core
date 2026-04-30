@@ -863,3 +863,62 @@ class TestPluginServiceMetadata:
         assert category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
         assert tags == []
         assert len(icon) > 0
+
+    def test_extract_node_metadata_falls_back_when_icon_resolution_raises(
+        self, monkeypatch
+    ):
+        """If the icon resolver itself raises, _extract_node_metadata logs the
+        error and returns ``b''`` rather than propagating the exception."""
+        from cuvis_ai_core.grpc import plugin_service
+        from cuvis_ai_core.node import Node
+
+        class IconlessNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        def _broken_icon_resolver(**_kwargs):
+            raise RuntimeError("icon disk read failed")
+
+        monkeypatch.setattr(plugin_service, "get_node_icon", _broken_icon_resolver)
+
+        category, tags, icon = plugin_service._extract_node_metadata(
+            IconlessNode, class_name="IconlessNode"
+        )
+        assert category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+        assert tags == []
+        assert icon == b""
+
+    def test_resolve_package_root_finds_assets_folder(self, tmp_path, monkeypatch):
+        """When a node's source file lives under a package that owns
+        ``assets/node_icons/``, _resolve_package_root returns that ancestor."""
+        from cuvis_ai_core.grpc import plugin_service
+        from cuvis_ai_core.node import Node
+
+        package_root = tmp_path / "fake_pkg"
+        (package_root / "assets" / "node_icons").mkdir(parents=True)
+        fake_source = package_root / "subpkg" / "module.py"
+        fake_source.parent.mkdir(parents=True)
+        fake_source.write_text("# fake module")
+
+        class FakeNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        monkeypatch.setattr(
+            plugin_service.inspect, "getfile", lambda _cls: str(fake_source)
+        )
+
+        resolved = plugin_service._resolve_package_root(FakeNode)
+        assert resolved == package_root.resolve()
