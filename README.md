@@ -4,11 +4,17 @@
 
 ![image](https://github.com/cubert-hyperspectral/cuvis.sdk/blob/main/branding/logo/banner.png?raw=true)
 
-[![PyPI version](https://img.shields.io/pypi/v/cuvis-ai-core.svg)](https://pypi.org/project/cuvis-ai-core/)
-[![CI Status](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml/badge.svg)](https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/cubert-hyperspectral/cuvis-ai-core/branch/main/graph/badge.svg)](https://codecov.io/gh/cubert-hyperspectral/cuvis-ai-core)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![PyPI][pypi-badge]][pypi-link]
+[![CI][ci-badge]][ci-link]
+[![codecov][cov-badge]][cov-link]
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
+
+[pypi-badge]: https://img.shields.io/pypi/v/cuvis-ai-core?style=flat-square&logo=pypi&logoColor=white
+[pypi-link]: https://pypi.org/project/cuvis-ai-core/
+[ci-badge]: https://img.shields.io/github/actions/workflow/status/cubert-hyperspectral/cuvis-ai-core/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI
+[ci-link]: https://github.com/cubert-hyperspectral/cuvis-ai-core/actions/workflows/ci.yml
+[cov-badge]: https://img.shields.io/codecov/c/github/cubert-hyperspectral/cuvis-ai-core?style=flat-square&logo=codecov&logoColor=white
+[cov-link]: https://codecov.io/gh/cubert-hyperspectral/cuvis-ai-core
 
 
 
