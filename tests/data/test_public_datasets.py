@@ -135,6 +135,33 @@ def test_download_dataset_success_and_failure_paths(
     assert "Manual download:" in out
 
 
+def test_lookup_accepts_hyphen_form(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    assert PublicDatasets.get_target_dir("Demo-Object-Tracking") == "XMR_Demo_Object_Tracking"
+    assert PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Blood_Perfusion"
+
+    calls: list[dict[str, str]] = []
+
+    def _fake_snapshot_download(
+        *, repo_id: str, repo_type: str, local_dir: str
+    ) -> None:
+        calls.append({"repo_id": repo_id, "local_dir": local_dir})
+
+    _install_fake_hf(monkeypatch, download_fn=_fake_snapshot_download)
+
+    assert (
+        PublicDatasets.download_dataset(
+            "Demo-Object-Tracking",
+            download_path=str(tmp_path / "downloads"),
+            force=True,
+        )
+        is True
+    )
+    assert calls and calls[0]["repo_id"] == "cubert-gmbh/XMR_Demo_Object_Tracking"
+
+
 def test_list_datasets_verbose_and_canonical_names(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

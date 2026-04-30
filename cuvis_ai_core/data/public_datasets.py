@@ -29,7 +29,7 @@ class PublicDatasets:
             True on success (or if data already present), False on error.
         """
         try:
-            dset = cls._datasets[dataset_name]
+            dset = cls._datasets[cls._normalize(dataset_name)]
         except KeyError:
             print(f"Dataset '{dataset_name}' not found.")
             print(f"Available: {', '.join(cls._canonical_names())}")
@@ -116,7 +116,12 @@ class PublicDatasets:
         Raises:
             KeyError: If *dataset_name* is not in the registry.
         """
-        return cls._datasets[dataset_name]["target_dir"]
+        return cls._datasets[cls._normalize(dataset_name)]["target_dir"]
+
+    @staticmethod
+    def _normalize(name: str) -> str:
+        """Map hyphen-form dataset names to underscore-form keys."""
+        return name.replace("-", "_")
 
     @classmethod
     def _canonical_names(cls) -> list[str]:
@@ -159,7 +164,6 @@ class PublicDatasets:
     _datasets["lentils"] = _datasets["Lentils_Anomaly"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
     _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]
-    _datasets["demo-object-tracking"] = _datasets["Demo_Object_Tracking"]
 
 
 def download_data_cli() -> None:
