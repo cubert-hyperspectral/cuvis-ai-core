@@ -9,7 +9,7 @@ from typing import Any
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_schemas.enums import ExecutionStage
@@ -97,7 +97,15 @@ class Predictor:
 
     @staticmethod
     def _should_disable_progress_bar() -> bool:
-        """Disable tqdm when stderr is not an interactive TTY."""
+        """Disable tqdm when stderr is not an interactive TTY and we're not in IPython."""
+        try:
+            from IPython import get_ipython  # type: ignore[import-not-found]
+
+            if get_ipython() is not None:
+                return False
+        except ImportError:
+            pass
+
         stream = getattr(sys, "stderr", None)
         is_tty = getattr(stream, "isatty", None)
         if not callable(is_tty):

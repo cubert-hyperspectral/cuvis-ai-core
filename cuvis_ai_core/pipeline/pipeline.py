@@ -17,6 +17,7 @@ from torch import nn
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
+from cuvis_ai_core.pipeline._metadata_warnings import warn_if_metadata_missing
 from cuvis_ai_core.pipeline.profiling import PipelineProfiler, format_profiling_table
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
@@ -152,6 +153,8 @@ class CuvisPipeline:
             Existing: normalizer (0), normalizer-2 (2)  [gap at 1]
             New node: normalizer-3 (3)  [gap preserved]
         """
+        warn_if_metadata_missing(node)
+
         # Find the highest counter value for this base name
         max_counter = -1
         for existing in self._graph.nodes():

@@ -17,6 +17,21 @@ warnings.filterwarnings(
     module="pytorch_lightning.utilities._pytree",
 )
 
+
+def pytest_configure(config):
+    """Register suite-wide warning filters whose class lives in cuvis_ai_core.
+
+    Doing this in `pytest_configure` (rather than `filterwarnings` in pytest.ini)
+    delays the import of the warning class until after pytest-cov has started
+    tracing, so the warning module's import-time lines stay in the coverage
+    report. Tests that assert the warning fires override with
+    `simplefilter("always")` inside `warnings.catch_warnings()`.
+    """
+    from cuvis_ai_core.pipeline._metadata_warnings import MissingNodeMetadataWarning
+
+    warnings.filterwarnings("ignore", category=MissingNodeMetadataWarning)
+
+
 # Import all fixtures from fixtures/ modules
 # This makes them available to all tests without explicit imports
 # Note: mock_nodes is imported at runtime in reset_global_state to avoid assertion rewrite issues
