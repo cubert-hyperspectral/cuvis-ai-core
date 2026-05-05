@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.5.1 - 2026-05-05
+
+- Bumped stale `pyproject.toml` dependency floors to align with `uv.lock`, preventing the plugin loader's in-process `uv pip install` from upgrading the live venv on Windows where packages with loaded native extensions (Pillow `_imaging.pyd`, lxml `etree.pyd`) fail with "Access is denied".
+
 ## 0.5.0 - 2026-04-30
 
 - Added `NodeCategory`, `NodeTag`, and `_icon_name` ClassVars on `Node` base, with `get_category()` / `get_tags()` / `get_icon_name()` accessors. Defaults to `NodeCategory.UNSPECIFIED` and an empty tag set so unannotated subclasses still compile.
