@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## 0.5.2 - 2026-05-05
+
+- Fixed `PipelineVisualizer` crash (`AttributeError: 'list' object has no attribute 'dtype'`) when rendering pipelines that contain nodes with variadic input ports declared as `list[PortSpec]` (e.g. `TensorBoardMonitorNode.INPUT_SPECS["artifacts"]`). The visualizer now mirrors the `isinstance(spec, list): spec = spec[0]` normalization that `cuvis_ai_core/pipeline/pipeline.py` applies in seven other call sites, via a new `_unwrap_spec` helper threaded through `_resolve_port_spec`, `_port_dots_html` (the failing site), and `_format_port_spec`.
+- Added regression tests that render a pipeline with a variadic-port node via `to_graphviz` / `to_graphviz(show_port_types=True)` / `to_mermaid` and direct-test the unwrap helper.
+
 ## 0.5.1 - 2026-05-05
 
 - Bumped stale `pyproject.toml` dependency floors to align with `uv.lock`, preventing the plugin loader's in-process `uv pip install` from upgrading the live venv on Windows where packages with loaded native extensions (Pillow `_imaging.pyd`, lxml `etree.pyd`) fail with "Access is denied".
