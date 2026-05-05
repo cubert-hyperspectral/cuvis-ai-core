@@ -287,6 +287,61 @@ def test_card_style_emits_one_wire_per_port_with_anchors():
         assert line.count(":") <= 4  # 2x node:port:compass only
 
 
+class VariadicSink(Node):
+    INPUT_SPECS = {
+        "items": [PortSpec(dtype=list, shape=(), optional=True)],
+    }
+    OUTPUT_SPECS: dict[str, PortSpec] = {}
+
+    def forward(self, **_):
+        return {}
+
+
+class ListProducer(Node):
+    INPUT_SPECS: dict[str, PortSpec] = {}
+    OUTPUT_SPECS = {
+        "out": PortSpec(dtype=list, shape=()),
+    }
+
+    def forward(self, **_):
+        return {"out": []}
+
+
+def test_card_renders_variadic_list_port_specs_without_crashing():
+    """Regression: nodes whose INPUT_SPECS declare a variadic port as
+    `[PortSpec(...)]` (e.g. TensorBoardMonitorNode) used to crash the
+    card renderer with `AttributeError: 'list' object has no attribute
+    'dtype'` because the visualizer accessed `spec.dtype` on the raw
+    list. The renderer now unwraps the element spec the same way
+    pipeline.py does."""
+    pipeline = CuvisPipeline("variadic")
+    producer = ListProducer(name="prod")
+    sink = VariadicSink(name="sink")
+    pipeline.connect(producer.outputs.out, sink.inputs.items)
+
+    visualizer = PipelineVisualizer(pipeline)
+
+    dot = visualizer.to_graphviz()
+    assert "VariadicSink" in dot
+    assert ">items</FONT>" in dot
+
+    dot_typed = visualizer.to_graphviz(show_port_types=True)
+    assert "items (list" in dot_typed
+
+    mermaid = visualizer.to_mermaid()
+    assert mermaid.startswith("flowchart")
+
+
+def test_unwrap_spec_normalizes_list_and_passthrough():
+    """Direct test of the helper that mirrors pipeline.py's
+    `if isinstance(spec, list): spec = spec[0]` convention."""
+    inner = PortSpec(dtype=list, shape=())
+    assert PipelineVisualizer._unwrap_spec([inner]) is inner
+    assert PipelineVisualizer._unwrap_spec(inner) is inner
+    assert PipelineVisualizer._unwrap_spec(None) is None
+    assert PipelineVisualizer._unwrap_spec([]) is None
+
+
 def test_format_edge_label_returns_empty_in_card_mode():
     """Card mode (`dedupe_matching_ports=True, include_port_types=False`) suppresses
     the edge label because port names are rendered beside each dot inside the
