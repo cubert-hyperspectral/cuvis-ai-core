@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import builtins
-import shutil
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -34,7 +33,7 @@ def test_download_dataset_rejects_unknown_name(
 
     out = capsys.readouterr().out
     assert "Dataset 'missing' not found." in out
-    assert "Lentils_Anomaly" in out
+    assert "Demo_Industrial_FOD_Lentils" in out
     assert "Blood_Perfusion" in out
 
 
@@ -42,11 +41,14 @@ def test_download_dataset_skips_existing_directory(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    target = tmp_path / PublicDatasets.get_target_dir("lentils")
+    target = tmp_path / PublicDatasets.get_target_dir("demo_industrial_fod_lentils")
     target.mkdir(parents=True)
 
     assert (
-        PublicDatasets.download_dataset("lentils", download_path=str(tmp_path)) is True
+        PublicDatasets.download_dataset(
+            "demo_industrial_fod_lentils", download_path=str(tmp_path)
+        )
+        is True
     )
 
     out = capsys.readouterr().out
@@ -70,7 +72,7 @@ def test_download_dataset_handles_missing_huggingface_hub(
 
     assert (
         PublicDatasets.download_dataset(
-            "Lentils_Anomaly",
+            "Demo_Industrial_FOD_Lentils",
             download_path=str(tmp_path / "downloads"),
             force=True,
         )
@@ -170,8 +172,12 @@ def test_list_datasets_verbose_and_canonical_names(
     PublicDatasets.list_datasets(verbose=True)
 
     out = capsys.readouterr().out
-    assert canonical == ["Lentils_Anomaly", "Blood_Perfusion", "Demo_Object_Tracking"]
-    assert "(alias: lentils)" in out
+    assert canonical == [
+        "Demo_Industrial_FOD_Lentils",
+        "Blood_Perfusion",
+        "Demo_Object_Tracking",
+    ]
+    assert "(alias: demo_industrial_fod_lentils)" in out
     assert "(alias: blood_perfusion)" in out
     assert "alias: demo_object_tracking" in out
     assert "repo:" in out
@@ -189,102 +195,9 @@ def test_download_data_cli_lists_datasets(
 
     _assert_cli_success(exc_info)
     out = capsys.readouterr().out
-    assert "Lentils_Anomaly" in out
+    assert "Demo_Industrial_FOD_Lentils" in out
     assert "Blood_Perfusion" in out
     assert "repo:" in out
-
-
-def test_download_data_cli_validates_and_creates_lentils_symlink(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    created_links: list[tuple[Path, str, bool]] = []
-    path_type = type(tmp_path)
-    original_exists = path_type.exists
-
-    def _fake_download_dataset(
-        name: str, *, download_path: str = ".", force: bool = False
-    ) -> bool:
-        del force
-        target = Path(download_path) / PublicDatasets.get_target_dir(name)
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "sample.cu3s").write_text("", encoding="utf-8")
-        return True
-
-    def _fake_symlink_to(self: Path, target: str, target_is_directory: bool = False):
-        created_links.append((self, target, target_is_directory))
-
-    def _fake_exists(self: Path) -> bool:
-        if self.parent == tmp_path and self.name == "lentils":
-            return False
-        return original_exists(self)
-
-    monkeypatch.setattr(
-        PublicDatasets, "download_dataset", staticmethod(_fake_download_dataset)
-    )
-    monkeypatch.setattr(Path, "symlink_to", _fake_symlink_to)
-    monkeypatch.setattr(path_type, "exists", _fake_exists)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["dataset", "download", "lentils", "--data-dir", str(tmp_path), "--force"],
-    )
-
-    with pytest.raises(SystemExit) as exc_info:
-        download_data_cli()
-
-    _assert_cli_success(exc_info)
-    assert created_links == [(tmp_path / "lentils", "Lentils", True)]
-
-
-def test_download_data_cli_copies_when_symlink_creation_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    copied: list[tuple[Path, Path]] = []
-    path_type = type(tmp_path)
-    original_exists = path_type.exists
-
-    def _fake_download_dataset(
-        name: str, *, download_path: str = ".", force: bool = False
-    ) -> bool:
-        del force
-        target = Path(download_path) / PublicDatasets.get_target_dir(name)
-        target.mkdir(parents=True, exist_ok=True)
-        return True
-
-    def _failing_symlink(self: Path, target: str, target_is_directory: bool = False):
-        del self, target, target_is_directory
-        raise OSError("no symlink privileges")
-
-    def _fake_copytree(src: Path | str, dst: Path | str) -> None:
-        src_path = Path(src)
-        dst_path = Path(dst)
-        copied.append((src_path, dst_path))
-        dst_path.mkdir(parents=True, exist_ok=True)
-
-    def _fake_exists(self: Path) -> bool:
-        if self.parent == tmp_path and self.name == "lentils":
-            return False
-        return original_exists(self)
-
-    monkeypatch.setattr(
-        PublicDatasets, "download_dataset", staticmethod(_fake_download_dataset)
-    )
-    monkeypatch.setattr(Path, "symlink_to", _failing_symlink)
-    monkeypatch.setattr(path_type, "exists", _fake_exists)
-    monkeypatch.setattr(shutil, "copytree", _fake_copytree)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["dataset", "download", "lentils", "--data-dir", str(tmp_path)],
-    )
-
-    with pytest.raises(SystemExit) as exc_info:
-        download_data_cli()
-
-    _assert_cli_success(exc_info)
-    assert copied == [(tmp_path / "Lentils", tmp_path / "lentils")]
 
 
 def test_download_data_cli_exits_nonzero_on_failed_download(
@@ -323,7 +236,13 @@ def test_download_data_cli_returns_when_target_dir_lookup_is_missing(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["dataset", "download", "lentils", "--data-dir", str(tmp_path)],
+        [
+            "dataset",
+            "download",
+            "demo_industrial_fod_lentils",
+            "--data-dir",
+            str(tmp_path),
+        ],
     )
 
     with pytest.raises(SystemExit) as exc_info:
