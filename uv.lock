@@ -708,6 +708,7 @@ wheels = [
 name = "cuvis-ai-core"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "cuvis" },
     { name = "cuvis-ai-schemas", extra = ["proto"] },
     { name = "dataclass-wizard" },
@@ -768,6 +769,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "click", specifier = ">=8.0" },
     { name = "cuvis", specifier = ">=3.5.0" },
     { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.4.0" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },

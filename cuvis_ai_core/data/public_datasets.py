@@ -140,11 +140,11 @@ class PublicDatasets:
     # ------------------------------------------------------------------
 
     _datasets: dict[str, dict] = {
-        "Lentils_Anomaly": {
-            "repo_id": "cubert-gmbh/XMR_Lentils",
-            "target_dir": "Lentils",
-            "description": "Lentils anomaly detection dataset",
-            "size": "~200MB",
+        "Demo_Industrial_FOD_Lentils": {
+            "repo_id": "cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils",
+            "target_dir": "XMR_Demo_Industrial_Foreign_Object_Detection_Lentils",
+            "description": "Hyperspectral foreign-object detection on a lentil conveyor — 69-frame XMR CU3S session with Dinomaly companion pipeline",
+            "size": "~6GB",
         },
         "Blood_Perfusion": {
             "repo_id": "cubert-gmbh/XMR_Demo_Blood_Perfusion",
@@ -161,15 +161,13 @@ class PublicDatasets:
     }
 
     # Convenience aliases
-    _datasets["lentils"] = _datasets["Lentils_Anomaly"]
+    _datasets["demo_industrial_fod_lentils"] = _datasets["Demo_Industrial_FOD_Lentils"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
     _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]
 
 
 def download_data_cli() -> None:
     """CLI entry point for dataset management (``uv run dataset``)."""
-    import shutil
-
     import click
 
     @click.group()
@@ -217,19 +215,5 @@ def download_data_cli() -> None:
                     click.echo(f"  - {f.relative_to(data_dir)}")
             else:
                 click.echo("\nWarning: no .cu3s files found in downloaded data")
-
-        # Lentils symlink for case-insensitive access
-        if name.lower() in ("lentils", "lentilsanomaly"):
-            upper = data_dir / "Lentils"
-            lower = data_dir / "lentils"
-            if upper.exists() and not lower.exists():
-                try:
-                    lower.symlink_to("Lentils", target_is_directory=True)
-                    click.echo("Created symlink: lentils -> Lentils")
-                except OSError:
-                    click.echo(
-                        "Could not create symlink, copying Lentils -> lentils ..."
-                    )
-                    shutil.copytree(upper, lower)
 
     cli()

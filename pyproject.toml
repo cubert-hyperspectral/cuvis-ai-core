@@ -60,6 +60,7 @@ dependencies = [
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]
@@ -106,6 +107,7 @@ Changelog = "https://github.com/cubert-hyperspectral/cuvis-ai-core/blob/main/CHA
 [project.scripts]
 restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
 restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
+dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
