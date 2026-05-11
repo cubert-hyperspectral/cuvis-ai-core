@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.5.3 - 2026-05-11
+
+- Updated `PublicDatasets` entry for `Blood_Perfusion` to point at the renamed HuggingFace repo `cubert-gmbh/XMR_Demo_Blood_Perfusion` (was `cubert-gmbh/XMR_Blood_Perfusion`); `download_dataset("blood_perfusion", ...)` against `0.5.2` 404s on HuggingFace. Local `target_dir` renamed to `XMR_Demo_Blood_Perfusion` to match the `Demo_Object_Tracking` peer entry. Users with an existing `<download_path>/XMR_Blood_Perfusion/` folder can rename it in place to avoid re-downloading ~7 GB.
+
 ## 0.5.2 - 2026-05-05
 
 - Fixed `PipelineVisualizer` crash (`AttributeError: 'list' object has no attribute 'dtype'`) when rendering pipelines that contain nodes with variadic input ports declared as `list[PortSpec]` (e.g. `TensorBoardMonitorNode.INPUT_SPECS["artifacts"]`). The visualizer now mirrors the `isinstance(spec, list): spec = spec[0]` normalization that `cuvis_ai_core/pipeline/pipeline.py` applies in seven other call sites, via a new `_unwrap_spec` helper threaded through `_resolve_port_spec`, `_port_dots_html` (the failing site), and `_format_port_spec`.
