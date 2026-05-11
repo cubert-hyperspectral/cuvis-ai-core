@@ -147,8 +147,8 @@ class PublicDatasets:
             "size": "~200MB",
         },
         "Blood_Perfusion": {
-            "repo_id": "cubert-gmbh/XMR_Blood_Perfusion",
-            "target_dir": "XMR_Blood_Perfusion",
+            "repo_id": "cubert-gmbh/XMR_Demo_Blood_Perfusion",
+            "target_dir": "XMR_Demo_Blood_Perfusion",
             "description": "XMR blood perfusion reflectance dataset",
             "size": "~7GB",
         },

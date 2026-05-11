@@ -109,9 +109,9 @@ def test_download_dataset_success_and_failure_paths(
 
     assert calls == [
         {
-            "repo_id": "cubert-gmbh/XMR_Blood_Perfusion",
+            "repo_id": "cubert-gmbh/XMR_Demo_Blood_Perfusion",
             "repo_type": "dataset",
-            "local_dir": str(download_root / "XMR_Blood_Perfusion"),
+            "local_dir": str(download_root / "XMR_Demo_Blood_Perfusion"),
         }
     ]
     out = capsys.readouterr().out
@@ -140,7 +140,7 @@ def test_lookup_accepts_hyphen_form(
     tmp_path: Path,
 ) -> None:
     assert PublicDatasets.get_target_dir("Demo-Object-Tracking") == "XMR_Demo_Object_Tracking"
-    assert PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Blood_Perfusion"
+    assert PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Demo_Blood_Perfusion"
 
     calls: list[dict[str, str]] = []
 
