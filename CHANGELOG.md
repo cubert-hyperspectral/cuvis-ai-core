@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## 0.6.0 - 2026-05-11
+
 - **Breaking**: Renamed the lentils public-dataset entry. `PublicDatasets.download_dataset("Lentils_Anomaly" | "lentils")` no longer resolves; use `Demo_Industrial_FOD_Lentils` / `demo_industrial_fod_lentils`, which points at the superseding HuggingFace repo [`cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`](https://huggingface.co/datasets/cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils) (~6 GB; 69-frame XMR CU3S session with Dinomaly companion pipeline featured in the AdaClip tutorial and the docs dataset catalog). The legacy `cubert-gmbh/XMR_Lentils` repo is no longer referenced from the catalog and ships no companion pipeline; users still needing it can `snapshot_download(repo_id="cubert-gmbh/XMR_Lentils", repo_type="dataset", ...)` directly.
 - Removed the post-download `lentils -> Lentils` symlink / `copytree` fallback in `download_data_cli`. It existed only to bridge case-insensitive access to the old `XMR_Lentils` target_dir; the new entry's `target_dir` matches its alias, so no remapping is needed.
+- Exposed `download_data_cli` as the `dataset` console script via `[project.scripts]`. The function's docstring has long advertised a `uv run dataset` entry point, but the script was never registered — `uv run dataset list` / `uv run dataset download <name>` now work after `uv sync`. Promoted `click` from a transitively-assumed import to a declared dependency (`click>=8.0`) so the CLI works in minimal envs that don't pick `click` up via `jupyterlab` or similar.
 
 ## 0.5.3 - 2026-05-11
 
