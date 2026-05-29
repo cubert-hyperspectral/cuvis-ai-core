@@ -1,4 +1,24 @@
-"""Git and OS helper utilities."""
+"""Git and OS helper utilities.
+
+These helpers are the **CLI / dev-mode plugin loader** primitives. They
+clone Git repos, install plugin deps with ``uv pip install``, add plugin
+roots to ``sys.path``, and import plugin modules into the running
+interpreter — i.e. they mutate the current process.
+
+The production server NEVER calls these. Production plugin loading goes
+through :mod:`cuvis_ai_core.orchestrator`, which composes a child venv
+per pipeline plugin set and spawns a :class:`RunRuntimeServicer` inside
+it; the parent server is never mutated. Only the
+``restore-pipeline`` / ``restore-trainrun`` CLI entry points and the
+in-process :class:`NodeRegistry.load_plugin` flow still reach the
+helpers here.
+
+The one exception is :func:`import_plugin_nodes`: the orchestrator's
+child runtime reuses it (without install / clone / sys.path mutation)
+because by the time the child boots, every plugin is already a real
+installed package in its venv — only the class-collection step
+applies.
+"""
 
 from __future__ import annotations
 
@@ -82,7 +102,11 @@ def resolve_tag_commit(repo: "git.Repo", tag: str) -> Optional[str]:
 
 
 def _import_from_path(import_path: str, clear_cache: bool = False) -> type:
-    """Import a class from a full module path."""
+    """Import a class from a full module path.
+
+    CLI / dev-mode plugin loader only — the orchestrated server path
+    never calls this. See module docstring.
+    """
     try:
         parts = import_path.rsplit(".", 1)
         if len(parts) != 2:
@@ -213,7 +237,11 @@ def _clone_repository(repo_url: str, dest_path: Path, tag: str) -> Path:
 
 
 def _add_to_sys_path(path: Path) -> None:
-    """Add path to sys.path if not already present."""
+    """Add path to sys.path if not already present.
+
+    CLI / dev-mode plugin loader only — the orchestrated server path
+    never calls this. See module docstring.
+    """
     path_str = str(path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
@@ -267,7 +295,13 @@ def _extract_deps_from_pyproject(pyproject_path: Path) -> list[str]:
 
 
 def _install_dependencies_with_uv(deps: list[str], plugin_name: str) -> None:
-    """Install dependencies using 'uv pip install'."""
+    """Install dependencies using 'uv pip install'.
+
+    CLI / dev-mode plugin loader only — the orchestrated server path
+    composes a child venv per plugin set via
+    :mod:`cuvis_ai_core.orchestrator.composer` and never mutates the
+    parent process's environment. See module docstring.
+    """
     import subprocess
 
     logger.info(f"Dependencies to install: {', '.join(deps)}")
@@ -409,6 +443,13 @@ def import_plugin_nodes(
     class_paths: list[str], clear_cache: bool = True
 ) -> dict[str, type]:
     """Import node classes from fully qualified paths.
+
+    Shared between the CLI plugin loader and the orchestrator's child
+    runtime (:mod:`cuvis_ai_core.pipeline.restore_preinstalled`). In
+    the orchestrated path the child is already inside a venv where
+    every plugin is installed, so this call only iterates the FQCN
+    list and collects classes — no install, no clone, no sys.path
+    mutation.
 
     Args:
         class_paths: List of fully qualified class paths to import

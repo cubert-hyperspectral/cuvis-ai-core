@@ -384,6 +384,15 @@ class NodeRegistry:
         """
         Load a single plugin into THIS INSTANCE.
 
+        CLI / dev-mode plugin loader only. The orchestrated server
+        path never calls this — production plugin loading composes a
+        child venv via :mod:`cuvis_ai_core.orchestrator.composer` and
+        the child runtime registers preinstalled classes through
+        :func:`cuvis_ai_core.pipeline.restore_preinstalled.load_preinstalled_plugins`.
+        This method survives so the ``restore-pipeline`` /
+        ``restore-trainrun`` CLI entry points continue to work
+        against a curated venv.
+
         IMPORTANT: This is an INSTANCE METHOD - you must create a NodeRegistry instance first!
 
         Unlike get() which works as both class and instance method, load_plugin() requires
@@ -496,6 +505,12 @@ class NodeRegistry:
         """
         Unload a plugin and remove its nodes from THIS INSTANCE.
 
+        CLI / dev-mode counterpart to :meth:`load_plugin`; the
+        orchestrated server path never calls this. The child runtime
+        is torn down on ``CloseSession`` and its venv is reused by
+        the composer's cache, so no explicit unload step is needed
+        on the production path.
+
         Args:
             name: Plugin identifier to unload
 
@@ -536,7 +551,13 @@ class NodeRegistry:
         return sorted(self.plugin_configs.keys())
 
     def clear_plugins(self) -> None:
-        """Unload all plugins and clear plugin registries in THIS INSTANCE."""
+        """Unload all plugins and clear plugin registries in THIS INSTANCE.
+
+        CLI / dev-mode only — see :meth:`load_plugin` /
+        :meth:`unload_plugin` for the rationale. The orchestrated
+        server path drops the entire child runtime on
+        ``CloseSession`` instead.
+        """
         if not hasattr(self, "plugin_registry"):
             raise RuntimeError(
                 "clear_plugins() requires an instance. "
