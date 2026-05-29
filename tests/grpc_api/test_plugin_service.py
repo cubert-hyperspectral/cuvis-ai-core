@@ -77,21 +77,29 @@ class TestPluginNode(Node):
             response = self.plugin_service.load_plugins(request, self.mock_context)
 
             # Verify response
-            assert len(response.loaded_plugins) == 1
-            assert "test_plugin" in response.loaded_plugins
+            assert len(response.registered_plugins) == 1
+            assert "test_plugin" in response.registered_plugins
             assert len(response.failed_plugins) == 0
 
             # Verify session state updated
             session = self.session_manager.get_session(session_id)
             assert "test_plugin" in session.loaded_plugins
 
-            # Verify plugin registered in session's node registry
-            assert "TestPluginNode" in session.node_registry.plugin_registry
+            # ALL-5349 Phase 3: LoadPlugins registers into the catalog only;
+            # nothing is imported into plugin_registry until LoadPipeline
+            # materialises the plugin.
+            assert "test_plugin" in session.node_registry.plugin_catalog
+            assert "TestPluginNode" not in session.node_registry.plugin_registry
         finally:
             sys.path.remove(str(tmp_path))
 
     def test_load_plugins_partial_failure(self, tmp_path, create_plugin_pyproject):
-        """Test plugin loading with some failures."""
+        """ALL-5349 Phase 3: catalog registration only runs Pydantic validation
+        on each manifest entry; install failures move to ``LoadPipeline``.
+        Both a valid manifest entry and a nonexistent-path entry pass
+        Pydantic (LocalPluginConfig does NOT exists-check the path), so both
+        register successfully. The "partial failure" surface this test
+        originally covered (install failures) no longer happens here."""
         # Create session
         session_id = self.session_manager.create_session()
 
@@ -114,15 +122,16 @@ class ValidNode(Node):
 """)
         create_plugin_pyproject(valid_plugin_dir)
 
-        # Create manifest with valid and invalid plugins
+        # Create manifest with two valid Pydantic entries (one of which
+        # points at a nonexistent path that would fail at install time).
         manifest = PluginManifest(
             plugins={
                 "valid_plugin": LocalPluginConfig(
                     path=str(valid_plugin_dir), provides=["valid_plugin.node.ValidNode"]
                 ),
-                "invalid_plugin": LocalPluginConfig(
+                "unreachable_plugin": LocalPluginConfig(
                     path="/nonexistent/path",
-                    provides=["invalid_plugin.node.InvalidNode"],
+                    provides=["unreachable_plugin.node.UnreachableNode"],
                 ),
             }
         )
@@ -142,10 +151,13 @@ class ValidNode(Node):
         try:
             response = self.plugin_service.load_plugins(request, self.mock_context)
 
-            # Verify response
-            assert "valid_plugin" in response.loaded_plugins
-            assert "invalid_plugin" in response.failed_plugins
-            assert len(response.failed_plugins["invalid_plugin"]) > 0
+            # Phase 3: both entries register cleanly because Pydantic
+            # accepts a nonexistent path string. The install failure on
+            # "unreachable_plugin" will surface later if a pipeline
+            # actually references it.
+            assert "valid_plugin" in response.registered_plugins
+            assert "unreachable_plugin" in response.registered_plugins
+            assert len(response.failed_plugins) == 0
         finally:
             sys.path.remove(str(tmp_path))
 
@@ -162,7 +174,7 @@ class ValidNode(Node):
 
         # Service handles error gracefully, returns empty response
         response = self.plugin_service.load_plugins(request, self.mock_context)
-        assert len(response.loaded_plugins) == 0
+        assert len(response.registered_plugins) == 0
         assert len(response.failed_plugins) == 0
 
     def test_load_plugins_invalid_session(self):
@@ -180,7 +192,7 @@ class ValidNode(Node):
 
         # Should not raise - returns empty response with context error
         response = self.plugin_service.load_plugins(request, self.mock_context)
-        assert len(response.loaded_plugins) == 0
+        assert len(response.registered_plugins) == 0
 
     def test_list_loaded_plugins_invalid_session(self):
         """Test listing plugins with non-existent session."""
@@ -400,7 +412,12 @@ class TestNode(Node):
         assert len(builtin_node.icon_svg) > 0
 
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
-        """Test listing nodes includes session plugin nodes."""
+        """ALL-5349 Phase 3: ``LoadPlugins`` only registers into the catalog;
+        ``ListAvailableNodes`` returns the *materialised* set. So after a
+        bare ``LoadPlugins`` call the plugin's nodes do NOT appear yet —
+        only after the registry materialises them via the catalog fast
+        path (here triggered explicitly to keep the test focused on the
+        ListAvailableNodes contract)."""
         # Create session
         session_id = self.session_manager.create_session()
 
@@ -445,8 +462,19 @@ class PluginTestNode(Node):
         try:
             self.plugin_service.load_plugins(load_request, self.mock_context)
 
-            # List available nodes
+            # Phase 3: after LoadPlugins, ListAvailableNodes returns built-ins
+            # only — the plugin lives in the catalog but isn't imported yet.
             list_request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
+            pre_materialise = self.plugin_service.list_available_nodes(
+                list_request, self.mock_context
+            )
+            assert "PluginTestNode" not in [n.class_name for n in pre_materialise.nodes]
+
+            # Trigger the catalog fast path explicitly (LoadPipeline would
+            # do this when a pipeline yaml names the plugin).
+            session = self.session_manager.get_session(session_id)
+            session.node_registry.load_plugin("available_nodes_plugin")
+
             response = self.plugin_service.list_available_nodes(
                 list_request, self.mock_context
             )

@@ -163,7 +163,20 @@ class PluginService:
         request: cuvis_ai_pb2.LoadPluginsRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPluginsResponse:
-        """Load plugins from JSON manifest into session."""
+        """Register manifest entries as catalog metadata in the session.
+
+        ALL-5349 Phase 3 semantics: this RPC no longer installs or imports
+        plugins. It parses the manifest, validates each entry, and registers
+        them as catalog metadata via
+        ``session.node_registry.register_catalog_entries(...)``. Actual
+        materialisation (clone, install, import) happens lazily when
+        ``LoadPipeline`` references the registered plugin via the pipeline
+        yaml's ``plugins:`` field.
+
+        The response field is ``registered_plugins`` (renamed from
+        ``loaded_plugins``); ``failed_plugins`` now reports per-entry
+        Pydantic validation failures, not install failures.
+        """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
         )
@@ -179,30 +192,27 @@ class PluginService:
         manifest_json = request.manifest.config_bytes.decode("utf-8")
         manifest = PluginManifest.model_validate_json(manifest_json)
 
-        loaded = []
-        failed = {}
+        registered: list[str] = []
+        failed: dict[str, str] = {}
 
-        # Load each plugin into session's registry instance
+        # Register each entry into the session's catalog. No install, no import.
         for plugin_name, config in manifest.plugins.items():
             try:
-                session.node_registry.load_plugin(
-                    plugin_name,
-                    config.model_dump(),
-                )
-
-                # Track in session
+                session.node_registry.register_catalog_entries({plugin_name: config})
                 session.loaded_plugins[plugin_name] = config.model_dump()
-                loaded.append(plugin_name)
-
+                registered.append(plugin_name)
                 logger.info(
-                    f"Loaded plugin '{plugin_name}' in session {request.session_id}"
+                    f"Registered plugin '{plugin_name}' in session "
+                    f"{request.session_id} catalog (not yet installed)"
                 )
             except Exception as e:
                 failed[plugin_name] = str(e)
-                logger.error(f"Failed to load plugin '{plugin_name}': {e}")
+                logger.error(
+                    f"Failed to register plugin '{plugin_name}' in catalog: {e}"
+                )
 
         return cuvis_ai_pb2.LoadPluginsResponse(
-            loaded_plugins=loaded, failed_plugins=failed
+            registered_plugins=registered, failed_plugins=failed
         )
 
     @grpc_handler("Failed to list loaded plugins")

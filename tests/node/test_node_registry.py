@@ -219,3 +219,76 @@ class TestNodeRegistry:
         error_msg = str(exc_info.value)
         assert "not found in registry" in error_msg
         assert "AvailableNode" in error_msg
+
+
+class TestPhase3CatalogSplit:
+    """ALL-5349 Phase 3: catalog entries (metadata) vs session-installed plugins."""
+
+    def setup_method(self):
+        NodeRegistry.clear()
+
+    def test_register_catalog_entries_has_no_side_effects(self, tmp_path):
+        """Registering a catalog entry must NOT touch sys.modules, sys.path,
+        plugin_registry, or plugin_configs. Materialisation happens lazily."""
+        import sys
+        from pathlib import Path
+
+        from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+
+        registry = NodeRegistry()
+        modules_before = set(sys.modules)
+        sys_path_before = list(sys.path)
+        registry_before = dict(registry.plugin_registry)
+        configs_before = dict(registry.plugin_configs)
+
+        plugin_root = tmp_path / "fake_plugin"
+        plugin_root.mkdir()
+        cfg = LocalPluginConfig(
+            path=str(plugin_root),
+            provides=["fake_pkg.module.FakeNode"],
+        )
+        registry.register_catalog_entries({"fake_plugin": cfg})
+
+        assert "fake_plugin" in registry.plugin_catalog
+        assert registry.plugin_catalog["fake_plugin"].provides == ["fake_pkg.module.FakeNode"]
+        # Side-effect snapshot must be unchanged.
+        assert set(sys.modules) == modules_before
+        assert sys.path == sys_path_before
+        assert registry.plugin_registry == registry_before
+        assert registry.plugin_configs == configs_before
+
+    def test_load_plugin_missing_config_and_catalog_raises_keyerror(self):
+        """Catalog fast path requires either an explicit config or a catalog entry."""
+        registry = NodeRegistry()
+        with pytest.raises(KeyError, match="register_catalog_entries"):
+            registry.load_plugin("absent_plugin")
+
+    def test_register_catalog_entries_override_logged(self, tmp_path, caplog):
+        """Re-registering a plugin with diverging config logs an override note."""
+        from loguru import logger
+
+        from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+
+        plugin_root_a = tmp_path / "a"
+        plugin_root_a.mkdir()
+        plugin_root_b = tmp_path / "b"
+        plugin_root_b.mkdir()
+
+        registry = NodeRegistry()
+        registry.register_catalog_entries(
+            {"p": LocalPluginConfig(path=str(plugin_root_a), provides=["pkg.X"])}
+        )
+
+        sink_messages: list[str] = []
+        handler_id = logger.add(
+            lambda msg: sink_messages.append(str(msg)), level="INFO"
+        )
+        try:
+            registry.register_catalog_entries(
+                {"p": LocalPluginConfig(path=str(plugin_root_b), provides=["pkg.X"])}
+            )
+        finally:
+            logger.remove(handler_id)
+
+        assert any("overridden" in m for m in sink_messages)
+        assert registry.plugin_catalog["p"].path == str(plugin_root_b)

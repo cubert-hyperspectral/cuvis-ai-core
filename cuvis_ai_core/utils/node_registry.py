@@ -39,6 +39,10 @@ class NodeRegistry:
         self.plugin_registry: Dict[str, type] = {}
         self.plugin_configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
         self.plugin_class_map: Dict[str, str] = {}
+        # ALL-5349 Phase 3: catalog entries are manifest metadata the session
+        # *knows about* but has not installed/imported. `load_plugin(name)` with
+        # no explicit config materialises a catalog entry on demand.
+        self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
         self.cache_dir: Path = Path.home() / ".cuvis_plugins"
 
     @classmethod
@@ -327,10 +331,56 @@ class NodeRegistry:
         logger.info(f"Loaded {loaded} plugins from {manifest_path}")
         return loaded
 
+    def register_catalog_entries(
+        self,
+        configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]],
+    ) -> None:
+        """
+        Register plugin metadata into the session's catalog WITHOUT installing.
+
+        ALL-5349 Phase 3: a catalog entry is "this plugin is known and the
+        session can materialise it on demand". Calling this does NOT clone,
+        install dependencies, mutate sys.path, or import any modules — those
+        side effects are deferred to ``load_plugin(name)`` (called by the
+        ``LoadPipeline`` resolver path when a pipeline actually references
+        the plugin).
+
+        Idempotent re-registration with a different config logs an override
+        and replaces the catalog entry; the materialised state in
+        ``plugin_registry`` / ``plugin_configs`` is untouched.
+
+        Args:
+            configs: dict mapping plugin name → parsed GitPluginConfig /
+                LocalPluginConfig (already-resolved paths, etc.).
+
+        Example:
+            from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
+            resolved = resolve_pipeline_plugins(pipeline_cfg, [Path("configs/plugins")])
+            registry = NodeRegistry()
+            registry.register_catalog_entries(resolved)
+            # registry.plugin_catalog["adaclip"] now holds the metadata.
+            # Nothing is imported until registry.load_plugin("adaclip") is called.
+        """
+        if not hasattr(self, "plugin_registry"):
+            raise RuntimeError(
+                "register_catalog_entries() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
+        for name, cfg in configs.items():
+            if name in self.plugin_catalog:
+                existing = self.plugin_catalog[name]
+                if existing.model_dump() != cfg.model_dump():
+                    logger.info(
+                        f"Plugin '{name}' catalog entry overridden "
+                        f"(was: {existing.model_dump()}; now: {cfg.model_dump()})"
+                    )
+            self.plugin_catalog[name] = cfg
+
     def load_plugin(
         self,
         name: str,
-        config: dict,
+        config: Optional[dict] = None,
         manifest_dir: Optional[Path] = None,
     ) -> None:
         """
@@ -343,24 +393,37 @@ class NodeRegistry:
         - Built-in nodes: accessed via class (NodeRegistry.get("MinMaxNormalizer"))
         - Plugin nodes: require instance (registry = NodeRegistry(); registry.load_plugin(...))
 
+        ALL-5349 Phase 3 early-exit hierarchy:
+        1. If ``name in self.plugin_configs`` → already materialised, return.
+        2. If ``config is None`` and ``name in self.plugin_catalog`` →
+           materialise from the catalog entry (the resolver-populated path).
+        3. Otherwise → parse the explicit ``config`` (the inline-from-pipeline
+           or direct-API call path).
+
         Args:
             name: Plugin identifier (e.g., "adaclip")
-            config: Plugin configuration dict with:
-                - repo + ref (for Git plugins)
-                - path (for local plugins)
-                - provides: list of class paths
-            manifest_dir: Optional base directory for resolving local plugin paths
+            config: Optional plugin configuration dict. When ``None``, the
+                method materialises ``self.plugin_catalog[name]``. When given,
+                the dict has either:
+                - repo + tag (for Git plugins) + provides
+                - path (for local plugins) + provides
+            manifest_dir: Optional base directory for resolving local plugin
+                paths (ignored when ``config is None`` since catalog entries
+                already hold absolute paths).
 
         Examples:
-            # ✅ CORRECT: Create instance first
+            # ✅ CORRECT: Explicit config (Phase 1+2 style)
             registry = NodeRegistry()
             registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
                 "tag": "v1.2.3",
                 "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
             })
-            # Then use get() to retrieve the node class
-            AdaCLIPDetector = NodeRegistry.get("cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector")
+
+            # ✅ CORRECT: Catalog fast path (Phase 3 style)
+            registry = NodeRegistry()
+            registry.register_catalog_entries({"adaclip": adaclip_config})
+            registry.load_plugin("adaclip")  # materialises from catalog
 
             # ✅ CORRECT: Local plugin
             registry = NodeRegistry()
@@ -379,15 +442,32 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        # Early exit if already loaded in this instance
+        # Early exit if already materialised in this instance
         if name in self.plugin_configs:
             logger.debug(f"Plugin '{name}' already loaded, skipping")
             return
 
-        # Parse and validate config, get plugin path
-        plugin_config, plugin_path = git_os.parse_plugin_config(
-            name, config, manifest_dir
-        )
+        # Phase 3 catalog fast path: no explicit config given, but the name
+        # is in the catalog → materialise from there. The catalog already
+        # holds parsed GitPluginConfig / LocalPluginConfig objects with
+        # absolute paths, so we skip the parse step entirely.
+        if config is None:
+            if name not in self.plugin_catalog:
+                raise KeyError(
+                    f"Plugin '{name}' is neither registered in the catalog "
+                    f"nor passed as an explicit config. Call "
+                    f"register_catalog_entries() first, or pass config=..."
+                )
+            plugin_config = self.plugin_catalog[name]
+            if isinstance(plugin_config, GitPluginConfig):
+                plugin_path = NodeRegistry._ensure_git_plugin(name, plugin_config)
+            else:
+                plugin_path = NodeRegistry._ensure_local_plugin(name, plugin_config)
+        else:
+            # Parse and validate config, get plugin path
+            plugin_config, plugin_path = git_os.parse_plugin_config(
+                name, config, manifest_dir
+            )
 
         # Install plugin dependencies automatically
         self._install_plugin_dependencies(plugin_path, name)

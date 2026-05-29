@@ -121,15 +121,17 @@ def _ref_to_core(
     raise TypeError(msg)
 
 
-def _auto_resolve(
+def _compute_auto_resolution(
     class_names: list[str],
     catalog: dict[str, PluginConfig],
     plugins_dirs: list[Path],
 ) -> dict[str, PluginConfig]:
-    """Auto-resolve the plugin set from ``class_names`` against the catalog.
+    """Pure heuristic: map class_names to plugins by exact-match against provides.
 
-    Exact match against ``provides`` entries. Ambiguous matches, missing
-    classes, and an empty catalog all raise ``ValueError``.
+    Used by both the production hard-fail wrapper (``_auto_resolve``) and the
+    fix-it CLI (``plugin_fixer.suggest_plugins_field``). No logging side
+    effects; raises ``ValueError`` on ambiguous matches, missing classes,
+    and an empty catalog.
     """
     if not catalog:
         msg = (
@@ -165,11 +167,28 @@ def _auto_resolve(
         plugin_name = owners[0]
         resolved[plugin_name] = catalog[plugin_name]
 
-    logger.warning(
-        f"Pipeline missing 'plugins:' field; auto-resolved to: {sorted(resolved)}. "
-        "Add this to the YAML to silence this warning."
-    )
     return resolved
+
+
+def _auto_resolve(
+    class_names: list[str],
+    catalog: dict[str, PluginConfig],
+    plugins_dirs: list[Path],
+) -> dict[str, PluginConfig]:
+    """Production auto-resolve: heuristic + hard-fail with fix-it hint.
+
+    ALL-5349 Phase 4: the `plugins:` field is mandatory. If a pipeline reaches
+    this path it has omitted the field; we run the heuristic to suggest names,
+    then raise ``ValueError`` pointing the caller at ``suggest-plugins-fix``.
+    """
+    suggested = _compute_auto_resolution(class_names, catalog, plugins_dirs)
+    msg = (
+        "Pipeline is missing the mandatory 'plugins:' field. Run\n"
+        "    uv run suggest-plugins-fix --pipeline-path <yaml>\n"
+        "to generate the field and patch the yaml. Auto-resolution suggests: "
+        f"{sorted(suggested)}."
+    )
+    raise ValueError(msg)
 
 
 def _validate_coverage(

@@ -1,12 +1,19 @@
 """
 gRPC Plugin Management Client Example
 
-This example demonstrates how to use the gRPC API to:
+ALL-5349 Phase 3 semantics: ``LoadPlugins`` no longer installs plugins on
+call — it registers manifest entries as catalog metadata. Plugins
+materialise lazily when ``LoadPipeline`` references them via the pipeline
+yaml's ``plugins:`` field. Pre-Phase-3 clients that expected eager install
+must migrate to this two-step pattern.
+
+This example demonstrates the new flow:
 1. Create a session
-2. Load plugins dynamically
-3. List available nodes (including plugin nodes)
-4. Build pipelines using plugin nodes
-5. Query plugin information
+2. Register plugins into the session catalog (``LoadPlugins``)
+3. Load a pipeline that names which plugins to materialise
+   (``LoadPipeline`` runs the resolver and triggers install/import)
+4. List available nodes (includes plugin nodes from materialised set)
+5. Query catalog (``ListLoadedPlugins`` / ``GetPluginInfo``)
 6. Manage plugin cache
 
 Prerequisites:
@@ -61,7 +68,7 @@ def example_1_basic_plugin_loading():
             )
         )
 
-        logger.info(f"✓ Loaded plugins: {list(plugin_resp.loaded_plugins)}")
+        logger.info(f"✓ Loaded plugins: {list(plugin_resp.registered_plugins)}")
         if plugin_resp.failed_plugins:
             logger.warning(f"✗ Failed plugins: {dict(plugin_resp.failed_plugins)}")
 
@@ -149,7 +156,7 @@ def example_2_local_plugin():
             )
         )
 
-        logger.info(f"✓ Loaded local plugin: {list(plugin_resp.loaded_plugins)}")
+        logger.info(f"✓ Loaded local plugin: {list(plugin_resp.registered_plugins)}")
 
         # Close session
         client.CloseSession(
@@ -392,8 +399,8 @@ def example_6_error_handling():
         )
 
         # Check results
-        if plugin_resp.loaded_plugins:
-            logger.info(f"✓ Successfully loaded: {list(plugin_resp.loaded_plugins)}")
+        if plugin_resp.registered_plugins:
+            logger.info(f"✓ Successfully loaded: {list(plugin_resp.registered_plugins)}")
 
         if plugin_resp.failed_plugins:
             logger.warning("✗ Failed to load:")

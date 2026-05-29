@@ -154,10 +154,12 @@ class TestLoadPipelinePluginResolution:
         assert "wanted_plugin" in session.loaded_plugins
         assert "other_plugin" not in session.loaded_plugins
 
-    def test_auto_resolution_when_plugins_field_missing(
+    def test_phase4_missing_plugins_field_returns_invalid_argument(
         self, tmp_path, create_plugin_pyproject
     ):
-        """No plugins: field → resolver auto-resolves the plugin from class_name."""
+        """ALL-5349 Phase 4: pipelines without ``plugins:`` are rejected with
+        INVALID_ARGUMENT and a fix-it message pointing at suggest-plugins-fix.
+        Phase 1+2's silent auto-resolution path is gone."""
         plugin_dir = tmp_path / "auto_plugin"
         fqcn = _make_plugin_files(
             plugin_root=plugin_dir,
@@ -173,7 +175,7 @@ class TestLoadPipelinePluginResolution:
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
             pipeline=cuvis_ai_pb2.PipelineConfig(
-                # No plugins field — exercise auto-resolution.
+                # No plugins field — Phase 4 hard-fails.
                 config_bytes=_make_pipeline_config_bytes(node_class_name=fqcn),
             ),
         )
@@ -184,10 +186,11 @@ class TestLoadPipelinePluginResolution:
         finally:
             sys.path.remove(str(tmp_path))
 
-        assert response.success
-        session = self.session_manager.get_session(session_id)
-        assert "auto_plugin" in session.node_registry.plugin_configs
-        assert "auto_plugin" in session.loaded_plugins
+        assert not response.success
+        self.context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+        details_call = self.context.set_details.call_args[0][0]
+        assert "mandatory 'plugins:' field" in details_call
+        assert "suggest-plugins-fix" in details_call
 
     def test_failed_precondition_when_plugins_empty_and_no_catalog(self, tmp_path):
         """Explicit-empty plugins list + no catalog → FAILED_PRECONDITION."""

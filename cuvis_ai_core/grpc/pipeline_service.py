@@ -249,14 +249,18 @@ class PipelineService:
         # plugin-provided class that was not loaded.
         if pipeline_config.plugins or plugins_dirs:
             resolved_plugins = resolve_pipeline_plugins(pipeline_config, plugins_dirs)
+            # ALL-5349 Phase 3: register everything in one shot, then
+            # materialise via the catalog fast path. Same end state as the
+            # Phase 1+2 per-call loop, but consistent with the
+            # register-then-materialise model that LoadPlugins now follows.
+            session.node_registry.register_catalog_entries(resolved_plugins)
             for name, cfg in resolved_plugins.items():
                 if name in session.node_registry.plugin_configs:
                     continue  # already materialised in this session
-                cfg_dump = cfg.model_dump()
-                session.node_registry.load_plugin(name, cfg_dump)
+                session.node_registry.load_plugin(name)  # catalog fast path
                 # Keep session.loaded_plugins in sync so ListLoadedPlugins /
                 # GetPluginInfo reflect plugins materialised via LoadPipeline.
-                session.loaded_plugins[name] = cfg_dump
+                session.loaded_plugins[name] = cfg.model_dump()
         elif pipeline_config.plugins is not None:
             # Pipeline explicitly declared an empty plugins list AND nothing
             # in the session catalog — surface a precondition error so the

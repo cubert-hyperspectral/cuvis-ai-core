@@ -164,25 +164,23 @@ def test_declared_missing_class_in_resolved_set(plugins_dir: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_auto_resolve_emits_warning(plugins_dir: Path, caplog: pytest.LogCaptureFixture):
-    """When plugins: is None, auto-resolve picks the right plugins and warns."""
+def test_phase4_missing_plugins_field_raises(plugins_dir: Path):
+    """ALL-5349 Phase 4: pipelines missing 'plugins:' now hard-fail with a
+    fix-it hint pointing at the suggest-plugins-fix CLI. Phase 1+2's
+    'warn-and-continue' path is gone."""
     pipeline = _pipeline_with(
         [
             "cuvis_ai.node.anomaly.rx_detector.RXGlobal",
             "cuvis_ai.node.normalization.MinMaxNormalizer",
         ],
     )
-    # loguru intercept-into-caplog plumbing: ensure logs are captured.
-    from loguru import logger
-
-    sink_messages: list[str] = []
-    handler_id = logger.add(lambda msg: sink_messages.append(str(msg)), level="WARNING")
-    try:
-        resolved = resolve_pipeline_plugins(pipeline, [plugins_dir])
-    finally:
-        logger.remove(handler_id)
-    assert set(resolved) == {"cuvis_ai_builtin"}
-    assert any("auto-resolved" in m for m in sink_messages)
+    with pytest.raises(ValueError) as excinfo:
+        resolve_pipeline_plugins(pipeline, [plugins_dir])
+    msg = str(excinfo.value)
+    assert "mandatory 'plugins:' field" in msg
+    assert "suggest-plugins-fix" in msg
+    # The hint surfaces the auto-resolution suggestion so users can paste it back.
+    assert "cuvis_ai_builtin" in msg
 
 
 def test_auto_resolve_unknown_class(plugins_dir: Path):

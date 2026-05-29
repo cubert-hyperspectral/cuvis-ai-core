@@ -62,7 +62,7 @@ class WorkflowTestNode(Node):
             )
 
             # Verify plugin loaded successfully
-            assert "workflow_plugin" in load_resp.loaded_plugins
+            assert "workflow_plugin" in load_resp.registered_plugins
             assert len(load_resp.failed_plugins) == 0
 
             # Step 4: List loaded plugins
@@ -81,12 +81,15 @@ class WorkflowTestNode(Node):
             assert info_resp.plugin.name == "workflow_plugin"
             assert info_resp.plugin.type == "local"
 
-            # Step 6: List available nodes (should include plugin node)
+            # Step 6: List available nodes — Phase 3: plugin nodes are NOT
+            # importable yet. LoadPlugins only registered into the catalog;
+            # only LoadPipeline triggers the import. ListAvailableNodes
+            # therefore returns built-ins only.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
             node_names = [node.class_name for node in nodes_resp.nodes]
-            assert "WorkflowTestNode" in node_names
+            assert "WorkflowTestNode" not in node_names
 
             # Step 7: Close session (should cleanup plugins)
             close_resp = grpc_stub.CloseSession(
@@ -166,8 +169,8 @@ class Plugin2Node(Node):
             )
 
             # Verify both loaded
-            assert "plugin1" in load_resp.loaded_plugins
-            assert "plugin2" in load_resp.loaded_plugins
+            assert "plugin1" in load_resp.registered_plugins
+            assert "plugin2" in load_resp.registered_plugins
             assert len(load_resp.failed_plugins) == 0
 
             # Verify both in list
@@ -237,7 +240,7 @@ class IsolatedNode(Node):
                     ),
                 )
             )
-            assert "isolated_plugin" in load_resp.loaded_plugins
+            assert "isolated_plugin" in load_resp.registered_plugins
 
             # Verify session1 has the plugin
             list1_resp = grpc_stub.ListLoadedPlugins(
@@ -251,12 +254,15 @@ class IsolatedNode(Node):
             )
             assert len(list2_resp.plugins) == 0
 
-            # Verify plugin node available only in session1
+            # Phase 3: Plugin registered in session1's catalog but not
+            # materialised yet — ListAvailableNodes returns built-ins only.
+            # Session2 likewise sees only built-ins. Session isolation is
+            # asserted via ListLoadedPlugins (catalog) above.
             nodes1_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session1_id)
             )
             node1_names = [node.class_name for node in nodes1_resp.nodes]
-            assert "IsolatedNode" in node1_names
+            assert "IsolatedNode" not in node1_names
 
             nodes2_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session2_id)
@@ -322,7 +328,7 @@ class CleanupNode(Node):
                     ),
                 )
             )
-            assert "cleanup_plugin" in load_resp.loaded_plugins
+            assert "cleanup_plugin" in load_resp.registered_plugins
 
             # Close session
             close_resp = grpc_stub.CloseSession(
@@ -412,7 +418,7 @@ class NodeC(Node):
                     ),
                 )
             )
-            assert "multi_node_plugin" in load_resp.loaded_plugins
+            assert "multi_node_plugin" in load_resp.registered_plugins
 
             # Get plugin info
             info_resp = grpc_stub.GetPluginInfo(
@@ -425,14 +431,17 @@ class NodeC(Node):
             assert "multi_node_plugin.nodes.NodeB" in info_resp.plugin.provides
             assert "multi_node_plugin.nodes.NodeC" in info_resp.plugin.provides
 
-            # Verify all nodes available
+            # Phase 3: catalog registration only — plugin nodes do not
+            # appear in ListAvailableNodes until LoadPipeline materialises
+            # the plugin. The catalog-side assertion is via the
+            # GetPluginInfo.provides check above.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
             node_names = [node.class_name for node in nodes_resp.nodes]
-            assert "NodeA" in node_names
-            assert "NodeB" in node_names
-            assert "NodeC" in node_names
+            assert "NodeA" not in node_names
+            assert "NodeB" not in node_names
+            assert "NodeC" not in node_names
 
             # Cleanup
             grpc_stub.CloseSession(
@@ -470,7 +479,7 @@ class NodeC(Node):
 
             # Should report failure
             assert "invalid_plugin" in load_resp.failed_plugins
-            assert len(load_resp.loaded_plugins) == 0
+            assert len(load_resp.registered_plugins) == 0
 
             # Cleanup
             grpc_stub.CloseSession(
@@ -551,20 +560,25 @@ class PluginNode(Node):
                 )
             )
 
-            # List available nodes
+            # ALL-5349 Phase 3: ListAvailableNodes returns the *materialised*
+            # set. After only LoadPlugins (which registers into the catalog
+            # without importing), built-ins are the only nodes returned —
+            # the plugin's node appears once LoadPipeline materialises it
+            # via the catalog fast path. Driving that through gRPC requires
+            # a pipeline yaml that references the plugin; this test stops
+            # at the register-only assertion to keep the gRPC surface tight.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
 
-            # Should have both builtin and plugin nodes
             sources = {node.source for node in nodes_resp.nodes}
-            assert "builtin" in sources or "plugin" in sources
+            assert "builtin" in sources
 
-            # Plugin node should be marked correctly
             plugin_nodes = [n for n in nodes_resp.nodes if n.class_name == "PluginNode"]
-            assert len(plugin_nodes) == 1
-            assert plugin_nodes[0].source == "plugin"
-            assert plugin_nodes[0].plugin_name == "test_plugin"
+            assert plugin_nodes == [], (
+                "Phase 3: plugin nodes should NOT appear in ListAvailableNodes "
+                "until LoadPipeline materialises the plugin from the catalog."
+            )
 
             # Cleanup
             grpc_stub.CloseSession(
