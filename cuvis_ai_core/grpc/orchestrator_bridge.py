@@ -485,6 +485,32 @@ def forward_get_pipeline_visualization(session_manager, request, context):
 
 
 def forward_set_train_run_config(session_manager, request, context):
+    """Parent's SetTrainRunConfig path — forwards to the existing child.
+
+    Pipeline creation is the job of LoadPipeline / RestoreTrainRun. If
+    the session has no child runtime yet, the call is rejected with
+    FAILED_PRECONDITION; the child's in-process body additionally
+    rejects any embedded ``pipeline:`` section in the trainrun config
+    so there is only one entry point for pipeline construction.
+    """
+    from cuvis_ai_core.grpc.error_handling import get_session_or_error
+
+    session = get_session_or_error(session_manager, request.session_id, context)
+    if session is None:
+        return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
+    if not request.config.config_bytes:
+        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+        context.set_details("trainrun config_bytes is required")
+        return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
+
+    if get_child(session) is None:
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(
+            "No pipeline attached to the session. Call LoadPipeline "
+            "(or RestoreTrainRun) before SetTrainRunConfig."
+        )
+        return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
+
     return _forward_pipeline_op(
         session_manager,
         request,
