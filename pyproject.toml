@@ -61,6 +61,9 @@ dependencies = [
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
     "click>=8.0",
+    # Per-run child-env composer (orchestrator package)
+    "filelock>=3.13",
+    "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -184,7 +187,4 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-icons", editable = true }
-# cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
-
+cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }
