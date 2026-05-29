@@ -367,14 +367,13 @@ class PluginService:
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         """List all available nodes (built-in + session plugins).
 
-        Plugin nodes come from each plugin's static ``metadata.json``
-        (pointed at by ``metadata_path`` in the manifest entry) so the
-        server never imports plugin code to answer this RPC. Plugins
-        without ``metadata_path`` fall back to walking
-        ``session.node_registry.plugin_registry``, a transitional path
-        that emits a deprecation warning and only finds anything when a
-        plugin was imported in-process — the orchestrated execution
-        path never imports plugins on the parent side.
+        Plugin nodes come exclusively from each plugin's static
+        ``metadata.json`` (pointed at by ``metadata_path`` in the
+        manifest entry). The server never imports plugin code to
+        answer this RPC. Plugins whose manifest entry has no
+        ``metadata_path`` — or whose metadata file fails to load —
+        contribute no nodes; a warning surfaces and the caller should
+        ship metadata.json with the plugin.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -428,10 +427,9 @@ class PluginService:
                 )
             )
 
-        # Plugin nodes via the static catalog. Plugins that supply a
-        # ``metadata.json`` are read by the loader; their classes are
-        # NEVER touched by this RPC.
-        plugins_with_catalog: set[str] = set()
+        # Plugin nodes via the static catalog. Plugins whose classes
+        # are NEVER touched by this RPC.
+        plugins_missing_metadata: list[str] = []
         for plugin_name, config in session.registered_plugins.items():
             try:
                 entry = load_catalog_entry(plugin_name, config)
@@ -441,8 +439,8 @@ class PluginService:
                 )
                 continue
             if entry is None:
+                plugins_missing_metadata.append(plugin_name)
                 continue
-            plugins_with_catalog.add(plugin_name)
             for node_entry in entry.nodes:
                 try:
                     nodes.append(_catalog_entry_to_node_info(node_entry, plugin_name))
@@ -452,89 +450,14 @@ class PluginService:
                         f"plugin '{plugin_name}': {exc}"
                     )
 
-        # Legacy fallback for plugins whose manifest entry has no
-        # ``metadata_path``. Only finds nodes whose class was imported
-        # into the parent's NodeRegistry — which the orchestrator never
-        # does. Kept so dev-mode / CLI flows continue to work in the
-        # transition window.
-        legacy_plugins_used: set[str] = set()
-        for class_name in sorted(session.node_registry.plugin_registry.keys()):
-            plugin_name, full_path = self._find_owning_plugin(
-                class_name, session.registered_plugins
-            )
-            if plugin_name and plugin_name in plugins_with_catalog:
-                continue
-
-            try:
-                node_class = session.node_registry.plugin_registry[class_name]
-            except Exception as e:
-                logger.warning(
-                    f"Failed to resolve plugin node class '{class_name}': {e}",
-                    exc_info=True,
-                )
-                node_class = None
-
-            if plugin_name:
-                legacy_plugins_used.add(plugin_name)
-
-            if node_class is not None:
-                try:
-                    input_specs, output_specs = self._extract_port_specs(node_class)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to extract port specs for plugin node '{class_name}': {e}",
-                        exc_info=True,
-                    )
-                    input_specs = {}
-                    output_specs = {}
-            else:
-                input_specs = {}
-                output_specs = {}
-
-            category, tags, icon_svg = _extract_node_metadata(
-                node_class, class_name=class_name
-            )
-
-            nodes.append(
-                cuvis_ai_pb2.NodeInfo(
-                    class_name=class_name,
-                    full_path=full_path,
-                    source="plugin",
-                    plugin_name=plugin_name,
-                    input_specs=input_specs,
-                    output_specs=output_specs,
-                    icon_svg=icon_svg,
-                    category=category,
-                    tags=tags,
-                )
-            )
-
-        if legacy_plugins_used:
+        if plugins_missing_metadata:
             logger.warning(
-                f"Plugins {sorted(legacy_plugins_used)} ship no metadata.json — "
-                "falling back to import-based node discovery (deprecated; "
-                "will be removed). Add 'metadata_path' to the plugin manifest."
+                f"Plugins {sorted(plugins_missing_metadata)} ship no metadata.json — "
+                "their nodes will not appear in the palette. Add 'metadata_path' "
+                "to the plugin manifest and emit metadata via 'tools/emit_metadata.py'."
             )
 
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)
-
-    @staticmethod
-    def _find_owning_plugin(
-        class_name: str, registered_plugins: dict[str, dict]
-    ) -> tuple[str, str]:
-        """Return ``(plugin_name, full_path)`` for ``class_name`` if recorded.
-
-        Looks through ``registered_plugins[*]['provides']`` for an FQCN
-        whose tail matches ``class_name``. Returns ``("", class_name)``
-        when no plugin claims the class.
-        """
-        for pname, config in registered_plugins.items():
-            for provided_path in config.get("provides", []):
-                if provided_path == class_name or provided_path.endswith(
-                    f".{class_name}"
-                ):
-                    return pname, provided_path
-        return "", class_name
 
     def _extract_port_specs(
         self, node_class: type

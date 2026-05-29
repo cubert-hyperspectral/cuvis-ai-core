@@ -412,39 +412,49 @@ class TestNode(Node):
         assert len(builtin_node.icon_svg) > 0
 
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
-        """``LoadPlugins`` only registers into the catalog; ``ListAvailableNodes``
-        returns the *materialised* set. So after a bare ``LoadPlugins`` call
-        the plugin's nodes do NOT appear yet — only after the registry
-        materialises them via the catalog fast path (here triggered
-        explicitly to keep the test focused on the ListAvailableNodes
-        contract)."""
-        # Create session
+        """``ListAvailableNodes`` populates plugin nodes from each plugin's
+        static ``metadata.json``. No plugin module gets imported on the
+        parent side — the JSON file is the only source.
+        """
+        import json
+
         session_id = self.session_manager.create_session()
 
-        # Create and load plugin (use unique plugin name to avoid module caching)
         plugin_dir = tmp_path / "available_nodes_plugin"
         plugin_dir.mkdir()
         (plugin_dir / "__init__.py").write_text("")
-        (plugin_dir / "nodes.py").write_text("""
-from cuvis_ai_core.node import Node
-
-class PluginTestNode(Node):
-    INPUT_SPECS = {}
-    OUTPUT_SPECS = {}
-
-    def forward(self, **inputs):
-        return {}
-
-    def load(self, params, serial_dir):
-        pass
-""")
         create_plugin_pyproject(plugin_dir)
+
+        metadata_path = tmp_path / "available_nodes_plugin.metadata.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "plugin_name": "available_nodes_plugin",
+                    "plugin_version": "0.1.0",
+                    "nodes": [
+                        {
+                            "class_name": "PluginTestNode",
+                            "full_path": "available_nodes_plugin.nodes.PluginTestNode",
+                            "category": "unspecified",
+                            "tags": [],
+                            "icon_svg": "<svg/>",
+                            "input_specs": {},
+                            "output_specs": {},
+                            "doc_summary": "",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         manifest = PluginManifest(
             plugins={
                 "available_nodes_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
                     provides=["available_nodes_plugin.nodes.PluginTestNode"],
+                    metadata_path=str(metadata_path),
                 )
             }
         )
@@ -455,49 +465,25 @@ class PluginTestNode(Node):
                 config_bytes=manifest.model_dump_json().encode()
             ),
         )
+        self.plugin_service.load_plugins(load_request, self.mock_context)
 
-        import sys
+        list_request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
+        response = self.plugin_service.list_available_nodes(
+            list_request, self.mock_context
+        )
 
-        sys.path.insert(0, str(tmp_path))
-        try:
-            self.plugin_service.load_plugins(load_request, self.mock_context)
+        node_names = [node.class_name for node in response.nodes]
+        assert "PluginTestNode" in node_names
 
-            # After LoadPlugins, ListAvailableNodes returns built-ins only —
-            # the plugin lives in the catalog but isn't imported yet.
-            list_request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
-            pre_materialise = self.plugin_service.list_available_nodes(
-                list_request, self.mock_context
-            )
-            assert "PluginTestNode" not in [n.class_name for n in pre_materialise.nodes]
-
-            # Trigger the catalog fast path explicitly (LoadPipeline would
-            # do this when a pipeline yaml names the plugin).
-            session = self.session_manager.get_session(session_id)
-            session.node_registry.load_plugin("available_nodes_plugin")
-
-            response = self.plugin_service.list_available_nodes(
-                list_request, self.mock_context
-            )
-
-            # Verify plugin node is in list
-            node_names = [node.class_name for node in response.nodes]
-            assert "PluginTestNode" in node_names
-
-            # Find the plugin node in response
-            plugin_node = next(
-                node for node in response.nodes if node.class_name == "PluginTestNode"
-            )
-            assert plugin_node.source == "plugin"
-            assert plugin_node.plugin_name == "available_nodes_plugin"
-            assert (
-                plugin_node.full_path == "available_nodes_plugin.nodes.PluginTestNode"
-            )
-            # Plugin nodes also carry the new metadata fields.
-            assert plugin_node.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
-            assert list(plugin_node.tags) == []
-            assert len(plugin_node.icon_svg) > 0
-        finally:
-            sys.path.remove(str(tmp_path))
+        plugin_node = next(
+            node for node in response.nodes if node.class_name == "PluginTestNode"
+        )
+        assert plugin_node.source == "plugin"
+        assert plugin_node.plugin_name == "available_nodes_plugin"
+        assert plugin_node.full_path == "available_nodes_plugin.nodes.PluginTestNode"
+        assert plugin_node.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+        assert list(plugin_node.tags) == []
+        assert plugin_node.icon_svg == b"<svg/>"
 
     def test_clear_plugin_cache_not_implemented(self):
         """Test clear_plugin_cache functionality."""
