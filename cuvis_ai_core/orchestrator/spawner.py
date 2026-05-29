@@ -78,6 +78,20 @@ _DENY_PATTERNS = (
 )
 
 
+def _read_stderr_log(path: Path | None) -> str:
+    """Read the child's captured stderr file for post-mortem display.
+
+    Returns ``""`` if the file is missing — callers fall back to a
+    generic crash message in that case.
+    """
+    if path is None or not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"<unreadable stderr log {path}: {exc}>"
+
+
 def _is_denied(name: str) -> bool:
     for pat in _DENY_PATTERNS:
         if pat.endswith("*"):
@@ -111,10 +125,13 @@ class ChildHandle:
     ``endpoint`` is the ``host:port`` the parent's :func:`stub` talks
     to. ``terminate`` / ``kill`` are the graceful and forced shutdown
     paths the orchestrator calls on session close or crash recovery.
+    ``stderr_log`` points at the file that captures the child's
+    stderr — read on crash to surface a useful error.
     """
 
     endpoint: str
     process: subprocess.Popen
+    stderr_log: Path | None = None
     _channel: grpc.Channel | None = field(default=None, init=False, repr=False)
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
@@ -231,6 +248,17 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             declared_paths=declared_paths,
             request_gpu=request_gpu,
         )
+        # Capture child stdout/stderr to files in the declared scratch
+        # dir rather than ``subprocess.PIPE``. With PIPE the parent must
+        # actively drain the OS pipe (~64 KB on Windows) or the child's
+        # next write blocks forever — a deadlock loguru triggered
+        # reliably while preinstalled plugins were being registered.
+        # File sinks have no such limit, and we can still read them on
+        # crash to surface the failure to the caller.
+        log_dir = declared_paths.scratch_dir / "runtime"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / "child.stdout.log"
+        stderr_path = log_dir / "child.stderr.log"
         cmd = [
             str(python),
             "-m",
@@ -238,25 +266,39 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             "--endpoint-file",
             str(endpoint_file),
         ]
-        logger.info(f"Spawning child runtime: {' '.join(cmd)}")
+        logger.info(
+            f"Spawning child runtime: {' '.join(cmd)} "
+            f"(stdout→{stdout_path}, stderr→{stderr_path})"
+        )
+        stdout_fh = stdout_path.open("w", encoding="utf-8")
+        stderr_fh = stderr_path.open("w", encoding="utf-8")
         process = subprocess.Popen(
             cmd,
             cwd=str(cwd),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=stdout_fh,
+            stderr=stderr_fh,
             text=True,
         )
 
-        endpoint = self._wait_for_endpoint(endpoint_file, process)
-        handle = ChildHandle(endpoint=endpoint, process=process)
         try:
+            endpoint = self._wait_for_endpoint(
+                endpoint_file, process, stderr_log=stderr_path
+            )
+            handle = ChildHandle(
+                endpoint=endpoint, process=process, stderr_log=stderr_path
+            )
             self._wait_for_health(handle)
         except SpawnError:
-            handle.kill()
+            if process.poll() is None:
+                process.terminate()
             raise
         finally:
             shutil.rmtree(endpoint_dir, ignore_errors=True)
+            # Close the file handles the *parent* opened; the child
+            # inherited duplicates so its writes continue uninterrupted.
+            stdout_fh.close()
+            stderr_fh.close()
         return handle
 
     def _build_child_env(
@@ -303,11 +345,13 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         self,
         endpoint_file: Path,
         process: subprocess.Popen,
+        *,
+        stderr_log: Path | None = None,
     ) -> str:
         deadline = time.monotonic() + _ENDPOINT_POLL_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                stderr = process.stderr.read() if process.stderr else ""
+                stderr = _read_stderr_log(stderr_log)
                 raise SpawnError(
                     f"Child runtime exited before reporting an endpoint "
                     f"(returncode={process.returncode}). stderr:\n{stderr}"
@@ -328,9 +372,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         last_error: Exception | None = None
         while time.monotonic() < deadline:
             if handle.process.poll() is not None:
-                stderr = (
-                    handle.process.stderr.read() if handle.process.stderr else ""
-                )
+                stderr = _read_stderr_log(handle.stderr_log)
                 raise SpawnError(
                     f"Child runtime died before HealthCheck succeeded "
                     f"(returncode={handle.process.returncode}). stderr:\n{stderr}"
