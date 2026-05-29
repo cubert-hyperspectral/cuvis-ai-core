@@ -210,12 +210,20 @@ def forward_load_pipeline(
     pipeline_config = PipelineConfig(**config_dict)
 
     plugins_dirs = _plugins_dirs_for_session(session)
-    child = ensure_child_for_session(
-        session_manager,
-        request.session_id,
-        pipeline_config,
-        plugins_dirs,
-    )
+    try:
+        child = ensure_child_for_session(
+            session_manager,
+            request.session_id,
+            pipeline_config,
+            plugins_dirs,
+        )
+    except ValueError as exc:
+        # resolve_pipeline_plugins's contract: missing plugins block,
+        # ambiguous class, coverage gap, duplicate with diverging refs
+        # all raise ValueError. Surface as INVALID_ARGUMENT.
+        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.LoadPipelineResponse(success=False)
     return _call_child_with_error_propagation(
         child.stub(),
         "LoadPipeline",
@@ -329,9 +337,19 @@ def forward_restore_train_run(
             pipeline_config,
             plugins_dirs,
         )
+    except ValueError as exc:
+        # Drop the empty session; surface resolver errors as INVALID_ARGUMENT
+        # so callers don't have to dig through "UNKNOWN" wrapping.
+        try:
+            session_manager.close_session(parent_session_id)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.RestoreTrainRunResponse()
     except Exception:
-        # Failed to compose/spawn: drop the empty session so callers
-        # don't get a half-initialised id.
+        # Compose / spawn failed for some other reason; drop the empty
+        # session and re-raise so the grpc handler decorator surfaces it.
         try:
             session_manager.close_session(parent_session_id)
         except Exception:  # pragma: no cover - defensive

@@ -1,8 +1,11 @@
 """Tests for pipeline-driven plugin resolution in LoadPipeline.
 
-Exercise the integration between the pipeline yaml's ``plugins:`` field,
-the session's ``search_paths``, and the resolver inside
-``PipelineService.load_pipeline``.
+The resolver now lives in :mod:`cuvis_ai_core.grpc.orchestrator_bridge`;
+``PipelineService.load_pipeline`` is the in-process build-and-attach body
+the child runs after :func:`InitializeSession` registers plugins. These
+tests drive the parent's ``forward_load_pipeline`` through the in-memory
+orchestrator fixture and assert on the resolver-error surface that lands
+on the gRPC context.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from unittest.mock import Mock
 import grpc
 import pytest
 
-from cuvis_ai_core.grpc.pipeline_service import PipelineService
+from cuvis_ai_core.grpc import orchestrator_bridge
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.utils.node_registry import NodeRegistry
@@ -75,28 +78,20 @@ def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Pat
     )
 
 
-@pytest.mark.slow
-@pytest.mark.skip(
-    reason=(
-        "Resolver / install behaviour these tests assert on moved out of "
-        "PipelineService.load_pipeline into the orchestrator bridge; "
-        "PipelineService.load_pipeline is now the in-process build-and-attach "
-        "body the child runs after InitializeSession registers plugins. "
-        "Tests for resolver semantics belong in tests/grpc_api/test_orchestrator_bridge.py."
-    )
-)
 class TestLoadPipelinePluginResolution:
-    """Plugin resolution happens inside LoadPipeline."""
+    """Resolver semantics through the orchestrator's forward_load_pipeline."""
 
     def setup_method(self):
         NodeRegistry.clear()
         self.session_manager = SessionManager()
-        self.pipeline_service = PipelineService(self.session_manager)
         self.context = Mock()
 
     def teardown_method(self):
         for session_id in list(self.session_manager._sessions.keys()):
-            self.session_manager.close_session(session_id)
+            try:
+                self.session_manager.close_session(session_id)
+            except Exception:
+                pass
         NodeRegistry.clear()
 
     def _session_with_search_path(self, search_path: Path) -> str:
@@ -111,8 +106,7 @@ class TestLoadPipelinePluginResolution:
     def test_declared_plugins_materialise_only_what_is_listed(
         self, tmp_path, create_plugin_pyproject
     ):
-        """When plugins: declares one plugin, only that one is loaded into the session."""
-        # Two plugins exist in the catalog; the pipeline only declares one.
+        """plugins: declares one plugin → only that one lands on session.registered_plugins."""
         wanted_plugin = tmp_path / "wanted_plugin"
         wanted_fqcn = _make_plugin_files(
             plugin_root=wanted_plugin,
@@ -137,7 +131,6 @@ class TestLoadPipelinePluginResolution:
         )
 
         session_id = self._session_with_search_path(tmp_path / "configs")
-
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
             pipeline=cuvis_ai_pb2.PipelineConfig(
@@ -150,18 +143,21 @@ class TestLoadPipelinePluginResolution:
 
         sys.path.insert(0, str(tmp_path))
         try:
-            response = self.pipeline_service.load_pipeline(request, self.context)
+            response = orchestrator_bridge.forward_load_pipeline(
+                self.session_manager, request, self.context
+            )
         finally:
             sys.path.remove(str(tmp_path))
 
         assert response.success
         session = self.session_manager.get_session(session_id)
-        # Wanted plugin was materialised; other plugin was not.
-        assert "wanted_plugin" in session.node_registry.plugin_configs
-        assert "other_plugin" not in session.node_registry.plugin_configs
-        # session.registered_plugins is in sync — exposed by ListLoadedPlugins / GetPluginInfo.
+        # Parent-side mirror reflects exactly what the orchestrator resolved.
         assert "wanted_plugin" in session.registered_plugins
         assert "other_plugin" not in session.registered_plugins
+        # The orchestrator stashed the resolved plugin dict alongside the
+        # child handle so the same set is forwarded to InitializeSession.
+        assert "wanted_plugin" in (session.resolved_plugins or {})
+        assert "other_plugin" not in (session.resolved_plugins or {})
 
     def test_missing_plugins_field_returns_invalid_argument(
         self, tmp_path, create_plugin_pyproject
@@ -190,7 +186,9 @@ class TestLoadPipelinePluginResolution:
 
         sys.path.insert(0, str(tmp_path))
         try:
-            response = self.pipeline_service.load_pipeline(request, self.context)
+            response = orchestrator_bridge.forward_load_pipeline(
+                self.session_manager, request, self.context
+            )
         finally:
             sys.path.remove(str(tmp_path))
 
@@ -199,28 +197,6 @@ class TestLoadPipelinePluginResolution:
         details_call = self.context.set_details.call_args[0][0]
         assert "mandatory 'plugins:' field" in details_call
         assert "suggest-plugins-fix" in details_call
-
-    def test_failed_precondition_when_plugins_empty_and_no_catalog(self, tmp_path):
-        """Explicit-empty plugins list + no catalog → FAILED_PRECONDITION."""
-        # search_paths points at a configs dir with NO plugins/ subdirectory.
-        configs = tmp_path / "configs"
-        configs.mkdir()
-        session_id = self._session_with_search_path(configs)
-
-        request = cuvis_ai_pb2.LoadPipelineRequest(
-            session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(
-                config_bytes=_make_pipeline_config_bytes(
-                    node_class_name="pkg.module.Node",
-                    plugins=[],  # explicit empty list
-                ),
-            ),
-        )
-
-        response = self.pipeline_service.load_pipeline(request, self.context)
-
-        assert not response.success
-        self.context.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
 
     def test_missing_class_in_declared_set_raises_invalid_argument(
         self, tmp_path, create_plugin_pyproject
@@ -248,7 +224,9 @@ class TestLoadPipelinePluginResolution:
             ),
         )
 
-        response = self.pipeline_service.load_pipeline(request, self.context)
+        response = orchestrator_bridge.forward_load_pipeline(
+            self.session_manager, request, self.context
+        )
 
         assert not response.success
         self.context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
