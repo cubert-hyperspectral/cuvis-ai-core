@@ -1,0 +1,233 @@
+"""RunRuntimeServicer unit tests — in-process, no subprocess.
+
+Drives the servicer directly with a fake context so the assertions
+run in milliseconds. The end-to-end smoke (spawned child process)
+lives in ``tests/orchestrator/test_spawner.py``.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import grpc
+import pytest
+from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
+
+from cuvis_ai_core.run_runtime.service import RunRuntimeServicer, _decode_resolved_plugins
+from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+
+
+class FakeContext:
+    """Minimal grpc.ServicerContext stand-in for unary handler tests."""
+
+    def __init__(self) -> None:
+        self.code: grpc.StatusCode | None = None
+        self.details: str | None = None
+
+    def set_code(self, code: grpc.StatusCode) -> None:
+        self.code = code
+
+    def set_details(self, details: str) -> None:
+        self.details = details
+
+
+# ---------------------------------------------------------------------------
+# _decode_resolved_plugins
+# ---------------------------------------------------------------------------
+
+
+def test_decode_resolved_plugins_empty_bytes_returns_empty_dict():
+    assert _decode_resolved_plugins(b"") == {}
+
+
+def test_decode_resolved_plugins_discriminates_git_vs_local(tmp_path):
+    payload = json.dumps(
+        {
+            "from_git": {
+                "repo": "https://example.com/repo.git",
+                "tag": "v1.2.3",
+                "provides": ["pkg.Cls"],
+            },
+            "from_local": {
+                "path": str(tmp_path),
+                "provides": ["pkg2.Cls"],
+            },
+        }
+    ).encode("utf-8")
+    out = _decode_resolved_plugins(payload)
+    assert isinstance(out["from_git"], GitPluginConfig)
+    assert isinstance(out["from_local"], LocalPluginConfig)
+
+
+def test_decode_resolved_plugins_missing_key_raises():
+    payload = json.dumps({"bad": {"provides": ["x.Y"]}}).encode("utf-8")
+    with pytest.raises(ValueError, match="neither 'repo' nor 'path'"):
+        _decode_resolved_plugins(payload)
+
+
+def test_decode_resolved_plugins_top_level_not_dict_raises():
+    with pytest.raises(TypeError):
+        _decode_resolved_plugins(b"[]")
+
+
+# ---------------------------------------------------------------------------
+# HealthCheck — trivial but exercised
+# ---------------------------------------------------------------------------
+
+
+def test_health_check_always_serving():
+    servicer = RunRuntimeServicer()
+    response = servicer.HealthCheck(cuvis_ai_pb2.HealthCheckRequest(), FakeContext())
+    assert (
+        response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+    )
+
+
+# ---------------------------------------------------------------------------
+# InitializeSession
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_session_rejects_empty_session_id():
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    response = servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(session_id=""),
+        ctx,
+    )
+    assert response.ok is False
+    assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_initialize_session_rejects_malformed_plugin_json():
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    response = servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(
+            session_id="s1",
+            resolved_plugins_json=b"not-json",
+        ),
+        ctx,
+    )
+    assert response.ok is False
+    assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_initialize_session_with_no_plugins_succeeds():
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    response = servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(
+            session_id="s1",
+            search_paths=["/some/path"],
+            resolved_plugins_json=b"",
+        ),
+        ctx,
+    )
+    assert response.ok is True
+    state = servicer._session_manager.get_session("s1")
+    assert state.search_paths == ["/some/path"]
+
+
+class _FakeTestNode:
+    """Importable dummy class for plugin-registration tests."""
+
+    pass
+
+
+def test_initialize_session_imports_class_and_registers_it():
+    """End-to-end through the real ``import_plugin_nodes`` helper.
+
+    Uses a class defined in this test module so the import resolves
+    without any plugin packaging machinery. The point is that the
+    servicer registers the imported class on the session's
+    NodeRegistry just like the legacy in-process loader did.
+    """
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    payload = json.dumps(
+        {
+            "fake_plugin": {
+                "path": "/tmp/does-not-need-to-exist",
+                "provides": [f"{__name__}._FakeTestNode"],
+            }
+        }
+    ).encode("utf-8")
+    response = servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(
+            session_id="s2",
+            resolved_plugins_json=payload,
+        ),
+        ctx,
+    )
+    assert response.ok is True
+    state = servicer._session_manager.get_session("s2")
+    assert "_FakeTestNode" in state.node_registry.plugin_registry
+    assert state.node_registry.plugin_registry["_FakeTestNode"] is _FakeTestNode
+    assert "fake_plugin" in state.registered_plugins
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: StopRun, CloseSession
+# ---------------------------------------------------------------------------
+
+
+def test_stop_run_sets_shutdown_event_and_closes_session():
+    servicer = RunRuntimeServicer()
+    servicer._session_manager.create_session_with_id("s1")
+    response = servicer.StopRun(
+        cuvis_ai_pb2.StopRunRequest(session_id="s1", grace_seconds=2),
+        FakeContext(),
+    )
+    assert response.ok is True
+    assert servicer.shutdown_event.is_set()
+    # Session is closed (close_session pops it from the manager).
+    assert "s1" not in servicer._session_manager.list_sessions()
+
+
+def test_stop_run_no_session_id_still_signals_shutdown():
+    servicer = RunRuntimeServicer()
+    response = servicer.StopRun(cuvis_ai_pb2.StopRunRequest(), FakeContext())
+    assert response.ok is True
+    assert servicer.shutdown_event.is_set()
+
+
+def test_close_session_is_idempotent_for_unknown_id():
+    servicer = RunRuntimeServicer()
+    response = servicer.CloseSession(
+        cuvis_ai_pb2.CloseSessionRequest(session_id="never-existed"),
+        FakeContext(),
+    )
+    assert response.success is True
+
+
+def test_restore_train_run_is_unimplemented_for_now():
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    servicer.RestoreTrainRun(cuvis_ai_pb2.RestoreTrainRunRequest(), ctx)
+    assert ctx.code == grpc.StatusCode.UNIMPLEMENTED
+
+
+# ---------------------------------------------------------------------------
+# LoadPipeline — missing session / missing config bytes
+# ---------------------------------------------------------------------------
+
+
+def test_load_pipeline_rejects_unknown_session():
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    request = cuvis_ai_pb2.LoadPipelineRequest(session_id="ghost")
+    response = servicer.LoadPipeline(request, ctx)
+    assert response.success is False
+    assert ctx.code == grpc.StatusCode.NOT_FOUND
+
+
+def test_load_pipeline_rejects_missing_config_bytes():
+    servicer = RunRuntimeServicer()
+    servicer._session_manager.create_session_with_id("s1")
+    ctx = FakeContext()
+    request = cuvis_ai_pb2.LoadPipelineRequest(session_id="s1")
+    response = servicer.LoadPipeline(request, ctx)
+    assert response.success is False
+    assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT

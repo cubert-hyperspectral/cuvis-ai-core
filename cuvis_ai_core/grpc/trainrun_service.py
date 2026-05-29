@@ -123,7 +123,15 @@ class TrainRunService:
         request: cuvis_ai_pb2.RestoreTrainRunRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.RestoreTrainRunResponse:
-        """Restore a TrainRunConfig from disk and create a session, optionally with weights."""
+        """Restore a TrainRunConfig from disk and create a session, optionally with weights.
+
+        NOTE: the orchestrator branch (CUVIS_USE_ORCHESTRATOR=1) is not yet
+        wired through this RPC. It still runs the in-process path so the
+        trainrun YAML can build its pipeline against the server's own
+        ``NodeRegistry``. A follow-up adds a child-side ``RestoreTrainRun``
+        implementation and the parent-side compose / spawn / forward
+        wrapper that decomposes the trainrun YAML for the child.
+        """
         trainrun_path = Path(request.trainrun_path)
         if not trainrun_path.exists():
             raise FileNotFoundError(f"Train run file not found: {trainrun_path}")

@@ -225,6 +225,7 @@ class PipelineService:
             context.set_details("pipeline.config_bytes is required")
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
+        from cuvis_ai_core.grpc import orchestrator_bridge
         from cuvis_ai_core.pipeline.factory import PipelineBuilder
         from cuvis_ai_core.training.config import PipelineConfig
         from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
@@ -240,6 +241,20 @@ class PipelineService:
             candidate = Path(search_path) / "plugins"
             if candidate.is_dir():
                 plugins_dirs.append(candidate)
+
+        # Orchestrator branch: compose a per-pipeline child venv and forward
+        # the request to the child runtime. Opt-in via CUVIS_USE_ORCHESTRATOR;
+        # falls through to the in-process path for builtin-only pipelines or
+        # when the flag is off.
+        if orchestrator_bridge.orchestrator_enabled():
+            child = orchestrator_bridge.ensure_child_for_session(
+                self.session_manager,
+                request.session_id,
+                pipeline_config,
+                plugins_dirs,
+            )
+            if child is not None:
+                return child.stub().LoadPipeline(request)
 
         # The resolver only engages when the user has declared plugins OR a
         # catalog dir is discoverable. A pipeline that uses only built-in

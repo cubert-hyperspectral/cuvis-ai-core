@@ -45,6 +45,13 @@ class SessionState:
     # ``node_registry.plugin_registry``. On the wire this is the
     # ``registered_plugins`` field of ``LoadPluginsResponse``.
     registered_plugins: dict[str, dict] = field(default_factory=dict)
+    # Orchestrator-only state, populated when ``CUVIS_USE_ORCHESTRATOR``
+    # is on and the parent has spawned a child runtime for this
+    # session. The handle keeps the child alive; ``resolved_plugins``
+    # is the dict the parent computed via ``resolve_pipeline_plugins``
+    # and forwarded to the child via ``InitializeSession``.
+    child_handle: Any | None = None
+    resolved_plugins: dict[str, Any] | None = None
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -107,6 +114,30 @@ class SessionManager:
         )
         self._sessions[session_id] = state
         logger.info(f"Created session: {session_id}")
+        return session_id
+
+    def create_session_with_id(self, session_id: str) -> str:
+        """Create a session with a caller-supplied id.
+
+        Used by the child runtime's ``InitializeSession`` so the
+        parent and child share the same ``session_id`` across the
+        gRPC boundary. The public ``CreateSession`` RPC stays empty
+        and server-generated; this method is only reachable via the
+        internal ``RunRuntime`` service.
+        """
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        if session_id in self._sessions:
+            logger.debug(
+                f"Session {session_id} already exists; reusing without "
+                f"re-initialising."
+            )
+            return session_id
+        self._sessions[session_id] = SessionState(
+            session_id=session_id,
+            node_registry=NodeRegistry(),
+        )
+        logger.info(f"Created session with caller-supplied id: {session_id}")
         return session_id
 
     def get_session(self, session_id: str) -> SessionState:
@@ -214,6 +245,22 @@ class SessionManager:
         state.data_config = None
         state.training_config = None
         state.trainrun_config = None
+
+        # Terminate any child runtime bound to this session (orchestrator path).
+        child = state.child_handle
+        state.child_handle = None
+        state.resolved_plugins = None
+        if child is not None:
+            try:
+                child.terminate(grace_s=5.0)
+            except Exception as exc:
+                logger.warning(
+                    f"Child runtime termination raised during close_session: {exc}"
+                )
+                try:
+                    child.kill()
+                except Exception as kill_exc:
+                    logger.warning(f"Child runtime kill also raised: {kill_exc}")
 
         logger.info(f"Closed session: {session_id}")
 
