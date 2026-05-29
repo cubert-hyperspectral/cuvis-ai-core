@@ -38,12 +38,10 @@ class NodeRegistry:
         """Create instance for plugin support."""
         self.plugin_registry: Dict[str, type] = {}
         self.plugin_configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
-        self.plugin_class_map: Dict[str, str] = {}
         # Catalog entries are manifest metadata the session *knows about* but
         # has not installed/imported. `load_plugin(name)` with no explicit
         # config materialises a catalog entry on demand.
         self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
-        self.cache_dir: Path = Path.home() / ".cuvis_plugins"
 
     @classmethod
     def register(cls, node_class: type) -> type:
@@ -487,13 +485,6 @@ class NodeRegistry:
         # Register all imported nodes in instance registries
         for class_name, node_class in imported_nodes.items():
             self.plugin_registry[class_name] = node_class
-            # Find the original class_path for this class_name
-            for class_path in plugin_config.provides:
-                if class_path.endswith(f".{class_name}") or class_path.endswith(
-                    class_name
-                ):
-                    self.plugin_class_map[class_path] = name
-                    break
             logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
 
         # Track plugin config
@@ -528,7 +519,6 @@ class NodeRegistry:
         for class_path in config.provides:
             class_name = class_path.rsplit(".", 1)[1]
             self.plugin_registry.pop(class_name, None)
-            self.plugin_class_map.pop(class_path, None)
 
         # Remove config
         del self.plugin_configs[name]
@@ -555,7 +545,6 @@ class NodeRegistry:
 
         self.plugin_registry.clear()
         self.plugin_configs.clear()
-        self.plugin_class_map.clear()
         logger.info("Cleared all plugins")
 
     @classmethod
