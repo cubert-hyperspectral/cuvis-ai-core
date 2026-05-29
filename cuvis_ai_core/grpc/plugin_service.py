@@ -6,16 +6,22 @@ import inspect
 from pathlib import Path
 
 import grpc
+import numpy as np
 from loguru import logger
 
 from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
 from cuvis_ai_core.grpc.helpers import dtype_to_proto
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
+from cuvis_ai_core.orchestrator.catalog import (
+    CatalogNodeEntry,
+    CatalogPortSpec,
+    load_catalog_entry,
+)
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_config import PluginManifest
-from cuvis_ai_schemas.enums import NodeCategory
+from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 from cuvis_ai_schemas.grpc.conversions import (
     node_category_to_proto,
     node_tag_to_proto,
@@ -149,6 +155,80 @@ def _extract_node_metadata(
         icon_svg = b""
 
     return node_category_to_proto(category), tag_ints, icon_svg
+
+
+def _catalog_port_spec_to_proto(
+    port_name: str, spec: CatalogPortSpec
+) -> cuvis_ai_pb2.PortSpec:
+    """Convert a catalog port spec (string dtype) to its proto form.
+
+    Empty / unknown dtype strings map to ``D_TYPE_UNSPECIFIED`` — the
+    same wire value the runtime uses for generic-tensor markers on
+    node classes (``torch.Tensor`` as a class).
+    """
+    if not spec.dtype:
+        proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    else:
+        try:
+            np_dtype = np.dtype(spec.dtype)
+            proto_dtype = dtype_to_proto(np_dtype)
+        except (TypeError, ValueError):
+            logger.warning(
+                f"Catalog port '{port_name}' has unsupported dtype "
+                f"{spec.dtype!r}; emitting D_TYPE_UNSPECIFIED"
+            )
+            proto_dtype = cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    return cuvis_ai_pb2.PortSpec(
+        name=port_name,
+        dtype=proto_dtype,
+        shape=list(spec.shape),
+        optional=spec.optional,
+        description=spec.description,
+    )
+
+
+def _catalog_specs_map_to_proto(
+    specs: dict[str, tuple[CatalogPortSpec, ...]],
+) -> dict[str, cuvis_ai_pb2.PortSpecList]:
+    """Convert a {port → tuple-of-CatalogPortSpec} map into proto PortSpecList map."""
+    out: dict[str, cuvis_ai_pb2.PortSpecList] = {}
+    for port_name, specs_tuple in specs.items():
+        proto_specs = [_catalog_port_spec_to_proto(port_name, s) for s in specs_tuple]
+        out[port_name] = cuvis_ai_pb2.PortSpecList(specs=proto_specs)
+    return out
+
+
+def _catalog_entry_to_node_info(
+    entry: CatalogNodeEntry, plugin_name: str
+) -> cuvis_ai_pb2.NodeInfo:
+    """Build the proto NodeInfo for one catalog node — pure data, no class import."""
+    try:
+        category = NodeCategory(entry.category)
+    except ValueError:
+        category = NodeCategory.UNSPECIFIED
+    proto_category = node_category_to_proto(category)
+
+    tag_ints: list[int] = []
+    for tag_str in entry.tags:
+        try:
+            tag = NodeTag(tag_str)
+        except ValueError:
+            continue
+        tag_ints.append(node_tag_to_proto(tag))
+    tag_ints.sort()
+
+    icon_svg_bytes = entry.icon_svg.encode("utf-8") if entry.icon_svg else b""
+    return cuvis_ai_pb2.NodeInfo(
+        class_name=entry.class_name,
+        full_path=entry.full_path,
+        source="plugin",
+        plugin_name=plugin_name,
+        input_specs=_catalog_specs_map_to_proto(entry.input_specs),
+        output_specs=_catalog_specs_map_to_proto(entry.output_specs),
+        icon_svg=icon_svg_bytes,
+        category=proto_category,
+        tags=tag_ints,
+    )
 
 
 class PluginService:
@@ -285,19 +365,28 @@ class PluginService:
         request: cuvis_ai_pb2.ListAvailableNodesRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
-        """List all available nodes (built-in + session plugins)."""
+        """List all available nodes (built-in + session plugins).
+
+        Plugin nodes come from each plugin's static ``metadata.json``
+        (pointed at by ``metadata_path`` in the manifest entry) so the
+        server never imports plugin code to answer this RPC. Plugins
+        without ``metadata_path`` fall back to walking
+        ``session.node_registry.plugin_registry``, a transitional path
+        that emits a deprecation warning and only finds anything when a
+        plugin was imported in-process — the orchestrated execution
+        path never imports plugins on the parent side.
+        """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
         )
         if session is None:
             return cuvis_ai_pb2.ListAvailableNodesResponse()
 
-        nodes = []
+        nodes: list[cuvis_ai_pb2.NodeInfo] = []
 
-        # Built-in nodes
+        # Built-in nodes ship inside cuvis-ai-core itself, so importing
+        # them is free and the per-class spec walk stays.
         for class_name in NodeRegistry.list_builtin_nodes():
-            # Class lookup runs in its own try so a failure doesn't leave
-            # node_class undefined for the metadata extractor below.
             try:
                 node_class = NodeRegistry.get_builtin_class(class_name)
             except Exception as e:
@@ -328,7 +417,7 @@ class PluginService:
             nodes.append(
                 cuvis_ai_pb2.NodeInfo(
                     class_name=class_name,
-                    full_path=class_name,  # Builtin nodes use short names
+                    full_path=class_name,
                     source="builtin",
                     plugin_name="",
                     input_specs=input_specs,
@@ -339,26 +428,43 @@ class PluginService:
                 )
             )
 
-        # Session plugin nodes from registry instance
-        plugin_nodes = sorted(session.node_registry.plugin_registry.keys())
+        # Plugin nodes via the static catalog. Plugins that supply a
+        # ``metadata.json`` are read by the loader; their classes are
+        # NEVER touched by this RPC.
+        plugins_with_catalog: set[str] = set()
+        for plugin_name, config in session.registered_plugins.items():
+            try:
+                entry = load_catalog_entry(plugin_name, config)
+            except (ValueError, FileNotFoundError) as exc:
+                logger.warning(
+                    f"Failed to load catalog for plugin '{plugin_name}': {exc}"
+                )
+                continue
+            if entry is None:
+                continue
+            plugins_with_catalog.add(plugin_name)
+            for node_entry in entry.nodes:
+                try:
+                    nodes.append(_catalog_entry_to_node_info(node_entry, plugin_name))
+                except Exception as exc:
+                    logger.warning(
+                        f"Skipping catalog entry '{node_entry.class_name}' from "
+                        f"plugin '{plugin_name}': {exc}"
+                    )
 
-        for class_name in plugin_nodes:
-            # Find which plugin provides this node
-            plugin_name = ""
-            full_path = class_name
-            for pname, config in session.registered_plugins.items():
-                for provided_path in config.get("provides", []):
-                    if provided_path.endswith(class_name) or provided_path.endswith(
-                        f".{class_name}"
-                    ):
-                        plugin_name = pname
-                        full_path = provided_path
-                        break
-                if plugin_name:
-                    break
+        # Legacy fallback for plugins whose manifest entry has no
+        # ``metadata_path``. Only finds nodes whose class was imported
+        # into the parent's NodeRegistry — which the orchestrator never
+        # does. Kept so dev-mode / CLI flows continue to work in the
+        # transition window.
+        legacy_plugins_used: set[str] = set()
+        for class_name in sorted(session.node_registry.plugin_registry.keys()):
+            plugin_name, full_path = self._find_owning_plugin(
+                class_name, session.registered_plugins
+            )
+            if plugin_name and plugin_name in plugins_with_catalog:
+                continue
 
-            # Class lookup runs in its own try so a failure doesn't leave
-            # node_class undefined for the metadata extractor below.
             try:
                 node_class = session.node_registry.plugin_registry[class_name]
             except Exception as e:
@@ -367,6 +473,9 @@ class PluginService:
                     exc_info=True,
                 )
                 node_class = None
+
+            if plugin_name:
+                legacy_plugins_used.add(plugin_name)
 
             if node_class is not None:
                 try:
@@ -400,7 +509,32 @@ class PluginService:
                 )
             )
 
+        if legacy_plugins_used:
+            logger.warning(
+                f"Plugins {sorted(legacy_plugins_used)} ship no metadata.json — "
+                "falling back to import-based node discovery (deprecated; "
+                "will be removed). Add 'metadata_path' to the plugin manifest."
+            )
+
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)
+
+    @staticmethod
+    def _find_owning_plugin(
+        class_name: str, registered_plugins: dict[str, dict]
+    ) -> tuple[str, str]:
+        """Return ``(plugin_name, full_path)`` for ``class_name`` if recorded.
+
+        Looks through ``registered_plugins[*]['provides']`` for an FQCN
+        whose tail matches ``class_name``. Returns ``("", class_name)``
+        when no plugin claims the class.
+        """
+        for pname, config in registered_plugins.items():
+            for provided_path in config.get("provides", []):
+                if provided_path == class_name or provided_path.endswith(
+                    f".{class_name}"
+                ):
+                    return pname, provided_path
+        return "", class_name
 
     def _extract_port_specs(
         self, node_class: type

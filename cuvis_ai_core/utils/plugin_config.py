@@ -1,7 +1,7 @@
 """Pydantic configuration models for NodeRegistry plugin system."""
 
 from pathlib import Path
-from typing import List, Dict, Union, Annotated
+from typing import List, Dict, Optional, Union, Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import yaml
 
@@ -24,6 +24,18 @@ class _BasePluginConfig(BaseModel):
         min_length=1,  # At least one class required
     )
 
+    metadata_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional path to a metadata.json describing this plugin's node "
+            "classes (port specs, category, tags, icon). When provided the "
+            "server reads the JSON instead of importing the plugin to answer "
+            "ListAvailableNodes. Relative paths are resolved against the "
+            "manifest YAML's directory in PluginManifest.from_yaml; manifests "
+            "submitted via the LoadPlugins RPC must use an absolute path."
+        ),
+    )
+
     @field_validator("provides")
     @classmethod
     def _validate_class_paths(cls, value: List[str]) -> List[str]:
@@ -35,6 +47,15 @@ class _BasePluginConfig(BaseModel):
                     "Must be fully-qualified (e.g., 'package.module.ClassName')"
                 )
         return value
+
+    @field_validator("metadata_path")
+    @classmethod
+    def _validate_metadata_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("metadata_path cannot be empty")
+        return value.strip()
 
 
 class GitPluginConfig(_BasePluginConfig):
@@ -155,7 +176,11 @@ class PluginManifest(BaseModel):
 
     @classmethod
     def from_yaml(cls, yaml_path: Path) -> "PluginManifest":
-        """Load and validate manifest from YAML file."""
+        """Load and validate manifest from YAML file.
+
+        Relative ``metadata_path`` entries are resolved against
+        ``yaml_path.parent`` so the catalog loader sees an absolute path.
+        """
         if not yaml_path.exists():
             raise FileNotFoundError(f"Plugin manifest not found: {yaml_path}")
 
@@ -165,7 +190,15 @@ class PluginManifest(BaseModel):
         if not data:
             return cls(plugins={})
 
-        return cls.model_validate(data)
+        manifest = cls.model_validate(data)
+        manifest_dir = yaml_path.parent.resolve()
+        for plugin_config in manifest.plugins.values():
+            if plugin_config.metadata_path is None:
+                continue
+            candidate = Path(plugin_config.metadata_path)
+            if not candidate.is_absolute():
+                plugin_config.metadata_path = str((manifest_dir / candidate).resolve())
+        return manifest
 
     @classmethod
     def from_dict(cls, data: Dict) -> "PluginManifest":
