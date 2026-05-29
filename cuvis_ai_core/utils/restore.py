@@ -19,8 +19,45 @@ from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import GradientTrainer, StatisticalTrainer
 from cuvis_ai_core.training.config import TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
+from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.pipeline import PipelineConfig
+
+
+def _discover_plugins_dirs(
+    pipeline_path: Path,
+    explicit_dirs: list[str | Path] | None,
+    plugins_path: str | Path | None,
+) -> list[Path]:
+    """Build the list of candidate plugins directories for the resolver.
+
+    Resolution order (later entries win on plugin-name collisions):
+
+    1. Any ``configs/plugins/`` discovered by walking upward from
+       ``pipeline_path``'s parent.
+    2. The ``plugins_path`` kwarg if it points at a directory (its
+       file-pointing form is handled separately as a back-compat
+       single-manifest load — see ``restore_pipeline``).
+    3. Any ``--plugins-dir`` values from the CLI.
+    """
+    candidates: list[Path] = []
+    for ancestor in pipeline_path.resolve().parents:
+        candidate = ancestor / "configs" / "plugins"
+        if candidate.is_dir():
+            candidates.append(candidate)
+            break
+
+    if plugins_path is not None:
+        pp = Path(plugins_path)
+        if pp.is_dir():
+            candidates.append(pp)
+
+    if explicit_dirs:
+        candidates.extend(Path(p) for p in explicit_dirs)
+
+    return candidates
 
 
 class PipelineVisFormat(str, Enum):
@@ -48,6 +85,7 @@ def restore_pipeline(
     measurement_indices: list[int] | None = None,
     config_overrides: list[str] | None = None,
     plugins_path: str | Path | None = None,
+    plugins_dirs: list[str | Path] | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
 ) -> CuvisPipeline:
     """Restore pipeline from configuration and weights for inference.
@@ -67,7 +105,16 @@ def restore_pipeline(
     config_overrides : list[str] | None
         Optional list of config overrides in dot notation (e.g., ["nodes.10.hparams.output_dir=outputs/my_tb"])
     plugins_path : str | Path | None
-        Optional path to plugins manifest YAML file for loading external plugin nodes
+        Back-compat: path to a single plugins manifest YAML file (or a
+        plugins directory). When this points at a directory, it is merged
+        into ``plugins_dirs``. When it points at a file, the file is
+        loaded directly via the legacy aggregator-manifest path.
+    plugins_dirs : list[str | Path] | None
+        Optional list of plugins directories to scan for per-plugin
+        manifests. Used by the pipeline-driven plugin resolver
+        (ALL-5349 item 02). When omitted, the resolver still discovers
+        ``configs/plugins/`` siblings by walking up from the pipeline
+        YAML.
     pipeline_vis_ext : PipelineVisFormat | None
         Optional pipeline visualization export format.
         If provided, saves visualization next to the pipeline YAML file.
@@ -87,17 +134,37 @@ def restore_pipeline(
 
     logger.info(f"Loading pipeline from {pipeline_path}")
 
-    # Load plugins if specified
-    registry = None
-    if plugins_path:
-        from cuvis_ai_core.utils.node_registry import NodeRegistry
+    registry: NodeRegistry | None = None
 
-        registry = NodeRegistry()
-        plugins_path = Path(plugins_path)
-        if not plugins_path.exists():
-            raise FileNotFoundError(f"Plugins manifest not found: {plugins_path}")
-        registry.load_plugins(plugins_path)
-        logger.info(f"Loaded plugins from: {plugins_path}")
+    # Back-compat: aggregator manifest file via plugins_path bypasses the
+    # resolver entirely. Eager-loads every entry — same as before this PR.
+    if plugins_path is not None:
+        plugins_path_obj = Path(plugins_path)
+        if not plugins_path_obj.exists():
+            raise FileNotFoundError(f"Plugins manifest not found: {plugins_path_obj}")
+        if plugins_path_obj.is_file():
+            registry = NodeRegistry()
+            registry.load_plugins(plugins_path_obj)
+            logger.info(f"Loaded plugins from aggregator manifest: {plugins_path_obj}")
+
+    if registry is None and pipeline_path.is_file():
+        # Pipeline-driven plugin resolution (ALL-5349 item 02 — Phase 1 + 2).
+        # Skip when the file doesn't exist on disk — mocked/programmatic
+        # callers handle pipeline loading downstream without our pre-read.
+        pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
+        candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs, plugins_path)
+        # Only engage the resolver when the user has declared plugins OR a
+        # catalog dir is discoverable. A pipeline that uses only built-in
+        # core nodes falls through to legacy behavior.
+        if pipeline_cfg.plugins or candidate_dirs:
+            resolved_plugins = resolve_pipeline_plugins(pipeline_cfg, candidate_dirs)
+            if resolved_plugins:
+                registry = NodeRegistry()
+                for name, cfg in resolved_plugins.items():
+                    registry.load_plugin(name, cfg.model_dump())
+                logger.info(
+                    f"Materialised plugins from pipeline declaration: {sorted(resolved_plugins)}"
+                )
 
     load_device = device if device != "auto" else None
     pipeline = CuvisPipeline.load_pipeline(
@@ -550,7 +617,17 @@ Examples:
         "--plugins-path",
         type=str,
         default=None,
-        help="Path to plugins manifest YAML file for loading external plugin nodes",
+        help="Path to plugins manifest YAML file (or a plugins directory) for "
+        "loading external plugin nodes. A file argument uses the legacy "
+        "aggregator-manifest path; a directory is merged into --plugins-dir.",
+    )
+    parser.add_argument(
+        "--plugins-dir",
+        action="append",
+        default=None,
+        help="Plugins directory containing per-plugin manifest YAML files. "
+        "Can be specified multiple times. The pipeline's `plugins:` field "
+        "(or auto-resolution) looks up entries against the merged catalog.",
     )
     parser.add_argument(
         "--pipeline-vis-ext",
@@ -582,6 +659,7 @@ Examples:
         measurement_indices=meas_indices,
         config_overrides=args.override,
         plugins_path=args.plugins_path,
+        plugins_dirs=args.plugins_dir,
         pipeline_vis_ext=vis_ext,
     )
 
