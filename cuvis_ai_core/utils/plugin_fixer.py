@@ -1,19 +1,19 @@
-"""Phase 4 fix-it tool for the mandatory ``plugins:`` field.
+"""Fix-it tool for the mandatory ``plugins:`` field in pipeline yamls.
 
-After Phase 4 of ALL-5349, a pipeline yaml that omits the top-level
-``plugins:`` field is rejected by ``LoadPipeline`` / ``restore-pipeline``
-with a fix-it hint pointing the user at this module's CLI:
+A pipeline yaml that omits the top-level ``plugins:`` field is rejected
+by ``LoadPipeline`` / ``restore-pipeline`` with a fix-it hint pointing
+the user at this module's CLI:
 
     uv run suggest-plugins-fix --pipeline-path foo.yaml
 
-The CLI runs the same exact-match heuristic the warning-emitting Phase 2
-auto-resolver did, but in a non-fatal mode: it emits a patched yaml on
-stdout (default), a unified diff, or a machine-readable JSON envelope,
-and the user pipes / applies the result to silence the error.
+The CLI runs the exact-match resolver heuristic in a non-fatal mode and
+emits a patched yaml on stdout (default), a unified diff, or a
+machine-readable JSON envelope. The user pipes / applies the result to
+silence the error.
 
-The reorder helper is also the canonical implementation that the
-one-off backfill script
-(``cuvis-ai/scripts/backfill_pipeline_plugins.py``) imports.
+The reorder helper is the canonical implementation that the one-off
+backfill script (``cuvis-ai/scripts/backfill_pipeline_plugins.py``)
+also imports.
 """
 
 from __future__ import annotations

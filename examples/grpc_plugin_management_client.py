@@ -1,13 +1,12 @@
 """
 gRPC Plugin Management Client Example
 
-ALL-5349 Phase 3 semantics: ``LoadPlugins`` no longer installs plugins on
-call — it registers manifest entries as catalog metadata. Plugins
-materialise lazily when ``LoadPipeline`` references them via the pipeline
-yaml's ``plugins:`` field. Pre-Phase-3 clients that expected eager install
-must migrate to this two-step pattern.
+``LoadPlugins`` does not install plugins on call — it registers manifest
+entries as catalog metadata. Plugins materialise lazily when
+``LoadPipeline`` references them via the pipeline yaml's ``plugins:``
+field. Clients that expect eager install need the two-step pattern below.
 
-This example demonstrates the new flow:
+This example demonstrates the flow:
 1. Create a session
 2. Register plugins into the session catalog (``LoadPlugins``)
 3. Load a pipeline that names which plugins to materialise

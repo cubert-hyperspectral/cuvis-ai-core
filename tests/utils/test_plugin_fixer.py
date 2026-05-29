@@ -1,4 +1,4 @@
-"""Tests for the Phase 4 suggest-plugins-fix tool."""
+"""Tests for the suggest-plugins-fix tool."""
 
 from __future__ import annotations
 

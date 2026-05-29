@@ -1,8 +1,8 @@
-"""Tests for ALL-5349 item 02 — pipeline-driven plugin resolution in LoadPipeline.
+"""Tests for pipeline-driven plugin resolution in LoadPipeline.
 
-These tests exercise the integration between the pipeline yaml's
-``plugins:`` field, the session's ``search_paths``, and the resolver
-inside ``PipelineService.load_pipeline``.
+Exercise the integration between the pipeline yaml's ``plugins:`` field,
+the session's ``search_paths``, and the resolver inside
+``PipelineService.load_pipeline``.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Pat
 
 @pytest.mark.slow
 class TestLoadPipelinePluginResolution:
-    """Plugin resolution happens inside LoadPipeline (ALL-5349 item 02)."""
+    """Plugin resolution happens inside LoadPipeline."""
 
     def setup_method(self):
         NodeRegistry.clear()
@@ -154,12 +154,11 @@ class TestLoadPipelinePluginResolution:
         assert "wanted_plugin" in session.loaded_plugins
         assert "other_plugin" not in session.loaded_plugins
 
-    def test_phase4_missing_plugins_field_returns_invalid_argument(
+    def test_missing_plugins_field_returns_invalid_argument(
         self, tmp_path, create_plugin_pyproject
     ):
-        """ALL-5349 Phase 4: pipelines without ``plugins:`` are rejected with
-        INVALID_ARGUMENT and a fix-it message pointing at suggest-plugins-fix.
-        Phase 1+2's silent auto-resolution path is gone."""
+        """Pipelines without ``plugins:`` are rejected with INVALID_ARGUMENT
+        and a fix-it message pointing at suggest-plugins-fix."""
         plugin_dir = tmp_path / "auto_plugin"
         fqcn = _make_plugin_files(
             plugin_root=plugin_dir,
@@ -175,7 +174,7 @@ class TestLoadPipelinePluginResolution:
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
             pipeline=cuvis_ai_pb2.PipelineConfig(
-                # No plugins field — Phase 4 hard-fails.
+                # No plugins field — resolver hard-fails.
                 config_bytes=_make_pipeline_config_bytes(node_class_name=fqcn),
             ),
         )

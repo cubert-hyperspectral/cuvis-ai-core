@@ -112,7 +112,7 @@ def restore_pipeline(
     plugins_dirs : list[str | Path] | None
         Optional list of plugins directories to scan for per-plugin
         manifests. Used by the pipeline-driven plugin resolver
-        (ALL-5349 item 02). When omitted, the resolver still discovers
+        When omitted, the resolver still discovers
         ``configs/plugins/`` siblings by walking up from the pipeline
         YAML.
     pipeline_vis_ext : PipelineVisFormat | None
@@ -148,7 +148,7 @@ def restore_pipeline(
             logger.info(f"Loaded plugins from aggregator manifest: {plugins_path_obj}")
 
     if registry is None and pipeline_path.is_file():
-        # Pipeline-driven plugin resolution (ALL-5349 item 02 — Phase 1 + 2).
+        # Pipeline-driven plugin resolution: materialise only what the pipeline declares.
         # Skip when the file doesn't exist on disk — mocked/programmatic
         # callers handle pipeline loading downstream without our pre-read.
         pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)

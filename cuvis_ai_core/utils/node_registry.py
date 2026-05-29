@@ -39,9 +39,9 @@ class NodeRegistry:
         self.plugin_registry: Dict[str, type] = {}
         self.plugin_configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
         self.plugin_class_map: Dict[str, str] = {}
-        # ALL-5349 Phase 3: catalog entries are manifest metadata the session
-        # *knows about* but has not installed/imported. `load_plugin(name)` with
-        # no explicit config materialises a catalog entry on demand.
+        # Catalog entries are manifest metadata the session *knows about* but
+        # has not installed/imported. `load_plugin(name)` with no explicit
+        # config materialises a catalog entry on demand.
         self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
         self.cache_dir: Path = Path.home() / ".cuvis_plugins"
 
@@ -338,10 +338,10 @@ class NodeRegistry:
         """
         Register plugin metadata into the session's catalog WITHOUT installing.
 
-        ALL-5349 Phase 3: a catalog entry is "this plugin is known and the
-        session can materialise it on demand". Calling this does NOT clone,
-        install dependencies, mutate sys.path, or import any modules — those
-        side effects are deferred to ``load_plugin(name)`` (called by the
+        A catalog entry is "this plugin is known and the session can
+        materialise it on demand". Calling this does NOT clone, install
+        dependencies, mutate sys.path, or import any modules — those side
+        effects are deferred to ``load_plugin(name)`` (called by the
         ``LoadPipeline`` resolver path when a pipeline actually references
         the plugin).
 
@@ -393,7 +393,7 @@ class NodeRegistry:
         - Built-in nodes: accessed via class (NodeRegistry.get("MinMaxNormalizer"))
         - Plugin nodes: require instance (registry = NodeRegistry(); registry.load_plugin(...))
 
-        ALL-5349 Phase 3 early-exit hierarchy:
+        Early-exit hierarchy:
         1. If ``name in self.plugin_configs`` → already materialised, return.
         2. If ``config is None`` and ``name in self.plugin_catalog`` →
            materialise from the catalog entry (the resolver-populated path).
@@ -412,7 +412,7 @@ class NodeRegistry:
                 already hold absolute paths).
 
         Examples:
-            # ✅ CORRECT: Explicit config (Phase 1+2 style)
+            # ✅ CORRECT: Explicit config
             registry = NodeRegistry()
             registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
@@ -420,7 +420,7 @@ class NodeRegistry:
                 "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
             })
 
-            # ✅ CORRECT: Catalog fast path (Phase 3 style)
+            # ✅ CORRECT: Catalog fast path (register-then-materialise)
             registry = NodeRegistry()
             registry.register_catalog_entries({"adaclip": adaclip_config})
             registry.load_plugin("adaclip")  # materialises from catalog
@@ -447,10 +447,10 @@ class NodeRegistry:
             logger.debug(f"Plugin '{name}' already loaded, skipping")
             return
 
-        # Phase 3 catalog fast path: no explicit config given, but the name
-        # is in the catalog → materialise from there. The catalog already
-        # holds parsed GitPluginConfig / LocalPluginConfig objects with
-        # absolute paths, so we skip the parse step entirely.
+        # Catalog fast path: no explicit config given, but the name is in
+        # the catalog → materialise from there. The catalog already holds
+        # parsed GitPluginConfig / LocalPluginConfig objects with absolute
+        # paths, so we skip the parse step entirely.
         if config is None:
             if name not in self.plugin_catalog:
                 raise KeyError(

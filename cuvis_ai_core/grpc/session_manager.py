@@ -38,14 +38,12 @@ class SessionState:
     )
     is_training: bool = False
     trainer: Any | None = None
-    # Plugins registered into this session's catalog. ALL-5349 Phase 3
-    # semantics: this dict tracks what the session *knows about* (parsed
-    # manifest entries), NOT what has been installed/imported. Materialised
-    # plugins live in ``node_registry.plugin_configs``; the actual class
-    # set is in ``node_registry.plugin_registry``. The proto-level field
-    # name was renamed ``loaded_plugins`` → ``registered_plugins`` to match
-    # this semantics shift; the Python attribute name is retained because
-    # renaming it crosses too many read sites for the value delivered.
+    # Plugins registered into this session's catalog. This dict tracks what
+    # the session *knows about* (parsed manifest entries), NOT what has been
+    # installed/imported. Materialised plugins live in
+    # ``node_registry.plugin_configs``; the actual class set is in
+    # ``node_registry.plugin_registry``. On the wire this is the
+    # ``registered_plugins`` field of ``LoadPluginsResponse``.
     loaded_plugins: dict[str, dict] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)

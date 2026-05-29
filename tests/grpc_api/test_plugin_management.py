@@ -81,10 +81,10 @@ class WorkflowTestNode(Node):
             assert info_resp.plugin.name == "workflow_plugin"
             assert info_resp.plugin.type == "local"
 
-            # Step 6: List available nodes — Phase 3: plugin nodes are NOT
-            # importable yet. LoadPlugins only registered into the catalog;
-            # only LoadPipeline triggers the import. ListAvailableNodes
-            # therefore returns built-ins only.
+            # Step 6: List available nodes — plugin nodes are NOT importable
+            # yet. LoadPlugins only registered into the catalog; only
+            # LoadPipeline triggers the import. ListAvailableNodes therefore
+            # returns built-ins only.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
@@ -254,10 +254,10 @@ class IsolatedNode(Node):
             )
             assert len(list2_resp.plugins) == 0
 
-            # Phase 3: Plugin registered in session1's catalog but not
-            # materialised yet — ListAvailableNodes returns built-ins only.
-            # Session2 likewise sees only built-ins. Session isolation is
-            # asserted via ListLoadedPlugins (catalog) above.
+            # Plugin registered in session1's catalog but not materialised
+            # yet — ListAvailableNodes returns built-ins only. Session2
+            # likewise sees only built-ins. Session isolation is asserted
+            # via ListLoadedPlugins (catalog) above.
             nodes1_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session1_id)
             )
@@ -431,10 +431,10 @@ class NodeC(Node):
             assert "multi_node_plugin.nodes.NodeB" in info_resp.plugin.provides
             assert "multi_node_plugin.nodes.NodeC" in info_resp.plugin.provides
 
-            # Phase 3: catalog registration only — plugin nodes do not
-            # appear in ListAvailableNodes until LoadPipeline materialises
-            # the plugin. The catalog-side assertion is via the
-            # GetPluginInfo.provides check above.
+            # Catalog registration only — plugin nodes do not appear in
+            # ListAvailableNodes until LoadPipeline materialises the plugin.
+            # The catalog-side assertion is via the GetPluginInfo.provides
+            # check above.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
@@ -560,13 +560,13 @@ class PluginNode(Node):
                 )
             )
 
-            # ALL-5349 Phase 3: ListAvailableNodes returns the *materialised*
-            # set. After only LoadPlugins (which registers into the catalog
-            # without importing), built-ins are the only nodes returned —
-            # the plugin's node appears once LoadPipeline materialises it
-            # via the catalog fast path. Driving that through gRPC requires
-            # a pipeline yaml that references the plugin; this test stops
-            # at the register-only assertion to keep the gRPC surface tight.
+            # ListAvailableNodes returns the *materialised* set. After only
+            # LoadPlugins (which registers into the catalog without
+            # importing), built-ins are the only nodes returned — the
+            # plugin's node appears once LoadPipeline materialises it via
+            # the catalog fast path. Driving that through gRPC requires a
+            # pipeline yaml that references the plugin; this test stops at
+            # the register-only assertion to keep the gRPC surface tight.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
@@ -576,8 +576,8 @@ class PluginNode(Node):
 
             plugin_nodes = [n for n in nodes_resp.nodes if n.class_name == "PluginNode"]
             assert plugin_nodes == [], (
-                "Phase 3: plugin nodes should NOT appear in ListAvailableNodes "
-                "until LoadPipeline materialises the plugin from the catalog."
+                "Plugin nodes should NOT appear in ListAvailableNodes until "
+                "LoadPipeline materialises the plugin from the catalog."
             )
 
             # Cleanup

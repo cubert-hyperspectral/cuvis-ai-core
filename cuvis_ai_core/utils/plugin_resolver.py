@@ -1,19 +1,17 @@
 """Pure resolver for pipeline plugin sets.
 
-Implements ALL-5349 item 02 (Phase 1 + Phase 2):
-
 * If ``pipeline_config.plugins`` is set, materialise each ``PluginRef``
   into a :class:`GitPluginConfig` or :class:`LocalPluginConfig` (core-side
   types) by either looking up the bare name / catalog ref in the catalog
   or accepting the inline form directly.
-* If ``pipeline_config.plugins`` is None/empty, auto-resolve the set from
-  ``nodes[*].class_name`` by exact match against catalog ``provides``
-  lists and emit a deprecation warning.
+* If ``pipeline_config.plugins`` is None/empty, the production wrapper
+  ``_auto_resolve`` hard-fails with a fix-it message pointing at
+  ``suggest-plugins-fix``; the pure heuristic ``_compute_auto_resolution``
+  stays callable for the fix-it tool itself.
 
 This module has **no side effects** — no install, no import, no
 ``NodeRegistry`` mutation. The caller decides how to materialise the
-returned plugin set (in-process ``NodeRegistry`` today; item 01's
-child-env composer later).
+returned plugin set.
 """
 
 from __future__ import annotations
@@ -177,9 +175,10 @@ def _auto_resolve(
 ) -> dict[str, PluginConfig]:
     """Production auto-resolve: heuristic + hard-fail with fix-it hint.
 
-    ALL-5349 Phase 4: the `plugins:` field is mandatory. If a pipeline reaches
-    this path it has omitted the field; we run the heuristic to suggest names,
-    then raise ``ValueError`` pointing the caller at ``suggest-plugins-fix``.
+    The ``plugins:`` field is mandatory in pipeline yamls. If a pipeline
+    reaches this path it has omitted the field; we run the heuristic to
+    suggest names, then raise ``ValueError`` pointing the caller at
+    ``suggest-plugins-fix``.
     """
     suggested = _compute_auto_resolution(class_names, catalog, plugins_dirs)
     msg = (
@@ -233,10 +232,10 @@ def resolve_pipeline_plugins(
     Final coverage check: every ``class_name`` in the pipeline must be
     provided by at least one entry in the resolved set.
 
-    Phase 1+2 is **single-version-per-plugin-name** — two ``PluginRef``s
-    resolving to the same name with diverging ``tag`` / ``repo`` /
-    ``path`` / ``provides`` raise a hard error. The ``(name, tag)`` cache
-    key and two-version coexistence belong to item 01.
+    Single-version-per-plugin-name: two ``PluginRef``s resolving to the
+    same name with diverging ``tag`` / ``repo`` / ``path`` / ``provides``
+    raise a hard error. Two-version coexistence will arrive when the
+    per-env plugin cache lands separately.
     """
     catalog = _build_catalog(plugins_dirs)
     class_names = [node.class_name for node in pipeline_config.nodes]
@@ -252,8 +251,8 @@ def resolve_pipeline_plugins(
                     msg = (
                         f"Plugin '{name}' is declared more than once in 'plugins:' "
                         f"with diverging configurations: {resolved[name].model_dump()} "
-                        f"vs {cfg.model_dump()}. Phase 1+2 does not support same-name "
-                        "multi-version coexistence — see ALL-5349 item 01."
+                        f"vs {cfg.model_dump()}. Same-name multi-version coexistence "
+                        "is not supported here."
                     )
                     raise ValueError(msg)
                 continue  # identical duplicate — ignore

@@ -165,17 +165,15 @@ class PluginService:
     ) -> cuvis_ai_pb2.LoadPluginsResponse:
         """Register manifest entries as catalog metadata in the session.
 
-        ALL-5349 Phase 3 semantics: this RPC no longer installs or imports
-        plugins. It parses the manifest, validates each entry, and registers
-        them as catalog metadata via
+        This RPC does not install or import plugins. It parses the manifest,
+        validates each entry, and registers them via
         ``session.node_registry.register_catalog_entries(...)``. Actual
         materialisation (clone, install, import) happens lazily when
-        ``LoadPipeline`` references the registered plugin via the pipeline
-        yaml's ``plugins:`` field.
+        ``LoadPipeline`` references the registered plugin through the
+        pipeline yaml's ``plugins:`` field.
 
-        The response field is ``registered_plugins`` (renamed from
-        ``loaded_plugins``); ``failed_plugins`` now reports per-entry
-        Pydantic validation failures, not install failures.
+        ``failed_plugins`` reports per-entry Pydantic validation failures;
+        install failures surface later in the ``LoadPipeline`` path.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context

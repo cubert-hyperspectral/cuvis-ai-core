@@ -164,10 +164,9 @@ def test_declared_missing_class_in_resolved_set(plugins_dir: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_phase4_missing_plugins_field_raises(plugins_dir: Path):
-    """ALL-5349 Phase 4: pipelines missing 'plugins:' now hard-fail with a
-    fix-it hint pointing at the suggest-plugins-fix CLI. Phase 1+2's
-    'warn-and-continue' path is gone."""
+def test_missing_plugins_field_raises_with_fix_it_hint(plugins_dir: Path):
+    """Pipelines missing 'plugins:' hard-fail with a fix-it hint pointing at
+    the suggest-plugins-fix CLI."""
     pipeline = _pipeline_with(
         [
             "cuvis_ai.node.anomaly.rx_detector.RXGlobal",

@@ -221,8 +221,8 @@ class TestNodeRegistry:
         assert "AvailableNode" in error_msg
 
 
-class TestPhase3CatalogSplit:
-    """ALL-5349 Phase 3: catalog entries (metadata) vs session-installed plugins."""
+class TestCatalogSplit:
+    """Catalog entries (metadata) vs session-installed plugins."""
 
     def setup_method(self):
         NodeRegistry.clear()

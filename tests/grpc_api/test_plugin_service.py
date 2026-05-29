@@ -85,21 +85,21 @@ class TestPluginNode(Node):
             session = self.session_manager.get_session(session_id)
             assert "test_plugin" in session.loaded_plugins
 
-            # ALL-5349 Phase 3: LoadPlugins registers into the catalog only;
-            # nothing is imported into plugin_registry until LoadPipeline
-            # materialises the plugin.
+            # LoadPlugins registers into the catalog only; nothing is
+            # imported into plugin_registry until LoadPipeline materialises
+            # the plugin.
             assert "test_plugin" in session.node_registry.plugin_catalog
             assert "TestPluginNode" not in session.node_registry.plugin_registry
         finally:
             sys.path.remove(str(tmp_path))
 
     def test_load_plugins_partial_failure(self, tmp_path, create_plugin_pyproject):
-        """ALL-5349 Phase 3: catalog registration only runs Pydantic validation
-        on each manifest entry; install failures move to ``LoadPipeline``.
-        Both a valid manifest entry and a nonexistent-path entry pass
-        Pydantic (LocalPluginConfig does NOT exists-check the path), so both
-        register successfully. The "partial failure" surface this test
-        originally covered (install failures) no longer happens here."""
+        """Catalog registration only runs Pydantic validation on each manifest
+        entry; install failures move to ``LoadPipeline``. Both a valid manifest
+        entry and a nonexistent-path entry pass Pydantic (LocalPluginConfig
+        does NOT exists-check the path), so both register successfully. The
+        "partial failure" surface this test originally covered (install
+        failures) no longer happens here."""
         # Create session
         session_id = self.session_manager.create_session()
 
@@ -151,8 +151,8 @@ class ValidNode(Node):
         try:
             response = self.plugin_service.load_plugins(request, self.mock_context)
 
-            # Phase 3: both entries register cleanly because Pydantic
-            # accepts a nonexistent path string. The install failure on
+            # Both entries register cleanly because Pydantic accepts a
+            # nonexistent path string. The install failure on
             # "unreachable_plugin" will surface later if a pipeline
             # actually references it.
             assert "valid_plugin" in response.registered_plugins
@@ -412,12 +412,12 @@ class TestNode(Node):
         assert len(builtin_node.icon_svg) > 0
 
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
-        """ALL-5349 Phase 3: ``LoadPlugins`` only registers into the catalog;
-        ``ListAvailableNodes`` returns the *materialised* set. So after a
-        bare ``LoadPlugins`` call the plugin's nodes do NOT appear yet —
-        only after the registry materialises them via the catalog fast
-        path (here triggered explicitly to keep the test focused on the
-        ListAvailableNodes contract)."""
+        """``LoadPlugins`` only registers into the catalog; ``ListAvailableNodes``
+        returns the *materialised* set. So after a bare ``LoadPlugins`` call
+        the plugin's nodes do NOT appear yet — only after the registry
+        materialises them via the catalog fast path (here triggered
+        explicitly to keep the test focused on the ListAvailableNodes
+        contract)."""
         # Create session
         session_id = self.session_manager.create_session()
 
@@ -462,8 +462,8 @@ class PluginTestNode(Node):
         try:
             self.plugin_service.load_plugins(load_request, self.mock_context)
 
-            # Phase 3: after LoadPlugins, ListAvailableNodes returns built-ins
-            # only — the plugin lives in the catalog but isn't imported yet.
+            # After LoadPlugins, ListAvailableNodes returns built-ins only —
+            # the plugin lives in the catalog but isn't imported yet.
             list_request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             pre_materialise = self.plugin_service.list_available_nodes(
                 list_request, self.mock_context
