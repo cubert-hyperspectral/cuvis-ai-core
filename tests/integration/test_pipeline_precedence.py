@@ -60,6 +60,15 @@ def test_pipeline_conflict_rejected(grpc_stub, minimal_pipeline_dict, tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.skip(
+    reason=(
+        "SetTrainRunConfig's implicit-pipeline-build behaviour no longer exists "
+        "in orchestrator-only mode: the orchestrator must know the plugin set "
+        "before composing the child env, so the pipeline must be loaded via "
+        "LoadPipeline or RestoreTrainRun first. The 'pipeline from config' "
+        "shortcut belongs in a separate compose path that this test predates."
+    )
+)
 def test_pipeline_built_from_trainrun_when_missing(grpc_stub, minimal_pipeline_dict):
     """TrainRunConfig should build pipeline when session has none."""
     session_id = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id

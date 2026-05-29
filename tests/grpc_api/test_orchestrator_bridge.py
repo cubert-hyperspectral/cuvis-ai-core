@@ -1,40 +1,60 @@
-"""Orchestrator-bridge dispatch tests.
+"""Orchestrator-bridge tests.
 
-Verifies the flag-gated branch in pipeline_service / inference_service /
-training_service: when ``CUVIS_USE_ORCHESTRATOR`` is off (default) the
-existing in-process path runs; when on AND a child handle is attached
-to the session, the call forwards to ``session.child_handle.stub()``.
+The bridge is the only dispatch path: every LoadPipeline / Inference
+/ Train / RestoreTrainRun call routes through it. The tests below
+exercise the injection seams (composer + spawner) and the
+in-memory mode used by the rest of the suite.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
+from cuvis_ai_core.grpc.orchestrator_bridge import (
+    _InMemoryChildHandle,
+    _InMemoryRpcError,
+    _InMemorySpawner,
+    _InMemoryStub,
+    _noop_composer,
+    install_in_memory_orchestrator,
+    reset_orchestrator,
+)
 
 
 # ---------------------------------------------------------------------------
-# orchestrator_enabled() flag parsing
+# Composer + spawner injection seams
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "YES", "on", "On"])
-def test_flag_on_for_truthy_values(monkeypatch, val):
-    monkeypatch.setenv("CUVIS_USE_ORCHESTRATOR", val)
-    assert orchestrator_bridge.orchestrator_enabled() is True
+def test_set_composer_overrides_default():
+    fake = MagicMock()
+    try:
+        orchestrator_bridge.set_composer(fake)
+        assert orchestrator_bridge.get_composer() is fake
+    finally:
+        orchestrator_bridge.reset_composer()
 
 
-@pytest.mark.parametrize("val", ["", "0", "false", "no", "off", "random"])
-def test_flag_off_for_falsy_or_unknown_values(monkeypatch, val):
-    monkeypatch.setenv("CUVIS_USE_ORCHESTRATOR", val)
-    assert orchestrator_bridge.orchestrator_enabled() is False
+def test_reset_composer_restores_default():
+    from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
+
+    orchestrator_bridge.set_composer(MagicMock())
+    orchestrator_bridge.reset_composer()
+    assert orchestrator_bridge.get_composer() is _real_compose_env
 
 
-def test_flag_off_when_unset(monkeypatch):
-    monkeypatch.delenv("CUVIS_USE_ORCHESTRATOR", raising=False)
-    assert orchestrator_bridge.orchestrator_enabled() is False
+def test_set_spawner_overrides_default():
+    fake = MagicMock(spec=_InMemorySpawner)
+    try:
+        orchestrator_bridge.set_spawner(fake)
+        assert orchestrator_bridge.get_spawner() is fake
+    finally:
+        orchestrator_bridge.reset_spawner()
 
 
 # ---------------------------------------------------------------------------
@@ -43,53 +63,85 @@ def test_flag_off_when_unset(monkeypatch):
 
 
 def test_detect_core_source_for_editable_install_returns_local():
-    """In this checkout cuvis_ai_core lives outside site-packages."""
     source = orchestrator_bridge.detect_core_source()
     assert source.kind in ("local", "pypi")
     if source.kind == "local":
-        # Identity points at the project root.
-        from pathlib import Path
-
         assert Path(source.identity).exists()
 
 
 # ---------------------------------------------------------------------------
-# ensure_child_for_session — short-circuit cases
+# In-memory mode: install_in_memory_orchestrator()
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_child_returns_existing_handle(monkeypatch):
-    """If a session already has a child handle, no re-spawn."""
+def test_install_in_memory_orchestrator_swaps_composer_and_spawner():
+    install_in_memory_orchestrator()
+    try:
+        assert orchestrator_bridge.get_composer() is _noop_composer
+        assert isinstance(orchestrator_bridge.get_spawner(), _InMemorySpawner)
+    finally:
+        reset_orchestrator()
 
-    existing = MagicMock(name="ExistingChildHandle")
 
-    class _FakeSession:
-        def __init__(self):
-            self.child_handle = existing
+def test_inmemory_spawner_returns_inmemory_child_handle(tmp_path):
+    from cuvis_ai_core.orchestrator.spawner import DeclaredPaths
 
-    class _FakeSessionMgr:
-        def get_session(self, _id):
-            return _FakeSession()
-
-    pipeline_config = MagicMock(plugins=["foo"])
-    handle = orchestrator_bridge.ensure_child_for_session(
-        _FakeSessionMgr(), "s1", pipeline_config, plugins_dirs=[]
+    declared = DeclaredPaths(output_dir=tmp_path / "o", scratch_dir=tmp_path / "s")
+    (tmp_path / "o").mkdir()
+    (tmp_path / "s").mkdir()
+    spawner = _InMemorySpawner()
+    handle = spawner.spawn(
+        venv_path=tmp_path / "venv",
+        cwd=tmp_path,
+        declared_paths=declared,
     )
-    assert handle is existing
+    assert isinstance(handle, _InMemoryChildHandle)
+    assert handle.endpoint == "in-memory"
+    assert handle.returncode == 0
 
 
-def test_ensure_child_returns_none_for_builtin_only(monkeypatch):
-    """No plugins declared, no plugins_dirs → no child needed."""
+def test_inmemory_handle_terminate_and_kill_idempotent(tmp_path):
+    from cuvis_ai_core.orchestrator.spawner import DeclaredPaths
 
-    class _FakeSession:
-        child_handle = None
-
-    class _FakeSessionMgr:
-        def get_session(self, _id):
-            return _FakeSession()
-
-    pipeline_config = MagicMock(plugins=None)
-    handle = orchestrator_bridge.ensure_child_for_session(
-        _FakeSessionMgr(), "s1", pipeline_config, plugins_dirs=[]
+    declared = DeclaredPaths(output_dir=tmp_path / "o", scratch_dir=tmp_path / "s")
+    (tmp_path / "o").mkdir()
+    (tmp_path / "s").mkdir()
+    spawner = _InMemorySpawner()
+    handle = spawner.spawn(
+        venv_path=tmp_path / "venv",
+        cwd=tmp_path,
+        declared_paths=declared,
     )
-    assert handle is None
+    assert handle.terminate(grace_s=1.0) == 0
+    assert handle.kill() == 0
+
+
+# ---------------------------------------------------------------------------
+# _InMemoryStub: error propagation
+# ---------------------------------------------------------------------------
+
+
+def test_inmemory_stub_propagates_grpc_error_codes():
+    """When the servicer sets a non-OK code, the stub raises an RpcError."""
+    from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+    servicer = RunRuntimeServicer()
+    stub = _InMemoryStub(servicer)
+    # InitializeSession with empty session_id sets INVALID_ARGUMENT.
+    with pytest.raises(_InMemoryRpcError) as excinfo:
+        stub.InitializeSession(cuvis_ai_pb2.InitializeSessionRequest(session_id=""))
+    import grpc
+
+    assert excinfo.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_inmemory_stub_returns_response_on_success():
+    from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+    servicer = RunRuntimeServicer()
+    stub = _InMemoryStub(servicer)
+    response = stub.HealthCheck(cuvis_ai_pb2.HealthCheckRequest())
+    assert (
+        response.status
+        == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+    )

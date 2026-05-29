@@ -202,11 +202,13 @@ def test_close_session_is_idempotent_for_unknown_id():
     assert response.success is True
 
 
-def test_restore_train_run_is_unimplemented_for_now():
+def test_restore_train_run_requires_initialize_session_first():
+    """Without an InitializeSession call, RestoreTrainRun has no session_id to attach to."""
     servicer = RunRuntimeServicer()
     ctx = FakeContext()
     servicer.RestoreTrainRun(cuvis_ai_pb2.RestoreTrainRunRequest(), ctx)
-    assert ctx.code == grpc.StatusCode.UNIMPLEMENTED
+    assert ctx.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert "InitializeSession" in (ctx.details or "")
 
 
 # ---------------------------------------------------------------------------

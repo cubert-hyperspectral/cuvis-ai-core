@@ -29,6 +29,16 @@ from cuvis_ai_core.orchestrator.spawner import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _use_real_spawner():
+    """Override the suite-wide in-memory orchestrator: this file tests the real spawner."""
+    from cuvis_ai_core.grpc import orchestrator_bridge
+
+    orchestrator_bridge.reset_orchestrator()
+    yield
+    orchestrator_bridge.install_in_memory_orchestrator()
+
+
 # ---------------------------------------------------------------------------
 # Pure helper tests
 # ---------------------------------------------------------------------------

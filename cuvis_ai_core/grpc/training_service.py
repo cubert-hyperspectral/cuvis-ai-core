@@ -46,17 +46,6 @@ class TrainingService:
         if session is None:
             return
 
-        # Orchestrator branch: the pipeline lives in the child runtime;
-        # re-yield the child stub's server-streaming responses so
-        # log / metric / progress events flow through unchanged.
-        from cuvis_ai_core.grpc import orchestrator_bridge
-
-        if orchestrator_bridge.orchestrator_enabled():
-            child = orchestrator_bridge.get_child(session)
-            if child is not None:
-                yield from child.stub().Train(request)
-                return
-
         if not require_pipeline(session, context):
             return
 

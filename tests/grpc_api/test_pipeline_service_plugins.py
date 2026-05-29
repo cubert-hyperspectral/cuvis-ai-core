@@ -76,6 +76,15 @@ def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Pat
 
 
 @pytest.mark.slow
+@pytest.mark.skip(
+    reason=(
+        "Resolver / install behaviour these tests assert on moved out of "
+        "PipelineService.load_pipeline into the orchestrator bridge; "
+        "PipelineService.load_pipeline is now the in-process build-and-attach "
+        "body the child runs after InitializeSession registers plugins. "
+        "Tests for resolver semantics belong in tests/grpc_api/test_orchestrator_bridge.py."
+    )
+)
 class TestLoadPipelinePluginResolution:
     """Plugin resolution happens inside LoadPipeline."""
 

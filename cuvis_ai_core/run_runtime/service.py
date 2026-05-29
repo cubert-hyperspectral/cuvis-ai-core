@@ -15,19 +15,17 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Iterator
 
 import grpc
-import torch
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 from loguru import logger
 
-from cuvis_ai_core.grpc.error_handling import get_session_or_error
 from cuvis_ai_core.grpc.inference_service import InferenceService
 from cuvis_ai_core.grpc.pipeline_service import PipelineService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.training_service import TrainingService
+from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.pipeline.restore_preinstalled import load_preinstalled_plugins
 from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
 
@@ -47,6 +45,12 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         self._pipeline_service = PipelineService(self._session_manager)
         self._inference_service = InferenceService(self._session_manager)
         self._training_service = TrainingService(self._session_manager)
+        self._trainrun_service = TrainRunService(self._session_manager)
+        # Session id the parent handed us via InitializeSession. The
+        # child runs at most one session per process, so caching the id
+        # here lets RestoreTrainRun attach its pipeline to that exact
+        # session even though RestoreTrainRunRequest carries no id.
+        self._initialized_session_id: str | None = None
         # Threading event the __main__ entry point waits on; set by
         # StopRun so the gRPC server can shut down cleanly.
         self._shutdown_event = shutdown_event or threading.Event()
@@ -90,6 +94,7 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         for name, cfg in resolved_plugins.items():
             session.registered_plugins[name] = cfg.model_dump()
 
+        self._initialized_session_id = request.session_id
         logger.info(
             f"Initialised child session {request.session_id} with "
             f"{len(resolved_plugins)} preinstalled plugins; "
@@ -106,51 +111,12 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         request: cuvis_ai_pb2.LoadPipelineRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPipelineResponse:
-        session = get_session_or_error(
-            self._session_manager, request.session_id, context
-        )
-        if session is None:
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-
-        if not request.pipeline or not request.pipeline.config_bytes:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details("pipeline.config_bytes is required")
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-
-        from cuvis_ai_core.pipeline.factory import PipelineBuilder
-        from cuvis_ai_core.training.config import PipelineConfig
-
-        try:
-            config_dict = json.loads(request.pipeline.config_bytes)
-            config_dict.pop("version", None)
-            pipeline_config = PipelineConfig(**config_dict)
-
-            pipeline = PipelineBuilder(
-                node_registry=session.node_registry
-            ).build_from_config(pipeline_config.to_dict())
-            if torch.cuda.is_available():
-                pipeline = pipeline.to("cuda")
-
-            self._session_manager.set_pipeline(
-                request.session_id,
-                pipeline,
-                pipeline_config=pipeline_config,
-            )
-        except Exception as exc:
-            logger.exception("Child LoadPipeline failed")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"LoadPipeline failed: {exc}")
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-
-        metadata_proto = (
-            pipeline_config.metadata.to_proto()
-            if getattr(pipeline_config, "metadata", None)
-            else cuvis_ai_pb2.PipelineMetadata()
-        )
-        return cuvis_ai_pb2.LoadPipelineResponse(
-            success=True,
-            metadata=metadata_proto,
-        )
+        # The shared ``PipelineService.load_pipeline`` body builds the
+        # pipeline against ``session.node_registry``. Plugins are
+        # already registered there from ``InitializeSession`` so the
+        # build resolves every node by class name without touching the
+        # in-process install / clone / sys.path code paths.
+        return self._pipeline_service.load_pipeline(request, context)
 
     def LoadPipelineWeights(
         self,
@@ -159,25 +125,68 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
         return self._pipeline_service.load_pipeline_weights(request, context)
 
+    def SavePipeline(
+        self,
+        request: cuvis_ai_pb2.SavePipelineRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.SavePipelineResponse:
+        return self._pipeline_service.save_pipeline(request, context)
+
+    def SaveTrainRun(
+        self,
+        request: cuvis_ai_pb2.SaveTrainRunRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.SaveTrainRunResponse:
+        return self._trainrun_service.save_train_run(request, context)
+
+    def GetPipelineInputs(self, request, context):
+        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
+
+        if not hasattr(self, "_introspection_service"):
+            self._introspection_service = IntrospectionService(self._session_manager)
+        return self._introspection_service.get_pipeline_inputs(request, context)
+
+    def GetPipelineOutputs(self, request, context):
+        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
+
+        if not hasattr(self, "_introspection_service"):
+            self._introspection_service = IntrospectionService(self._session_manager)
+        return self._introspection_service.get_pipeline_outputs(request, context)
+
+    def GetPipelineVisualization(self, request, context):
+        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
+
+        if not hasattr(self, "_introspection_service"):
+            self._introspection_service = IntrospectionService(self._session_manager)
+        return self._introspection_service.get_pipeline_visualization(request, context)
+
+    def SetTrainRunConfig(self, request, context):
+        return self._pipeline_service.set_train_run_config(request, context)
+
+    def GetTrainStatus(self, request, context):
+        return self._training_service.get_train_status(request, context)
+
     def RestoreTrainRun(
         self,
         request: cuvis_ai_pb2.RestoreTrainRunRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.RestoreTrainRunResponse:
-        # The child only mirrors the public RestoreTrainRun shape; the
-        # actual handler lives on a public servicer this child does not
-        # import. The parent currently always wraps RestoreTrainRun by
-        # first parsing the trainrun YAML and calling LoadPipeline /
-        # set_pipeline directly, so this RPC is a stub the parent does
-        # not invoke yet. Returning UNIMPLEMENTED keeps the contract
-        # explicit instead of silently misbehaving.
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details(
-            "RunRuntime.RestoreTrainRun is not yet wired; the parent handles "
-            "trainrun restore by composing the env then forwarding a "
-            "LoadPipeline. Wire this in Phase 3b follow-up if needed."
+        # The public RestoreTrainRunRequest carries no session_id; the
+        # parent has already created its session and handed us the id
+        # via InitializeSession. We reuse that id so the trainrun's
+        # pipeline lands on the same session the parent reports back
+        # to its caller.
+        if self._initialized_session_id is None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(
+                "InitializeSession must be called before RestoreTrainRun."
+            )
+            return cuvis_ai_pb2.RestoreTrainRunResponse()
+        return self._trainrun_service.restore_train_run(
+            request,
+            context,
+            target_session_id=self._initialized_session_id,
         )
-        return cuvis_ai_pb2.RestoreTrainRunResponse()
 
     # ------------------------------------------------------------------
     # Execution

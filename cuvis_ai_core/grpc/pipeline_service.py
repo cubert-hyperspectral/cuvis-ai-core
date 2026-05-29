@@ -199,20 +199,16 @@ class PipelineService:
         request: cuvis_ai_pb2.LoadPipelineRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPipelineResponse:
-        """Load pipeline structure from resolved config bytes.
+        """Build a pipeline from resolved config bytes and attach it to the session.
 
-        Expected workflow:
-        1) ResolveConfig to produce JSON config bytes
-        2) LoadPipeline to build pipeline structure
-        3) LoadPipelineWeights to load weights (optional, explicit)
-
-        Plugin handling:
-        * If ``pipeline_config.plugins`` is set, resolve only that declared
-          set against the per-session plugin catalog.
-        * Otherwise raise with a fix-it hint generated from exact-match
-          catalog resolution.
-        * The catalog dirs come from each ``<search_path>/plugins/`` in
-          ``session.search_paths`` (settable via SetSessionSearchPaths).
+        This method is the **in-process** body that runs inside the
+        child runtime. Plugins must already be registered on
+        ``session.node_registry`` (via
+        :func:`cuvis_ai_core.pipeline.restore_preinstalled.load_preinstalled_plugins`,
+        which the child invokes from ``InitializeSession``). Plugin
+        resolution and dependency installation happen at the
+        orchestrator level — see
+        :mod:`cuvis_ai_core.grpc.orchestrator_bridge`.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -225,74 +221,17 @@ class PipelineService:
             context.set_details("pipeline.config_bytes is required")
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
-        from cuvis_ai_core.grpc import orchestrator_bridge
         from cuvis_ai_core.pipeline.factory import PipelineBuilder
         from cuvis_ai_core.training.config import PipelineConfig
-        from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 
         config_dict = json.loads(request.pipeline.config_bytes)
         # Some YAML sources include a top-level version field that is not part of the schema.
         config_dict.pop("version", None)
         pipeline_config = PipelineConfig(**config_dict)
 
-        # Build candidate plugins dirs from the session's search paths.
-        plugins_dirs: list[Path] = []
-        for search_path in session.search_paths:
-            candidate = Path(search_path) / "plugins"
-            if candidate.is_dir():
-                plugins_dirs.append(candidate)
-
-        # Orchestrator branch: compose a per-pipeline child venv and forward
-        # the request to the child runtime. Opt-in via CUVIS_USE_ORCHESTRATOR;
-        # falls through to the in-process path for builtin-only pipelines or
-        # when the flag is off.
-        if orchestrator_bridge.orchestrator_enabled():
-            child = orchestrator_bridge.ensure_child_for_session(
-                self.session_manager,
-                request.session_id,
-                pipeline_config,
-                plugins_dirs,
-            )
-            if child is not None:
-                return child.stub().LoadPipeline(request)
-
-        # The resolver only engages when the user has declared plugins OR a
-        # catalog dir is discoverable. A pipeline that uses only built-in
-        # core nodes falls through to legacy behavior (NodeRegistry resolves
-        # built-ins by class path directly). PipelineBuilder will raise a
-        # clear "class not found" error at node instantiation for any
-        # plugin-provided class that was not loaded.
-        if pipeline_config.plugins or plugins_dirs:
-            resolved_plugins = resolve_pipeline_plugins(pipeline_config, plugins_dirs)
-            # Register everything into the session catalog in one shot, then
-            # materialise via the catalog fast path — consistent with the
-            # register-then-materialise model that LoadPlugins follows.
-            session.node_registry.register_catalog_entries(resolved_plugins)
-            for name, cfg in resolved_plugins.items():
-                if name in session.node_registry.plugin_configs:
-                    continue  # already materialised in this session
-                session.node_registry.load_plugin(name)  # catalog fast path
-                # Keep session.registered_plugins in sync so ListLoadedPlugins /
-                # GetPluginInfo reflect plugins materialised via LoadPipeline.
-                session.registered_plugins[name] = cfg.model_dump()
-        elif pipeline_config.plugins is not None:
-            # Pipeline explicitly declared an empty plugins list AND nothing
-            # in the session catalog — surface a precondition error so the
-            # caller knows the explicit-empty form is intentional but
-            # unsatisfiable when the pipeline needs plugin nodes.
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "Pipeline declares an empty 'plugins:' list and no plugin "
-                "catalog is discoverable from session.search_paths. Add "
-                "entries to 'plugins:' or call SetSessionSearchPaths with a "
-                "path containing a 'plugins/' subdirectory."
-            )
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-
         pipeline = PipelineBuilder(
             node_registry=session.node_registry
         ).build_from_config(pipeline_config.to_dict())
-        # Move pipeline to GPU if available
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
 
@@ -307,7 +246,6 @@ class PipelineService:
             if getattr(pipeline_config, "metadata", None)
             else cuvis_ai_pb2.PipelineMetadata()
         )
-
         return cuvis_ai_pb2.LoadPipelineResponse(success=True, metadata=metadata_proto)
 
 

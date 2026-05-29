@@ -36,14 +36,6 @@ class InferenceService:
         if session is None:
             return cuvis_ai_pb2.InferenceResponse()
 
-        # Orchestrator branch: the pipeline lives in the child runtime.
-        from cuvis_ai_core.grpc import orchestrator_bridge
-
-        if orchestrator_bridge.orchestrator_enabled():
-            child = orchestrator_bridge.get_child(session)
-            if child is not None:
-                return child.stub().Inference(request)
-
         if not require_pipeline(session, context):
             return cuvis_ai_pb2.InferenceResponse()
 

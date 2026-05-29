@@ -136,6 +136,27 @@ def mock_statistical_trainable_node():
 
 
 @pytest.fixture(autouse=True)
+def orchestrator_in_memory_mode():
+    """Route every test through the in-memory orchestrator by default.
+
+    The orchestrator is the only execution path in production: every
+    LoadPipeline / Inference / Train / RestoreTrainRun call spawns a
+    child runtime inside a composed venv. Doing that literally per
+    test would mean running `uv lock` / `uv sync` thousands of times,
+    so the test suite swaps in :func:`install_in_memory_orchestrator`
+    which routes the same calls through a ``RunRuntimeServicer``
+    instance in the same process — same code paths, no subprocess.
+    Tests that need real spawning (e.g. ``tests/orchestrator/test_spawner.py``)
+    call :func:`reset_orchestrator` in a local fixture.
+    """
+    from cuvis_ai_core.grpc import orchestrator_bridge
+
+    orchestrator_bridge.install_in_memory_orchestrator()
+    yield
+    orchestrator_bridge.reset_orchestrator()
+
+
+@pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset any global state between tests.
 

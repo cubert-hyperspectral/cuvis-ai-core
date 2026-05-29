@@ -71,18 +71,30 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def LoadPipelineWeights(
         self, request, context
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
-        return self.pipeline_service.load_pipeline_weights(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_load_pipeline_weights(
+            self.session_manager, request, context
+        )
 
     def SetTrainRunConfig(
         self, request, context
     ) -> cuvis_ai_pb2.SetTrainRunConfigResponse:
-        return self.pipeline_service.set_train_run_config(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_set_train_run_config(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
     def Inference(self, request, context) -> cuvis_ai_pb2.InferenceResponse:
-        return self.inference_service.inference(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_inference(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Pipeline Introspection
@@ -90,44 +102,80 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def GetPipelineInputs(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineInputsResponse:
-        return self.introspection_service.get_pipeline_inputs(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_get_pipeline_inputs(
+            self.session_manager, request, context
+        )
 
     def GetPipelineOutputs(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineOutputsResponse:
-        return self.introspection_service.get_pipeline_outputs(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_get_pipeline_outputs(
+            self.session_manager, request, context
+        )
 
     def GetPipelineVisualization(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
-        return self.introspection_service.get_pipeline_visualization(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_get_pipeline_visualization(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
     def Train(self, request, context) -> Iterable[cuvis_ai_pb2.TrainResponse]:
-        return self.training_service.train(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_train(
+            self.session_manager, request, context
+        )
 
     def GetTrainStatus(self, request, context) -> cuvis_ai_pb2.GetTrainStatusResponse:
-        return self.training_service.get_train_status(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_get_train_status(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Pipeline Management (Model Deployment)
     # ------------------------------------------------------------------
     def SavePipeline(self, request, context) -> cuvis_ai_pb2.SavePipelineResponse:
-        return self.pipeline_service.save_pipeline(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_save_pipeline(
+            self.session_manager, request, context
+        )
 
     def LoadPipeline(self, request, context) -> cuvis_ai_pb2.LoadPipelineResponse:
-        return self.pipeline_service.load_pipeline(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_load_pipeline(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Experiment Management (Reproducibility)
     # ------------------------------------------------------------------
     def SaveTrainRun(self, request, context) -> cuvis_ai_pb2.SaveTrainRunResponse:
-        return self.trainrun_service.save_train_run(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_save_train_run(
+            self.session_manager, request, context
+        )
 
     def RestoreTrainRun(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
-        return self.trainrun_service.restore_train_run(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_restore_train_run(
+            self.session_manager, request, context
+        )
 
     # ------------------------------------------------------------------
     # Pipeline Discovery
