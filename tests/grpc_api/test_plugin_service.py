@@ -83,7 +83,7 @@ class TestPluginNode(Node):
 
             # Verify session state updated
             session = self.session_manager.get_session(session_id)
-            assert "test_plugin" in session.loaded_plugins
+            assert "test_plugin" in session.registered_plugins
 
             # LoadPlugins registers into the catalog only; nothing is
             # imported into plugin_registry until LoadPipeline materialises

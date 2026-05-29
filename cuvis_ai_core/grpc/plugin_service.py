@@ -197,7 +197,7 @@ class PluginService:
         for plugin_name, config in manifest.plugins.items():
             try:
                 session.node_registry.register_catalog_entries({plugin_name: config})
-                session.loaded_plugins[plugin_name] = config.model_dump()
+                session.registered_plugins[plugin_name] = config.model_dump()
                 registered.append(plugin_name)
                 logger.info(
                     f"Registered plugin '{plugin_name}' in session "
@@ -227,7 +227,7 @@ class PluginService:
             return cuvis_ai_pb2.ListLoadedPluginsResponse()
 
         plugins = []
-        for name, config in session.loaded_plugins.items():
+        for name, config in session.registered_plugins.items():
             plugin_type = "git" if "repo" in config else "local"
             source = config.get("repo") or config.get("path", "")
             tag = config.get("tag", "")
@@ -258,12 +258,12 @@ class PluginService:
         if session is None:
             return cuvis_ai_pb2.GetPluginInfoResponse()
 
-        if request.plugin_name not in session.loaded_plugins:
+        if request.plugin_name not in session.registered_plugins:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Plugin '{request.plugin_name}' not loaded in session")
             return cuvis_ai_pb2.GetPluginInfoResponse()
 
-        config = session.loaded_plugins[request.plugin_name]
+        config = session.registered_plugins[request.plugin_name]
         plugin_type = "git" if "repo" in config else "local"
         source = config.get("repo") or config.get("path", "")
         tag = config.get("tag", "")
@@ -346,7 +346,7 @@ class PluginService:
             # Find which plugin provides this node
             plugin_name = ""
             full_path = class_name
-            for pname, config in session.loaded_plugins.items():
+            for pname, config in session.registered_plugins.items():
                 for provided_path in config.get("provides", []):
                     if provided_path.endswith(class_name) or provided_path.endswith(
                         f".{class_name}"

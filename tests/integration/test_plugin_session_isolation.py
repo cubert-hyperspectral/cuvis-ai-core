@@ -82,7 +82,7 @@ class CustomNode(Node):
                 "provides": ["plugin1.node.CustomNode"],
             }
             state1.node_registry.load_plugin("plugin1", config1)
-            state1.loaded_plugins["plugin1"] = config1
+            state1.registered_plugins["plugin1"] = config1
 
             # Load plugin2 into session2's registry instance
             config2 = {
@@ -90,7 +90,7 @@ class CustomNode(Node):
                 "provides": ["plugin2.node.CustomNode"],
             }
             state2.node_registry.load_plugin("plugin2", config2)
-            state2.loaded_plugins["plugin2"] = config2
+            state2.registered_plugins["plugin2"] = config2
 
             # Build pipeline using session1's registry - should use plugin1 version
             builder1 = PipelineBuilder(node_registry=state1.node_registry)
@@ -153,7 +153,7 @@ class CleanupTestNode(Node):
                 "provides": ["cleanup_test_plugin.node.CleanupTestNode"],
             }
             session_state.node_registry.load_plugin("cleanup_test_plugin", config)
-            session_state.loaded_plugins["cleanup_test_plugin"] = config
+            session_state.registered_plugins["cleanup_test_plugin"] = config
 
             # Verify plugin is registered in session's instance
             assert "CleanupTestNode" in session_state.node_registry.plugin_registry
@@ -214,7 +214,7 @@ class PluginNode{i}(Node):
                     "provides": [f"plugin_{i}.node.PluginNode{i}"],
                 }
                 session_state.node_registry.load_plugin(f"plugin_{i}", config)
-                session_state.loaded_plugins[f"plugin_{i}"] = config
+                session_state.registered_plugins[f"plugin_{i}"] = config
 
             # Verify each session has only its plugin
             for i, state in enumerate(session_states):
@@ -302,7 +302,7 @@ class PluginNode(Node):
                 "provides": ["test_plugin.node.PluginNode"],
             }
             state1.node_registry.load_plugin("test_plugin", config)
-            state1.loaded_plugins["test_plugin"] = config
+            state1.registered_plugins["test_plugin"] = config
 
             # Both sessions should be able to use builtin node
             node_class1 = state1.node_registry.get("BuiltinNode")
@@ -378,7 +378,7 @@ class SharedNode(Node):
                 "provides": ["override_plugin.node.SharedNode"],
             }
             state1.node_registry.load_plugin("override_plugin", config)
-            state1.loaded_plugins["override_plugin"] = config
+            state1.registered_plugins["override_plugin"] = config
 
             # Session1 should get plugin version (override)
             node_class1 = state1.node_registry.get("SharedNode")
@@ -394,7 +394,7 @@ class SharedNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_session_state_tracks_loaded_plugins(
+    def test_session_state_tracks_registered_plugins(
         self, tmp_path, create_plugin_pyproject
     ):
         """Test that SessionState correctly tracks loaded plugins."""
@@ -444,7 +444,7 @@ class TrackedNode2(Node):
         sys.path.insert(0, str(tmp_path))
         try:
             # Initially no plugins
-            assert len(session_state.loaded_plugins) == 0
+            assert len(session_state.registered_plugins) == 0
 
             # Load first plugin into session's registry instance
             config1 = {
@@ -452,9 +452,9 @@ class TrackedNode2(Node):
                 "provides": ["tracked_plugin1.node.TrackedNode1"],
             }
             session_state.node_registry.load_plugin("tracked_plugin1", config1)
-            session_state.loaded_plugins["tracked_plugin1"] = config1
-            assert len(session_state.loaded_plugins) == 1
-            assert "tracked_plugin1" in session_state.loaded_plugins
+            session_state.registered_plugins["tracked_plugin1"] = config1
+            assert len(session_state.registered_plugins) == 1
+            assert "tracked_plugin1" in session_state.registered_plugins
 
             # Load second plugin into session's registry instance
             config2 = {
@@ -462,12 +462,12 @@ class TrackedNode2(Node):
                 "provides": ["tracked_plugin2.node.TrackedNode2"],
             }
             session_state.node_registry.load_plugin("tracked_plugin2", config2)
-            session_state.loaded_plugins["tracked_plugin2"] = config2
-            assert len(session_state.loaded_plugins) == 2
-            assert "tracked_plugin1" in session_state.loaded_plugins
-            assert "tracked_plugin2" in session_state.loaded_plugins
+            session_state.registered_plugins["tracked_plugin2"] = config2
+            assert len(session_state.registered_plugins) == 2
+            assert "tracked_plugin1" in session_state.registered_plugins
+            assert "tracked_plugin2" in session_state.registered_plugins
 
-            # Close session should clear loaded_plugins
+            # Close session should clear registered_plugins
             self.session_manager.close_session(session_id)
 
             # Session should be removed
@@ -526,7 +526,7 @@ class SessionOnlyNode(Node):
                 "provides": ["session_plugin.node.SessionOnlyNode"],
             }
             session_state.node_registry.load_plugin("session_plugin", config)
-            session_state.loaded_plugins["session_plugin"] = config
+            session_state.registered_plugins["session_plugin"] = config
 
             # PipelineBuilder with session's registry can use plugin node
             builder_with_session = PipelineBuilder(

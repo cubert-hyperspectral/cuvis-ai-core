@@ -150,9 +150,9 @@ class TestLoadPipelinePluginResolution:
         # Wanted plugin was materialised; other plugin was not.
         assert "wanted_plugin" in session.node_registry.plugin_configs
         assert "other_plugin" not in session.node_registry.plugin_configs
-        # session.loaded_plugins is in sync — exposed by ListLoadedPlugins / GetPluginInfo.
-        assert "wanted_plugin" in session.loaded_plugins
-        assert "other_plugin" not in session.loaded_plugins
+        # session.registered_plugins is in sync — exposed by ListLoadedPlugins / GetPluginInfo.
+        assert "wanted_plugin" in session.registered_plugins
+        assert "other_plugin" not in session.registered_plugins
 
     def test_missing_plugins_field_returns_invalid_argument(
         self, tmp_path, create_plugin_pyproject

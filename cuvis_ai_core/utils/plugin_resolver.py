@@ -225,9 +225,8 @@ def resolve_pipeline_plugins(
       inline-as-is for :class:`InlineGitPluginRef` /
       :class:`InlineLocalPluginRef`). Same-name conflicts with diverging
       config raise ``ValueError``.
-    * Otherwise auto-resolve from ``nodes[*].class_name`` against the
-      catalog (exact match on ``provides`` entries) and emit a deprecation
-      warning.
+    * Otherwise run the exact-match heuristic to produce a fix-it hint,
+      then raise ``ValueError`` because ``plugins:`` is mandatory.
 
     Final coverage check: every ``class_name`` in the pipeline must be
     provided by at least one entry in the resolved set.

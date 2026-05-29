@@ -1054,7 +1054,7 @@ class LoadPluginsRequest(_message.Message):
     ) -> None: ...
 
 class LoadPluginsResponse(_message.Message):
-    __slots__ = ("loaded_plugins", "failed_plugins")
+    __slots__ = ("registered_plugins", "failed_plugins")
     class FailedPluginsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1067,11 +1067,11 @@ class LoadPluginsResponse(_message.Message):
 
     LOADED_PLUGINS_FIELD_NUMBER: _ClassVar[int]
     FAILED_PLUGINS_FIELD_NUMBER: _ClassVar[int]
-    loaded_plugins: _containers.RepeatedScalarFieldContainer[str]
+    registered_plugins: _containers.RepeatedScalarFieldContainer[str]
     failed_plugins: _containers.ScalarMap[str, str]
     def __init__(
         self,
-        loaded_plugins: _Optional[_Iterable[str]] = ...,
+        registered_plugins: _Optional[_Iterable[str]] = ...,
         failed_plugins: _Optional[_Mapping[str, str]] = ...,
     ) -> None: ...
 

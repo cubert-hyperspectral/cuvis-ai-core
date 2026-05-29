@@ -44,7 +44,7 @@ class SessionState:
     # ``node_registry.plugin_configs``; the actual class set is in
     # ``node_registry.plugin_registry``. On the wire this is the
     # ``registered_plugins`` field of ``LoadPluginsResponse``.
-    loaded_plugins: dict[str, dict] = field(default_factory=dict)
+    registered_plugins: dict[str, dict] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -210,7 +210,7 @@ class SessionManager:
         self._cleanup_pipeline(pipeline)
 
         # Clear plugin tracking (GC will handle registry cleanup automatically)
-        state.loaded_plugins.clear()
+        state.registered_plugins.clear()
         state.data_config = None
         state.training_config = None
         state.trainrun_config = None

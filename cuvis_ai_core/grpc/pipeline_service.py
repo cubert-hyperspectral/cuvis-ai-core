@@ -209,8 +209,8 @@ class PipelineService:
         Plugin handling:
         * If ``pipeline_config.plugins`` is set, resolve only that declared
           set against the per-session plugin catalog.
-        * Otherwise auto-resolve from ``nodes[*].class_name`` against the
-          catalog and emit a deprecation warning.
+        * Otherwise raise with a fix-it hint generated from exact-match
+          catalog resolution.
         * The catalog dirs come from each ``<search_path>/plugins/`` in
           ``session.search_paths`` (settable via SetSessionSearchPaths).
         """
@@ -257,9 +257,9 @@ class PipelineService:
                 if name in session.node_registry.plugin_configs:
                     continue  # already materialised in this session
                 session.node_registry.load_plugin(name)  # catalog fast path
-                # Keep session.loaded_plugins in sync so ListLoadedPlugins /
+                # Keep session.registered_plugins in sync so ListLoadedPlugins /
                 # GetPluginInfo reflect plugins materialised via LoadPipeline.
-                session.loaded_plugins[name] = cfg.model_dump()
+                session.registered_plugins[name] = cfg.model_dump()
         elif pipeline_config.plugins is not None:
             # Pipeline explicitly declared an empty plugins list AND nothing
             # in the session catalog — surface a precondition error so the
