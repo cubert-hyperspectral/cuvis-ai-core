@@ -36,6 +36,21 @@ class _BasePluginConfig(BaseModel):
         ),
     )
 
+    package_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional PyPI-style package name (the value of [project].name in "
+            "the plugin's pyproject.toml). The manifest YAML key is a logical "
+            "grouping label (e.g. 'sam3' for the SAM3 plugin); when it differs "
+            "from the actual package name (e.g. 'cuvis-ai-sam3') the composer "
+            "must know the real name so uv's metadata check passes. For local "
+            "plugins this can be omitted — the composer reads "
+            "[project].name from the plugin's pyproject.toml. For git plugins "
+            "it defaults to the manifest key, so authors whose key already "
+            "matches the package name need not set it."
+        ),
+    )
+
     @field_validator("provides")
     @classmethod
     def _validate_class_paths(cls, value: List[str]) -> List[str]:

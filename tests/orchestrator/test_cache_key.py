@@ -139,6 +139,7 @@ def test_dirty_local_plugin_forces_unique_directory(tmp_path: Path):
     dirty = ResolvedLocalPlugin(
         name="local_plugin",
         path=tmp_path,
+        package_name="local-plugin",
         pyproject_sha256="x" * 64,
         git_head=None,
         dirty=True,
@@ -164,6 +165,7 @@ def test_clean_local_plugin_caches_normally(tmp_path: Path):
     clean = ResolvedLocalPlugin(
         name="local_plugin",
         path=tmp_path,
+        package_name="local-plugin",
         pyproject_sha256="x" * 64,
         git_head="d" * 40,
         dirty=False,

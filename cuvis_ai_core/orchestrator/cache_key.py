@@ -57,20 +57,41 @@ class CoreSource:
 
 @dataclass(frozen=True)
 class ResolvedGitPlugin:
-    """A git-sourced plugin whose tag has already been resolved to a commit sha."""
+    """A git-sourced plugin whose tag has already been resolved to a commit sha.
+
+    ``name`` is the plugin manifest key (a logical identifier).
+    ``package_name`` is the value that ends up in the runtime
+    pyproject's ``dependencies`` list and ``tool.uv.sources`` key — uv
+    matches it against the cloned repo's ``[project] name`` during
+    locking. Manifest authors who use a short logical key like
+    ``sam3`` for a plugin whose actual package is ``cuvis-ai-sam3``
+    must set ``package_name`` explicitly in the YAML; when omitted it
+    falls back to the manifest key.
+    """
 
     name: str
     repo: str
     sha: str  # 40-char hex, resolved via ``git ls-remote --tags``
     tag: str  # the original user-facing tag, kept for the human prefix
+    package_name: str = ""  # populated by resolve_plugin_sources
 
 
 @dataclass(frozen=True)
 class ResolvedLocalPlugin:
-    """A local-path plugin with its content-provenance triple."""
+    """A local-path plugin with its content-provenance triple.
+
+    ``name`` is the manifest key (logical). ``package_name`` is the
+    actual ``[project] name`` read from the local pyproject.toml — uv
+    requires the dep name in the runtime project to match this, not
+    the manifest key. Without that read, a manifest entry like
+    ``cuvis_ai_builtin -> /path/to/cuvis-ai/`` (whose pyproject is
+    named ``cuvis-ai``) trips uv with "Package metadata name does
+    not match given name".
+    """
 
     name: str
     path: Path
+    package_name: str
     pyproject_sha256: str
     git_head: str | None
     dirty: bool

@@ -19,6 +19,7 @@ from cuvis_ai_core.orchestrator.cache_key import (
 )
 from cuvis_ai_core.orchestrator.runtime_project import (
     RuntimeProjectError,
+    _read_local_package_name,
     build_runtime_pyproject,
     git_source_url,
     resolve_git_tag,
@@ -237,9 +238,13 @@ def test_build_runtime_pyproject_ssh_plugin_normalised_to_ssh_url():
 
 
 def test_build_runtime_pyproject_local_plugin_uses_editable_path(tmp_path: Path):
+    """Local plugins are pinned by their real [project] name, NOT the
+    manifest key, so uv's metadata check passes when the manifest key
+    differs from the actual package name."""
     plugin = ResolvedLocalPlugin(
         name="local_p",
         path=tmp_path,
+        package_name="real-package-name",
         pyproject_sha256="x" * 64,
         git_head=None,
         dirty=True,
@@ -250,10 +255,13 @@ def test_build_runtime_pyproject_local_plugin_uses_editable_path(tmp_path: Path)
         python_requires=">=3.11,<3.14",
     )
     doc = tomllib.loads(content)
-    assert doc["tool"]["uv"]["sources"]["local_p"] == {
+    assert "real-package-name" in doc["project"]["dependencies"]
+    assert "local_p" not in doc["project"]["dependencies"]
+    assert doc["tool"]["uv"]["sources"]["real-package-name"] == {
         "path": str(tmp_path),
         "editable": True,
     }
+    assert "local_p" not in doc["tool"]["uv"]["sources"]
 
 
 def test_build_runtime_pyproject_is_byte_stable_for_same_input(tmp_path: Path):
@@ -278,3 +286,52 @@ def test_build_runtime_pyproject_is_byte_stable_for_same_input(tmp_path: Path):
         core_source=PYPI_CORE, plugins=plugins, python_requires=">=3.11,<3.14"
     )
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# _read_local_package_name — local plugin pyproject inspection
+# ---------------------------------------------------------------------------
+
+
+def test_read_local_package_name_returns_project_name(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "real-package"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    assert _read_local_package_name(tmp_path, manifest_key="logical") == "real-package"
+
+
+def test_read_local_package_name_missing_pyproject_raises(tmp_path: Path):
+    with pytest.raises(RuntimeProjectError, match="has no pyproject.toml"):
+        _read_local_package_name(tmp_path, manifest_key="logical")
+
+
+def test_read_local_package_name_missing_project_name_raises(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools"]\n', encoding="utf-8"
+    )
+    with pytest.raises(RuntimeProjectError, match="declares no '\\[project\\] name'"):
+        _read_local_package_name(tmp_path, manifest_key="logical")
+
+
+def test_resolve_plugin_sources_reads_local_package_name(tmp_path: Path):
+    """The package_name field must come from the plugin's pyproject,
+    not the manifest key — this is what fixes the
+    'Package metadata name X does not match given name Y' failure
+    when the manifest groups several classes under a logical name.
+    """
+    plugin_dir = tmp_path / "plugin-checkout"
+    plugin_dir.mkdir()
+    (plugin_dir / "pyproject.toml").write_text(
+        '[project]\nname = "actual-package"\nversion = "0.0.1"\n',
+        encoding="utf-8",
+    )
+
+    config = LocalPluginConfig(path=str(plugin_dir), provides=["actual.module.Foo"])
+    resolved = resolve_plugin_sources({"manifest_key_only": config})
+
+    assert len(resolved) == 1
+    plugin = resolved[0]
+    assert isinstance(plugin, ResolvedLocalPlugin)
+    assert plugin.name == "manifest_key_only"
+    assert plugin.package_name == "actual-package"

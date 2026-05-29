@@ -9,6 +9,8 @@ key is then immutable even if the upstream tag is force-pushed.
 from __future__ import annotations
 
 import subprocess
+import tomllib
+from pathlib import Path
 from typing import Mapping
 
 import tomli_w
@@ -111,21 +113,35 @@ def resolve_plugin_sources(
         cfg = plugin_configs[name]
         if isinstance(cfg, GitPluginConfig):
             sha = resolve_git_tag(cfg.repo, cfg.tag)
+            # Prefer the explicit override; otherwise trust the
+            # manifest key matches the package name (the case for
+            # convention-aligned plugins).
+            package_name = cfg.package_name or name
             resolved.append(
-                ResolvedGitPlugin(name=name, repo=cfg.repo, sha=sha, tag=cfg.tag)
+                ResolvedGitPlugin(
+                    name=name,
+                    repo=cfg.repo,
+                    sha=sha,
+                    tag=cfg.tag,
+                    package_name=package_name,
+                )
             )
             logger.debug(
                 f"Resolved plugin '{name}' tag {cfg.tag} → {sha[:8]} from {cfg.repo}"
             )
         elif isinstance(cfg, LocalPluginConfig):
-            from pathlib import Path
-
             path = Path(cfg.path).resolve()
             pyproject_sha, head, dirty = local_plugin_provenance(path)
+            # Local plugins prefer the explicit override; otherwise
+            # read [project] name directly from the plugin's pyproject.
+            package_name = cfg.package_name or _read_local_package_name(
+                path, manifest_key=name
+            )
             resolved.append(
                 ResolvedLocalPlugin(
                     name=name,
                     path=path,
+                    package_name=package_name,
                     pyproject_sha256=pyproject_sha,
                     git_head=head,
                     dirty=dirty,
@@ -157,13 +173,20 @@ def build_runtime_pyproject(
         sources["cuvis-ai-core"] = {"path": core_source.identity, "editable": True}
 
     for p in plugins:
+        # Use the resolved package_name (the [project].name from the
+        # plugin's pyproject) rather than the manifest key — uv refuses
+        # to install a dep whose declared name doesn't match the
+        # package metadata. For git plugins the value defaults to the
+        # manifest key (convention) but is overridable; for local
+        # plugins it is read from the pyproject directly.
+        dep_name = p.package_name or p.name
         if isinstance(p, ResolvedGitPlugin):
-            dependencies.append(p.name)
+            dependencies.append(dep_name)
             repo_for_uv = _ssh_to_url(p.repo)
-            sources[p.name] = {"git": repo_for_uv, "rev": p.sha}
+            sources[dep_name] = {"git": repo_for_uv, "rev": p.sha}
         else:
-            dependencies.append(p.name)
-            sources[p.name] = {"path": str(p.path), "editable": True}
+            dependencies.append(dep_name)
+            sources[dep_name] = {"path": str(p.path), "editable": True}
 
     doc: dict = {
         "project": {
@@ -182,6 +205,36 @@ def _core_dependency(core_source: CoreSource) -> str:
         # identity is the full PEP-508 string, e.g. "cuvis-ai-core==0.7.3"
         return core_source.identity
     return "cuvis-ai-core"
+
+
+def _read_local_package_name(path: Path, *, manifest_key: str) -> str:
+    """Read the PyPI-style ``[project] name`` from a local plugin's pyproject.toml.
+
+    The manifest key (the YAML map key used in
+    ``configs/plugins/<name>.yaml``) is a *logical* identifier for the
+    plugin set, not a Python package name. uv refuses to install a
+    dependency unless the dep name matches the actual package
+    metadata, so the composer must pin against the real name.
+    """
+    pyproject = path / "pyproject.toml"
+    if not pyproject.is_file():
+        raise RuntimeProjectError(
+            f"Local plugin '{manifest_key}' at {path} has no pyproject.toml; "
+            "the composer needs it to learn the package name."
+        )
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise RuntimeProjectError(
+            f"Local plugin '{manifest_key}' at {pyproject} has malformed TOML: {exc}"
+        ) from exc
+    name = (data.get("project") or {}).get("name")
+    if not isinstance(name, str) or not name:
+        raise RuntimeProjectError(
+            f"Local plugin '{manifest_key}' at {pyproject} declares no "
+            "'[project] name'. Add one matching the importable package."
+        )
+    return name
 
 
 def _ssh_to_url(repo: str) -> str:
