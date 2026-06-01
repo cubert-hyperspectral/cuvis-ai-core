@@ -22,6 +22,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 from loguru import logger
 
 from cuvis_ai_core.grpc.inference_service import InferenceService
+from cuvis_ai_core.grpc.introspection_service import IntrospectionService
 from cuvis_ai_core.grpc.pipeline_service import PipelineService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.training_service import TrainingService
@@ -46,6 +47,7 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         self._inference_service = InferenceService(self._session_manager)
         self._training_service = TrainingService(self._session_manager)
         self._trainrun_service = TrainRunService(self._session_manager)
+        self._introspection_service = IntrospectionService(self._session_manager)
         # Session id the parent handed us via InitializeSession. The
         # child runs at most one session per process, so caching the id
         # here lets RestoreTrainRun attach its pipeline to that exact
@@ -75,7 +77,7 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
 
         try:
             resolved_plugins = _decode_resolved_plugins(request.resolved_plugins_json)
-        except Exception as exc:
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(f"resolved_plugins_json could not be parsed: {exc}")
             return cuvis_ai_pb2.InitializeSessionResponse(ok=False)
@@ -85,7 +87,10 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
             session = self._session_manager.get_session(request.session_id)
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to attach session inside child runtime: {exc}")
+            context.set_details(
+                f"Failed to attach session {request.session_id!r} inside "
+                f"child runtime: {exc}"
+            )
             return cuvis_ai_pb2.InitializeSessionResponse(ok=False)
 
         session.search_paths = list(request.search_paths)
@@ -139,31 +144,39 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
     ) -> cuvis_ai_pb2.SaveTrainRunResponse:
         return self._trainrun_service.save_train_run(request, context)
 
-    def GetPipelineInputs(self, request, context):
-        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
-
-        if not hasattr(self, "_introspection_service"):
-            self._introspection_service = IntrospectionService(self._session_manager)
+    def GetPipelineInputs(
+        self,
+        request: cuvis_ai_pb2.GetPipelineInputsRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetPipelineInputsResponse:
         return self._introspection_service.get_pipeline_inputs(request, context)
 
-    def GetPipelineOutputs(self, request, context):
-        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
-
-        if not hasattr(self, "_introspection_service"):
-            self._introspection_service = IntrospectionService(self._session_manager)
+    def GetPipelineOutputs(
+        self,
+        request: cuvis_ai_pb2.GetPipelineOutputsRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetPipelineOutputsResponse:
         return self._introspection_service.get_pipeline_outputs(request, context)
 
-    def GetPipelineVisualization(self, request, context):
-        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
-
-        if not hasattr(self, "_introspection_service"):
-            self._introspection_service = IntrospectionService(self._session_manager)
+    def GetPipelineVisualization(
+        self,
+        request: cuvis_ai_pb2.GetPipelineVisualizationRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
         return self._introspection_service.get_pipeline_visualization(request, context)
 
-    def SetTrainRunConfig(self, request, context):
+    def SetTrainRunConfig(
+        self,
+        request: cuvis_ai_pb2.SetTrainRunConfigRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.SetTrainRunConfigResponse:
         return self._pipeline_service.set_train_run_config(request, context)
 
-    def GetTrainStatus(self, request, context):
+    def GetTrainStatus(
+        self,
+        request: cuvis_ai_pb2.GetTrainStatusRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetTrainStatusResponse:
         return self._training_service.get_train_status(request, context)
 
     def RestoreTrainRun(

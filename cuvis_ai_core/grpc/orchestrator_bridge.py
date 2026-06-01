@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 import grpc
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
@@ -50,6 +50,11 @@ from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 
 PluginConfig = GitPluginConfig | LocalPluginConfig
+
+_NO_CHILD_DETAIL = (
+    "No child runtime is attached to this session. "
+    "Call LoadPipeline or RestoreTrainRun first."
+)
 
 # Type aliases for the injectable seams.
 ComposerFn = Callable[..., Path]
@@ -150,6 +155,25 @@ def ensure_child_for_session(
         request_gpu=_gpu_requested(),
     )
 
+    _initialize_child_session(handle, session_id, session, resolved, declared)
+
+    session.child_handle = handle
+    session.resolved_plugins = dict(resolved)
+    _mirror_plugin_catalog(session, resolved)
+    return handle
+
+
+def _initialize_child_session(
+    handle: ChildHandle,
+    session_id: str,
+    session: SessionState,
+    resolved: Mapping[str, PluginConfig],
+    declared: DeclaredPaths,
+) -> None:
+    """Hand the freshly-spawned child its session context via InitializeSession.
+
+    Terminates the child and raises if it rejects the init handshake.
+    """
     payload = json.dumps(
         {name: cfg.model_dump() for name, cfg in resolved.items()}
     ).encode("utf-8")
@@ -164,17 +188,23 @@ def ensure_child_for_session(
     )
     if not init_response.ok:
         handle.terminate(grace_s=2.0)
-        raise RuntimeError("Child runtime rejected InitializeSession")
+        raise RuntimeError(
+            f"Child runtime rejected InitializeSession for session "
+            f"{session_id!r} ({len(resolved)} plugins: {sorted(resolved)})."
+        )
 
-    session.child_handle = handle
-    session.resolved_plugins = dict(resolved)
-    # Mirror plugin catalog metadata on the parent's session too so
-    # ListLoadedPlugins / GetPluginInfo / external inspection report
-    # what the orchestrator materialised, even though the actual class
-    # registry lives inside the child.
+
+def _mirror_plugin_catalog(
+    session: SessionState, resolved: Mapping[str, PluginConfig]
+) -> None:
+    """Record resolved plugin metadata on the parent session.
+
+    ListLoadedPlugins / GetPluginInfo / external inspection report what
+    the orchestrator materialised, even though the actual class registry
+    lives inside the child.
+    """
     for name, cfg in resolved.items():
         session.registered_plugins[name] = cfg.model_dump()
-    return handle
 
 
 def get_child(session: SessionState) -> ChildHandle | None:
@@ -248,10 +278,7 @@ def forward_inference(
     child = get_child(session)
     if child is None:
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-        context.set_details(
-            "No child runtime is attached to this session. "
-            "Call LoadPipeline or RestoreTrainRun first."
-        )
+        context.set_details(_NO_CHILD_DETAIL)
         return cuvis_ai_pb2.InferenceResponse()
     return _call_child_with_error_propagation(
         child.stub(),
@@ -277,20 +304,14 @@ def forward_train(
     child = get_child(session)
     if child is None:
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-        context.set_details(
-            "No child runtime is attached to this session. "
-            "Call LoadPipeline or RestoreTrainRun first."
-        )
+        context.set_details(_NO_CHILD_DETAIL)
         return iter([])
 
     def _proxy():
         try:
             yield from child.stub().Train(request)
         except grpc.RpcError as exc:
-            code = exc.code() if hasattr(exc, "code") else grpc.StatusCode.UNKNOWN
-            details = exc.details() if hasattr(exc, "details") else str(exc)
-            context.set_code(code or grpc.StatusCode.UNKNOWN)
-            context.set_details(details or "")
+            _propagate_rpc_error(exc, context)
 
     return _proxy()
 
@@ -364,9 +385,10 @@ def forward_restore_train_run(
         context,
         cuvis_ai_pb2.RestoreTrainRunResponse,
     )
-    if response.session_id == "" or not response.session_id:
-        # Child built the pipeline against its own session id (matching
-        # ours); fill in the parent's id so the public client sees it.
+    # Contract: the child reuses the session_id we pinned via
+    # InitializeSession, so an empty session_id in its response means
+    # "same as the parent's". Fill in the parent id for the public client.
+    if not response.session_id:
         response.session_id = parent_session_id
     return response
 
@@ -396,14 +418,19 @@ def _forward_pipeline_op(
     child = get_child(session)
     if child is None:
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-        context.set_details(
-            "No child runtime is attached to this session. "
-            "Call LoadPipeline or RestoreTrainRun first."
-        )
+        context.set_details(_NO_CHILD_DETAIL)
         return empty_response_factory()
     return _call_child_with_error_propagation(
         child.stub(), stub_method, request, context, empty_response_factory
     )
+
+
+def _propagate_rpc_error(exc: grpc.RpcError, context: grpc.ServicerContext) -> None:
+    """Copy a child ``RpcError``'s status code + details onto the parent context."""
+    code = exc.code() if hasattr(exc, "code") else grpc.StatusCode.UNKNOWN
+    details = exc.details() if hasattr(exc, "details") else str(exc)
+    context.set_code(code or grpc.StatusCode.UNKNOWN)
+    context.set_details(details or "")
 
 
 def _call_child_with_error_propagation(
@@ -417,10 +444,7 @@ def _call_child_with_error_propagation(
     try:
         return getattr(stub, stub_method)(request)
     except grpc.RpcError as exc:
-        code = exc.code() if hasattr(exc, "code") else grpc.StatusCode.UNKNOWN
-        details = exc.details() if hasattr(exc, "details") else str(exc)
-        context.set_code(code or grpc.StatusCode.UNKNOWN)
-        context.set_details(details or "")
+        _propagate_rpc_error(exc, context)
         return empty_response_factory()
 
 
@@ -503,6 +527,10 @@ def forward_set_train_run_config(session_manager, request, context):
         context.set_details("trainrun config_bytes is required")
         return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
 
+    # Deliberate early guard (the shared _forward_pipeline_op below also
+    # rejects a missing child): this RPC returns a message tailored to
+    # its "build the pipeline first" contract rather than the generic
+    # no-child message.
     if get_child(session) is None:
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(

@@ -58,7 +58,7 @@ plugin; `dev-docs` = internal ticket docs. This package depends on `cuvis-ai-sch
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **cuvis-ai-core** (5825 symbols, 11564 relationships, 229 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **cuvis-ai-core** (5875 symbols, 11657 relationships, 233 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

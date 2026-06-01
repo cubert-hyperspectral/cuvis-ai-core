@@ -6,9 +6,8 @@ produce a different cache directory (no false reuse).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-
-import pytest
 
 from cuvis_ai_core.orchestrator.cache_key import (
     COMPOSER_SCHEMA_VERSION,
@@ -208,22 +207,68 @@ def test_spec_hash_of_is_stable_and_content_sensitive():
     assert len(a) == 64  # sha256 hex
 
 
-@pytest.mark.parametrize(
-    "platform,expected_prefix",
-    [
-        ("win-amd64", "win-amd64"),
-        ("linux-x86_64", "linux-x86_64"),
-        ("macosx-14.0-arm64", "macosx-14.0-arm64"),
-    ],
-)
-def test_directory_name_keeps_platform_segment_readable(
-    platform: str, expected_prefix: str
-):
+def test_directory_name_is_hash_only():
+    name = _base_key().directory_name()
+    assert re.fullmatch(r"[0-9a-f]{12}", name), name
+    # No human-readable prefix or separator leaks into the name, however
+    # many plugins the pipeline declares.
+    assert "__" not in name
+    for fragment in ("win", "amd64", "py3", "core", "cuvis", "builtin", "detr"):
+        assert fragment not in name
+
+
+def test_human_manifest_lists_intended_libraries():
+    plugin_c = ResolvedGitPlugin(
+        name="sam3",
+        repo="https://github.com/cubert/cuvis-ai-sam3.git",
+        sha="c" * 40,
+        tag="v1.0.0",
+        package_name="cuvis-ai-sam3",  # distinct from the manifest key
+    )
     key = compute_cache_key(
         core_source=CORE,
-        plugins=(PLUGIN_A,),
+        plugins=(PLUGIN_A, PLUGIN_B, plugin_c),
         spec_hash=SPEC_HASH,
         python_version="3.11.12",
-        platform_tag=platform,
+        platform_tag="win-amd64",
     )
-    assert expected_prefix in key.directory_name()
+    manifest = key.human_manifest()
+
+    # Identity + environment facts.
+    assert key.digest in manifest
+    assert "3.11.12" in manifest
+    assert "win-amd64" in manifest
+    assert "cuvis-ai-core==0.7.3" in manifest  # core identity
+
+    # Each git plugin: manifest name, source URL, tag, short sha.
+    for plugin in (PLUGIN_A, PLUGIN_B, plugin_c):
+        assert plugin.name in manifest
+        assert plugin.repo in manifest
+        assert plugin.tag in manifest
+        assert plugin.sha[:8] in manifest
+
+    # package_name is surfaced distinctly from the manifest key — the
+    # value uv installs, deliberately absent from key.json.
+    assert "cuvis-ai-sam3" in manifest
+
+
+def test_human_manifest_marks_local_plugin_state(tmp_path: Path):
+    clean = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=False,
+    )
+    manifest = compute_cache_key(
+        core_source=CORE,
+        plugins=(clean,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).human_manifest()
+    assert "local_plugin" in manifest  # manifest name
+    assert "local-plugin" in manifest  # package_name
+    assert str(tmp_path) in manifest  # source path
+    assert "local (clean)" in manifest

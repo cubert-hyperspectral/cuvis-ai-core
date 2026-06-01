@@ -1,9 +1,7 @@
 """Thin subprocess wrapper around ``uv lock`` and ``uv sync``.
 
-A single shim so tests can mock both invocations and the composer
-has one place to surface errors. Mirrors the timeout + check +
-loguru pattern in
-``cuvis_ai_core/utils/git_and_os.py:_install_dependencies_with_uv``.
+A single shim so tests can mock both invocations and the composer has
+one place to surface errors.
 """
 
 from __future__ import annotations

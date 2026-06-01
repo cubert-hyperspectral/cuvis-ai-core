@@ -20,7 +20,8 @@ from cuvis_ai_core.orchestrator import spawner as spawner_module
 from cuvis_ai_core.orchestrator.spawner import (
     DeclaredPaths,
     LocalChildRuntimeSpawner,
-    _DENY_PATTERNS,
+    _DENY_EXACT,
+    _DENY_PREFIXES,
     _is_denied,
 )
 
@@ -30,11 +31,7 @@ _POPEN_RE = re.compile(r"subprocess\s*\.\s*Popen\s*\(")
 
 
 def _iter_package_python_files() -> list[Path]:
-    return [
-        p
-        for p in PACKAGE_ROOT.rglob("*.py")
-        if "__pycache__" not in p.parts
-    ]
+    return [p for p in PACKAGE_ROOT.rglob("*.py") if "__pycache__" not in p.parts]
 
 
 def test_no_rogue_subprocess_popen_outside_spawner():
@@ -60,7 +57,7 @@ def test_no_rogue_subprocess_popen_outside_spawner():
 
 
 def test_deny_list_strips_known_secret_env_vars(monkeypatch, tmp_path):
-    """``_build_child_env`` must remove every var in _DENY_PATTERNS.
+    """``_build_child_env`` must remove every var the deny-list covers.
 
     The list is the contract item 06 inherits — adding a new bleed
     point (a leaked AWS profile, an editor's API token, a forgotten
@@ -154,14 +151,21 @@ def test_cuda_vars_stripped_when_gpu_not_requested(monkeypatch, tmp_path):
 
     venv_path = tmp_path / "venv"
     venv_path.mkdir()
-    declared = DeclaredPaths(output_dir=tmp_path / "out", scratch_dir=tmp_path / "scratch")
+    declared = DeclaredPaths(
+        output_dir=tmp_path / "out", scratch_dir=tmp_path / "scratch"
+    )
     declared.output_dir.mkdir()
     declared.scratch_dir.mkdir()
 
     no_gpu = LocalChildRuntimeSpawner()._build_child_env(
         venv_path=venv_path, declared_paths=declared, request_gpu=False
     )
-    for var in ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "CUDA_PATH", "NVIDIA_VISIBLE_DEVICES"):
+    for var in (
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "CUDA_PATH",
+        "NVIDIA_VISIBLE_DEVICES",
+    ):
         assert var not in no_gpu, f"{var} should be stripped when request_gpu=False"
 
     with_gpu = LocalChildRuntimeSpawner()._build_child_env(
@@ -189,12 +193,10 @@ def test_is_denied_matches_expected_patterns(var):
 
 def test_deny_patterns_constant_contains_required_classes():
     """Lock in the high-level categories the deny-list covers."""
-    must_have = {
+    required_exact = {
         "PYTHONPATH",
         "SSH_AUTH_SOCK",
         "SSH_AGENT_PID",
-        "AWS_*",
-        "GITHUB_*",
         "GH_TOKEN",
         "GITLAB_TOKEN",
         "ANTHROPIC_API_KEY",
@@ -202,7 +204,9 @@ def test_deny_patterns_constant_contains_required_classes():
         "HUGGINGFACE_HUB_TOKEN",
         "HF_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "AZURE_*",
     }
-    missing = must_have - set(_DENY_PATTERNS)
-    assert not missing, f"Deny-list lost critical entries: {missing}"
+    required_prefixes = {"AWS_", "GITHUB_", "AZURE_"}
+    missing_exact = required_exact - set(_DENY_EXACT)
+    missing_prefixes = required_prefixes - set(_DENY_PREFIXES)
+    assert not missing_exact, f"Deny-list lost exact entries: {missing_exact}"
+    assert not missing_prefixes, f"Deny-list lost prefixes: {missing_prefixes}"

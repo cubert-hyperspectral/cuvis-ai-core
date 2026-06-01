@@ -8,13 +8,15 @@ publish atomically.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
+import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 
 from filelock import FileLock, Timeout
 from loguru import logger
@@ -37,6 +39,17 @@ _DEFAULT_CACHE_ROOT = Path.home() / ".cuvis_runs"
 _LOCK_TIMEOUT_SECONDS = 1800  # cold-start install can take a long time
 _STALE_PARTIAL_AGE_SECONDS = 6 * 60 * 60  # sweep half-built dirs older than 6h
 
+# Cache-protocol filenames/markers. The writer constructs them and the
+# sweeper/cache-hit check recognise them; sharing the constants keeps the
+# two sides from drifting.
+_LOCKS_DIRNAME = ".locks"
+_READY_MARKER = ".ready"
+_PYPROJECT_NAME = "pyproject.toml"
+_KEY_JSON_NAME = "key.json"
+_MANIFEST_NAME = "env_desc.md"
+_BUILDING_TAG = ".building."
+_BROKEN_TAG = ".broken."
+
 
 class ComposerError(RuntimeError):
     """Raised when a composed env cannot be produced."""
@@ -54,6 +67,39 @@ def _in_process_lock_for(digest: str) -> threading.Lock:
         if digest not in _in_process_locks:
             _in_process_locks[digest] = threading.Lock()
         return _in_process_locks[digest]
+
+
+def _build_dir_name(final_name: str) -> str:
+    """Unique temp-dir name for an in-progress build of ``final_name``."""
+    return f"{final_name}{_BUILDING_TAG}{os.getpid()}.{secrets.token_hex(3)}"
+
+
+def _is_partial_build_dir(name: str) -> bool:
+    """True if ``name`` is an in-progress or abandoned build dir."""
+    return _BUILDING_TAG in name
+
+
+@contextlib.contextmanager
+def _build_lock(digest: str, locks_dir: Path) -> Iterator[None]:
+    """Serialise builds of one cache key.
+
+    Layers the per-key in-process mutex over the cross-process file lock,
+    then yields with both held. Releasing happens in reverse on exit.
+    """
+    in_proc_lock = _in_process_lock_for(digest)
+    file_lock = FileLock(str(locks_dir / f"{digest}.lock"))
+    with in_proc_lock:
+        try:
+            file_lock.acquire(timeout=_LOCK_TIMEOUT_SECONDS)
+        except Timeout as exc:
+            raise ComposerError(
+                f"Timed out after {_LOCK_TIMEOUT_SECONDS}s waiting for build "
+                f"lock on cache key {digest}."
+            ) from exc
+        try:
+            yield
+        finally:
+            file_lock.release()
 
 
 def compose_env(
@@ -84,7 +130,7 @@ def compose_env(
 
     root = _resolve_cache_root(cache_root)
     root.mkdir(parents=True, exist_ok=True)
-    locks_dir = root / ".locks"
+    locks_dir = root / _LOCKS_DIRNAME
     locks_dir.mkdir(exist_ok=True)
 
     final_dir = root / key.directory_name()
@@ -92,27 +138,14 @@ def compose_env(
 
     _sweep_stale_partials(root)
 
-    in_proc_lock = _in_process_lock_for(key.digest)
-    file_lock = FileLock(str(locks_dir / f"{key.digest}.lock"))
-
-    with in_proc_lock:
-        try:
-            file_lock.acquire(timeout=_LOCK_TIMEOUT_SECONDS)
-        except Timeout as exc:
-            raise ComposerError(
-                f"Timed out after {_LOCK_TIMEOUT_SECONDS}s waiting for build "
-                f"lock on cache key {key.digest}."
-            ) from exc
-        try:
-            return _build_or_reuse(
-                final_dir=final_dir,
-                venv_dir=venv_dir,
-                root=root,
-                key=key,
-                pyproject_content=pyproject_content,
-            )
-        finally:
-            file_lock.release()
+    with _build_lock(key.digest, locks_dir):
+        return _build_or_reuse(
+            final_dir=final_dir,
+            venv_dir=venv_dir,
+            root=root,
+            key=key,
+            pyproject_content=pyproject_content,
+        )
 
 
 def _build_or_reuse(
@@ -123,7 +156,7 @@ def _build_or_reuse(
     key: CacheKey,
     pyproject_content: str,
 ) -> Path:
-    ready = final_dir / ".ready"
+    ready = final_dir / _READY_MARKER
     if ready.exists():
         logger.debug(f"Cache hit: {final_dir.name}")
         return venv_dir
@@ -131,27 +164,28 @@ def _build_or_reuse(
     # Defense in depth: a published directory without ``.ready`` is
     # broken — rename it aside and rebuild.
     if final_dir.exists():
-        broken = root / f"{final_dir.name}.broken.{int(time.time())}"
+        broken = root / f"{final_dir.name}{_BROKEN_TAG}{int(time.time())}"
         logger.warning(
-            f"Cache dir {final_dir.name} exists without .ready; moving to "
+            f"Cache dir {final_dir.name} exists without {_READY_MARKER}; moving to "
             f"{broken.name} and rebuilding."
         )
         final_dir.rename(broken)
 
-    build_dir = root / (
-        f"{final_dir.name}.building.{os.getpid()}.{secrets.token_hex(3)}"
-    )
+    build_dir = root / _build_dir_name(final_dir.name)
     build_dir.mkdir(parents=True, exist_ok=False)
-    (build_dir / "pyproject.toml").write_text(pyproject_content, encoding="utf-8")
-    (build_dir / "key.json").write_text(
+    (build_dir / _PYPROJECT_NAME).write_text(pyproject_content, encoding="utf-8")
+    (build_dir / _KEY_JSON_NAME).write_text(
         json.dumps(key.serialise(), indent=2), encoding="utf-8"
     )
+    # Human-readable companion to key.json: the dir name is an opaque
+    # hash, so this records which libraries the env was composed for.
+    (build_dir / _MANIFEST_NAME).write_text(key.human_manifest(), encoding="utf-8")
 
     try:
         logger.info(f"Building cache entry {key.digest} in {build_dir.name}")
         uv_lock(build_dir)
         uv_sync(build_dir)
-        (build_dir / ".ready").write_text("ok", encoding="utf-8")
+        (build_dir / _READY_MARKER).write_text("ok", encoding="utf-8")
     except Exception:
         logger.exception(
             f"uv lock/sync failed for {build_dir.name}; leaving for sweep."
@@ -179,7 +213,7 @@ def _sweep_stale_partials(root: Path) -> None:
     now = time.time()
     cutoff = now - _STALE_PARTIAL_AGE_SECONDS
     for entry in root.iterdir():
-        if ".building." not in entry.name or not entry.is_dir():
+        if not _is_partial_build_dir(entry.name) or not entry.is_dir():
             continue
         try:
             mtime = entry.stat().st_mtime
@@ -192,8 +226,6 @@ def _sweep_stale_partials(root: Path) -> None:
 
 def _rmtree(path: Path) -> None:
     """Best-effort recursive delete; failures are logged but non-fatal."""
-    import shutil
-
     try:
         shutil.rmtree(path, ignore_errors=False)
     except OSError as exc:

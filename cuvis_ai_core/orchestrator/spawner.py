@@ -1,4 +1,4 @@
-"""Child runtime spawner — single seam item 06's future sandbox replaces.
+"""Child runtime spawner — the single seam a future sandbox layer replaces.
 
 The local implementation launches a ``python -m cuvis_ai_core.run_runtime``
 subprocess inside the composed venv. The child binds an ephemeral
@@ -8,7 +8,7 @@ endpoint file appears, the parent ``HealthCheck``-polls the gRPC stub
 until SERVING, then returns the handle.
 
 The spawner is the single place that decides what env vars the child
-inherits. Phase 3b implementation:
+inherits:
 
 - ``PATH`` is prepended with the child venv's ``bin`` / ``Scripts`` so
   bundled scripts resolve first.
@@ -27,17 +27,15 @@ inherits. Phase 3b implementation:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
-import signal
 import subprocess
-import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 import grpc
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
@@ -49,6 +47,10 @@ _ENDPOINT_POLL_TIMEOUT_SECONDS = 30.0
 _ENDPOINT_POLL_INTERVAL_SECONDS = 0.05
 _HEALTH_POLL_TIMEOUT_SECONDS = 30.0
 _HEALTH_POLL_INTERVAL_SECONDS = 0.2
+_HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
+_STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
+_TERMINATE_KILL_WAIT_SECONDS = 5.0
+_GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
 _CUDA_VARS = (
     "CUDA_VISIBLE_DEVICES",
     "CUDA_HOME",
@@ -57,25 +59,24 @@ _CUDA_VARS = (
     "NVIDIA_VISIBLE_DEVICES",
 )
 
-# Explicit deny-list for env vars that must never leak from the parent
-# into the child. Anything matching one of the patterns below is
-# stripped after the initial os.environ copy. Patterns ending in ``*``
-# match by prefix.
-_DENY_PATTERNS = (
-    "PYTHONPATH",  # uv's .pth files handle site-packages; PYTHONPATH would shadow
-    "SSH_AUTH_SOCK",
-    "SSH_AGENT_PID",
-    "AWS_*",
-    "GITHUB_*",
-    "GH_TOKEN",
-    "GITLAB_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "HUGGINGFACE_HUB_TOKEN",
-    "HF_TOKEN",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "AZURE_*",
+# Env vars that must never leak from the parent into the child, stripped
+# after the initial os.environ copy. Exact names are removed outright;
+# any var whose name starts with one of the prefixes is removed too.
+_DENY_EXACT = frozenset(
+    {
+        "PYTHONPATH",  # uv's .pth files handle site-packages; PYTHONPATH would shadow
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "GH_TOKEN",
+        "GITLAB_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "HUGGINGFACE_HUB_TOKEN",
+        "HF_TOKEN",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    }
 )
+_DENY_PREFIXES = ("AWS_", "GITHUB_", "AZURE_")
 
 
 def _read_stderr_log(path: Path | None) -> str:
@@ -93,13 +94,7 @@ def _read_stderr_log(path: Path | None) -> str:
 
 
 def _is_denied(name: str) -> bool:
-    for pat in _DENY_PATTERNS:
-        if pat.endswith("*"):
-            if name.startswith(pat[:-1]):
-                return True
-        elif name == pat:
-            return True
-    return False
+    return name in _DENY_EXACT or name.startswith(_DENY_PREFIXES)
 
 
 class SpawnError(RuntimeError):
@@ -148,29 +143,26 @@ class ChildHandle:
             self._close_channel()
             return self.process.returncode
 
+        # Send a graceful StopRun if we can still talk to it.
         try:
-            # Send a graceful StopRun if we can still talk to it.
-            try:
-                self.stub().StopRun(
-                    cuvis_ai_pb2.StopRunRequest(grace_seconds=int(grace_s)),
-                    timeout=min(grace_s, 5.0),
-                )
-            except grpc.RpcError as exc:
-                logger.debug(f"StopRun RPC failed (continuing with terminate): {exc}")
+            self.stub().StopRun(
+                cuvis_ai_pb2.StopRunRequest(grace_seconds=int(grace_s)),
+                timeout=min(grace_s, _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS),
+            )
+        except grpc.RpcError as exc:
+            logger.debug(f"StopRun RPC failed (continuing with terminate): {exc}")
 
-            try:
-                return self.process.wait(timeout=grace_s)
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    f"Child runtime at {self.endpoint} did not exit within "
-                    f"{grace_s}s; sending SIGTERM."
-                )
-        finally:
-            pass
+        try:
+            return self.process.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"Child runtime at {self.endpoint} did not exit within "
+                f"{grace_s}s; sending SIGTERM."
+            )
 
         self.process.terminate()
         try:
-            return self.process.wait(timeout=max(grace_s, 1.0))
+            return self.process.wait(timeout=max(grace_s, _GRACEFUL_WAIT_FLOOR_SECONDS))
         except subprocess.TimeoutExpired:
             logger.warning(
                 f"Child runtime at {self.endpoint} still alive after SIGTERM; killing."
@@ -182,7 +174,7 @@ class ChildHandle:
         if self.process.poll() is None:
             self.process.kill()
             try:
-                self.process.wait(timeout=5.0)
+                self.process.wait(timeout=_TERMINATE_KILL_WAIT_SECONDS)
             except subprocess.TimeoutExpired:
                 logger.error(f"Child at {self.endpoint} did not die after kill().")
         self._close_channel()
@@ -204,8 +196,8 @@ class ChildHandle:
 class ChildRuntimeSpawner(ABC):
     """Abstract spawn surface.
 
-    Item 06 will add concrete spawners that wrap this same call (e.g.
-    a job-object or container spawner) without touching callers.
+    Concrete spawners (a local subprocess today; job-object or container
+    variants later) implement ``spawn`` without touching callers.
     """
 
     @abstractmethod
@@ -222,7 +214,7 @@ class ChildRuntimeSpawner(ABC):
 class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
     """Spawns the child runtime as a local subprocess.
 
-    The default and only implementation in Phase 3b. The interface is
+    The default subprocess-based implementation. The interface is
     stable; future sandboxed variants implement the same ``spawn``
     signature.
     """
@@ -270,35 +262,37 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             f"Spawning child runtime: {' '.join(cmd)} "
             f"(stdout→{stdout_path}, stderr→{stderr_path})"
         )
-        stdout_fh = stdout_path.open("w", encoding="utf-8")
-        stderr_fh = stderr_path.open("w", encoding="utf-8")
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(cwd),
-            env=env,
-            stdout=stdout_fh,
-            stderr=stderr_fh,
-            text=True,
-        )
+        # Open the log sinks inside an ExitStack so they are always
+        # closed — even if Popen (or the second open) raises before the
+        # main try/finally below is entered. The child inherits duplicate
+        # descriptors, so closing the parent's copies leaves its writes
+        # uninterrupted.
+        with contextlib.ExitStack() as log_files:
+            stdout_fh = log_files.enter_context(stdout_path.open("w", encoding="utf-8"))
+            stderr_fh = log_files.enter_context(stderr_path.open("w", encoding="utf-8"))
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(cwd),
+                env=env,
+                stdout=stdout_fh,
+                stderr=stderr_fh,
+                text=True,
+            )
 
-        try:
-            endpoint = self._wait_for_endpoint(
-                endpoint_file, process, stderr_log=stderr_path
-            )
-            handle = ChildHandle(
-                endpoint=endpoint, process=process, stderr_log=stderr_path
-            )
-            self._wait_for_health(handle)
-        except SpawnError:
-            if process.poll() is None:
-                process.terminate()
-            raise
-        finally:
-            shutil.rmtree(endpoint_dir, ignore_errors=True)
-            # Close the file handles the *parent* opened; the child
-            # inherited duplicates so its writes continue uninterrupted.
-            stdout_fh.close()
-            stderr_fh.close()
+            try:
+                endpoint = self._wait_for_endpoint(
+                    endpoint_file, process, stderr_log=stderr_path
+                )
+                handle = ChildHandle(
+                    endpoint=endpoint, process=process, stderr_log=stderr_path
+                )
+                self._wait_for_health(handle)
+            except SpawnError:
+                if process.poll() is None:
+                    process.terminate()
+                raise
+            finally:
+                shutil.rmtree(endpoint_dir, ignore_errors=True)
         return handle
 
     def _build_child_env(
@@ -380,9 +374,12 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             try:
                 response = handle.stub().HealthCheck(
                     cuvis_ai_pb2.HealthCheckRequest(),
-                    timeout=1.0,
+                    timeout=_HEALTHCHECK_RPC_TIMEOUT_SECONDS,
                 )
-                if response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING:
+                if (
+                    response.status
+                    == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+                ):
                     return
             except grpc.RpcError as exc:
                 last_error = exc

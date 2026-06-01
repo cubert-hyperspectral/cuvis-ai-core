@@ -13,7 +13,6 @@ import argparse
 import os
 import signal
 import sys
-import tempfile
 import threading
 from concurrent import futures
 from pathlib import Path
@@ -73,8 +72,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--bind",
         default=_DEFAULT_BIND,
         help=(
-            "Bind address, including '0' for an ephemeral port "
-            "(default: 127.0.0.1:0)."
+            "Bind address, including '0' for an ephemeral port (default: 127.0.0.1:0)."
         ),
     )
     parser.add_argument(
@@ -100,10 +98,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _format_endpoint(bind: str, chosen_port: int) -> str:
-    host, _, port = bind.rpartition(":")
-    if not host:
-        host = "127.0.0.1"
-    # Preserve IPv6 bracket form if present.
+    # Child runtimes bind IPv4 loopback (see _DEFAULT_BIND), so a plain
+    # host:port split is sufficient; IPv6 bracket forms are not handled.
+    host = bind.rpartition(":")[0] or "127.0.0.1"
     return f"{host}:{chosen_port}"
 
 

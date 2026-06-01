@@ -27,6 +27,15 @@ from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
 
 PluginConfig = GitPluginConfig | LocalPluginConfig
 
+# Identity-bearing names for the generated runtime project. The source
+# key and the dependency string must use the SAME core name or uv
+# resolution silently breaks, so it lives in one constant.
+CORE_PACKAGE_NAME = "cuvis-ai-core"
+RUNTIME_PROJECT_NAME = "cuvis-ai-runtime-project"
+RUNTIME_PROJECT_VERSION = "0.0.0"
+# git ls-remote lists annotated tags twice; the peeled form has this suffix.
+_PEELED_TAG_SUFFIX = "^{}"
+
 
 class RuntimeProjectError(RuntimeError):
     """Raised when the runtime project cannot be generated."""
@@ -59,45 +68,30 @@ def resolve_git_tag(repo: str, tag: str) -> str:
             f"Tag '{tag}' not found in {repo}. Branches and moving refs "
             "are not accepted — pin to a tag (e.g. v0.1.0)."
         )
+    return _sha_from_ls_remote(lines)
 
-    # ``git ls-remote --tags`` lists annotated tags twice — the bare
-    # tag and a ``^{}`` peeled form pointing at the underlying commit.
-    # Prefer the peeled form so we get the commit sha, not the tag
-    # object sha.
+
+def _sha_from_ls_remote(lines: list[str]) -> str:
+    """Pick the commit sha from ``git ls-remote --tags`` output lines.
+
+    Annotated tags appear twice — the bare tag and a ``^{}`` peeled form
+    pointing at the underlying commit. Prefer the peeled form so we get
+    the commit sha, not the tag-object sha.
+    """
     for line in lines:
         sha, ref = line.split(maxsplit=1)
-        if ref.endswith("^{}"):
+        if ref.endswith(_PEELED_TAG_SUFFIX):
             return sha
-    sha, _ = lines[0].split(maxsplit=1)
-    return sha
+    return lines[0].split(maxsplit=1)[0]
 
 
 def git_source_url(repo: str, sha: str) -> str:
-    """Format a uv-compatible ``git+...`` source URL preserving the original transport.
+    """Format a uv-compatible ``git+<url>@<sha>`` source URL.
 
-    - HTTPS / HTTP repos stay HTTPS / HTTP.
-    - SSH repos in ``git@host:path`` shorthand are rewritten to
-      ``ssh://git@host/path`` so uv can parse them.
+    Scheme normalisation is delegated to :func:`_ssh_to_url`, so the set
+    of accepted URL schemes lives in exactly one place.
     """
-    if repo.startswith("https://"):
-        return f"git+{repo}@{sha}"
-    if repo.startswith("http://"):
-        return f"git+{repo}@{sha}"
-    if repo.startswith("ssh://"):
-        return f"git+{repo}@{sha}"
-    if repo.startswith("git@"):
-        # git@host:path → ssh://git@host/path
-        host_and_path = repo[len("git@") :]
-        if ":" not in host_and_path:
-            raise RuntimeProjectError(
-                f"Malformed SSH repo URL '{repo}': expected 'git@host:path'."
-            )
-        host, _, path = host_and_path.partition(":")
-        return f"git+ssh://git@{host}/{path}@{sha}"
-    raise RuntimeProjectError(
-        f"Unsupported repo URL scheme '{repo}'. "
-        "Expected 'git@', 'https://', 'http://', or 'ssh://'."
-    )
+    return f"git+{_ssh_to_url(repo)}@{sha}"
 
 
 def resolve_plugin_sources(
@@ -166,32 +160,19 @@ def build_runtime_pyproject(
     dependencies: list[str] = [_core_dependency(core_source)]
     sources: dict[str, dict] = {}
 
-    if core_source.kind == "git":
-        repo, _, sha = core_source.identity.partition("@")
-        sources["cuvis-ai-core"] = {"git": repo, "rev": sha}
-    elif core_source.kind == "local":
-        sources["cuvis-ai-core"] = {"path": core_source.identity, "editable": True}
+    core_entry = _core_source_entry(core_source)
+    if core_entry is not None:
+        sources[CORE_PACKAGE_NAME] = core_entry
 
     for p in plugins:
-        # Use the resolved package_name (the [project].name from the
-        # plugin's pyproject) rather than the manifest key — uv refuses
-        # to install a dep whose declared name doesn't match the
-        # package metadata. For git plugins the value defaults to the
-        # manifest key (convention) but is overridable; for local
-        # plugins it is read from the pyproject directly.
-        dep_name = p.package_name or p.name
-        if isinstance(p, ResolvedGitPlugin):
-            dependencies.append(dep_name)
-            repo_for_uv = _ssh_to_url(p.repo)
-            sources[dep_name] = {"git": repo_for_uv, "rev": p.sha}
-        else:
-            dependencies.append(dep_name)
-            sources[dep_name] = {"path": str(p.path), "editable": True}
+        dep_name, source_entry = _plugin_source_entry(p)
+        dependencies.append(dep_name)
+        sources[dep_name] = source_entry
 
     doc: dict = {
         "project": {
-            "name": "cuvis-ai-runtime-project",
-            "version": "0.0.0",
+            "name": RUNTIME_PROJECT_NAME,
+            "version": RUNTIME_PROJECT_VERSION,
             "requires-python": python_requires,
             "dependencies": dependencies,
         },
@@ -200,11 +181,36 @@ def build_runtime_pyproject(
     return tomli_w.dumps(doc)
 
 
+def _core_source_entry(core_source: CoreSource) -> dict | None:
+    """uv ``tool.uv.sources`` entry for core, or None for a plain PyPI pin."""
+    if core_source.kind == "git":
+        repo, _, sha = core_source.identity.partition("@")
+        return {"git": repo, "rev": sha}
+    if core_source.kind == "local":
+        return {"path": core_source.identity, "editable": True}
+    return None
+
+
+def _plugin_source_entry(p: ResolvedPlugin) -> tuple[str, dict]:
+    """Return (dependency name, uv source entry) for one resolved plugin.
+
+    Uses the resolved ``package_name`` (the ``[project].name`` from the
+    plugin's pyproject) rather than the manifest key — uv refuses to
+    install a dep whose declared name doesn't match the package metadata.
+    For git plugins the value defaults to the manifest key (convention)
+    but is overridable; for local plugins it is read from the pyproject.
+    """
+    dep_name = p.package_name or p.name
+    if isinstance(p, ResolvedGitPlugin):
+        return dep_name, {"git": _ssh_to_url(p.repo), "rev": p.sha}
+    return dep_name, {"path": str(p.path), "editable": True}
+
+
 def _core_dependency(core_source: CoreSource) -> str:
     if core_source.kind == "pypi":
         # identity is the full PEP-508 string, e.g. "cuvis-ai-core==0.7.3"
         return core_source.identity
-    return "cuvis-ai-core"
+    return CORE_PACKAGE_NAME
 
 
 def _read_local_package_name(path: Path, *, manifest_key: str) -> str:
@@ -238,14 +244,23 @@ def _read_local_package_name(path: Path, *, manifest_key: str) -> str:
 
 
 def _ssh_to_url(repo: str) -> str:
-    """Normalise ``git@host:path`` → ``ssh://git@host/path`` for uv source URLs.
+    """Normalise a git repo URL to a uv-parseable form (no ``git+``, no rev).
 
-    HTTPS / HTTP / explicit ssh:// URLs are returned unchanged.
+    HTTPS / HTTP / explicit ``ssh://`` URLs are returned unchanged;
+    ``git@host:path`` shorthand is rewritten to ``ssh://git@host/path``.
+    The single source of truth for the accepted URL-scheme set.
     """
     if repo.startswith(("https://", "http://", "ssh://")):
         return repo
-    if repo.startswith("git@") and ":" in repo:
+    if repo.startswith("git@"):
         host_and_path = repo[len("git@") :]
+        if ":" not in host_and_path:
+            raise RuntimeProjectError(
+                f"Malformed SSH repo URL '{repo}': expected 'git@host:path'."
+            )
         host, _, path = host_and_path.partition(":")
         return f"ssh://git@{host}/{path}"
-    raise RuntimeProjectError(f"Unsupported repo URL scheme '{repo}'.")
+    raise RuntimeProjectError(
+        f"Unsupported repo URL scheme '{repo}'. "
+        "Expected 'git@', 'https://', 'http://', or 'ssh://'."
+    )

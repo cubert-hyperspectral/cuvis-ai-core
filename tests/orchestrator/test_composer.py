@@ -57,7 +57,8 @@ def _patch_resolve_and_uv(*, sync_side_effect=None):
         ),
         patch(
             "cuvis_ai_core.orchestrator.composer.uv_sync",
-            new=MagicMock(side_effect=sync_side_effect) if sync_side_effect
+            new=MagicMock(side_effect=sync_side_effect)
+            if sync_side_effect
             else MagicMock(),
         ),
     )
@@ -87,6 +88,13 @@ def test_compose_env_publishes_venv_path_and_writes_key_json(tmp_path: Path):
     payload = json.loads((venv.parent / "key.json").read_text())
     assert payload["core_source"]["identity"] == "cuvis-ai-core==0.7.3"
     assert payload["plugins"][0]["sha"] == FAKE_SHA
+
+    # The human-readable companion names the resolved core + plugin.
+    manifest = (venv.parent / "env_desc.md").read_text()
+    assert "cuvis-ai-core==0.7.3" in manifest
+    assert "https://example.com/p.git" in manifest
+    assert "v0.1.0" in manifest
+    assert FAKE_SHA[:8] in manifest
 
 
 def test_compose_env_cache_hit_skips_uv(tmp_path: Path):
