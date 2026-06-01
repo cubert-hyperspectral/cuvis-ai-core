@@ -36,6 +36,14 @@ plugin; `dev-docs` = internal ticket docs. This package depends on `cuvis-ai-sch
 - gRPC surface is **session-based**: LoadPipeline / Inference / Train / RestoreTrainRun /
   CloseSession. **Read the service files before reasoning about RPC names** — don't trust
   doc-named RPCs without confirming they exist.
+- **Two plugin-loading paths.** Production is the gRPC orchestrator: the server never
+  imports plugins; each run composes a per-run venv with the plugins pre-installed and a
+  child runtime imports them with no `sys.path` mutation. The `restore-pipeline` /
+  `restore-trainrun` CLIs are the **developer inner-loop**: they eager-load plugins into the
+  *current* venv (`uv pip install` + `sys.path` + `NodeRegistry.load_plugins`). Keep the CLI
+  path — no env compose, no child spawn, no gRPC; it picks up an editable plugin's working
+  tree immediately, is debuggable in one process, and the agentic-skills tooling shells out
+  to it. It is explicitly **not** the production path.
 
 ## Conventions
 
