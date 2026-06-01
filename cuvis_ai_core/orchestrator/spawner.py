@@ -316,8 +316,12 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         """
         env = {k: v for k, v in os.environ.items() if not _is_denied(k)}
 
-        # When GPU is not requested, also strip CUDA_* so the child can't
-        # accidentally grab a GPU. Production callers must opt in.
+        # When GPU is not requested, drop CUDA_* so the child does not
+        # inherit an explicit device selection. NOTE: popping these vars
+        # does not actually hide GPUs — torch still sees all visible devices
+        # by default. Truly hiding the GPU needs CUDA_VISIBLE_DEVICES set to
+        # "" (empty); that device/egress policy is left to a future sandbox
+        # layer.
         if not request_gpu:
             for var in _CUDA_VARS:
                 env.pop(var, None)

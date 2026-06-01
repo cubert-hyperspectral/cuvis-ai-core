@@ -29,6 +29,7 @@ Lifecycle per session:
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -150,7 +151,12 @@ def ensure_child_for_session(
     declared = _default_declared_paths(session_id)
     handle = get_spawner().spawn(
         venv,
-        cwd=declared.output_dir,
+        # Run the child with the server's own working directory so a
+        # config's relative data/output paths resolve exactly as they did
+        # under the in-process server. declared_paths still drives HOME/TEMP
+        # redirection and the future sandbox bind-mount set — it is
+        # intentionally not the cwd.
+        cwd=Path(os.getcwd()),
         declared_paths=declared,
         request_gpu=_gpu_requested(),
     )
