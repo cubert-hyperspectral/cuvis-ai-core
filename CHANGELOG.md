@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- **Breaking:** ports are one `PortSpec` each. `Node.INPUT_SPECS` / `OUTPUT_SPECS` are typed `dict[str, PortSpec]`; node init rejects list-form specs and a `variadic=True` output spec with a clear migration error. The pipeline accumulates a fan-in list only for `variadic` input ports.
+- Changed `NodeInfo` construction and `tools/emit_metadata.py` to the single-spec form (`map<string, PortSpec>` / `dict[str, CatalogPortSpec]`), carrying `variadic`. Dropped the `_unwrap_spec` list-normalization from the pipeline visualizer.
+- Realigned plugin loading to the bare-name manifest flow (resolver, plugin config, restore) and removed the standalone gRPC plugin-management example.
+- Added a `ruamel.yaml` dev dependency for the comment-preserving metadata emitter.
+
 ## 0.6.0 - 2026-05-11
 
 - **Breaking**: Renamed the lentils public-dataset entry. `PublicDatasets.download_dataset("Lentils_Anomaly" | "lentils")` no longer resolves; use `Demo_Industrial_FOD_Lentils` / `demo_industrial_fod_lentils`, which points at the superseding HuggingFace repo [`cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`](https://huggingface.co/datasets/cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils) (~6 GB; 69-frame XMR CU3S session with Dinomaly companion pipeline featured in the AdaClip tutorial and the docs dataset catalog). The legacy `cubert-gmbh/XMR_Lentils` repo is no longer referenced from the catalog and ships no companion pipeline; users still needing it can `snapshot_download(repo_id="cubert-gmbh/XMR_Lentils", repo_type="dataset", ...)` directly.
