@@ -424,7 +424,7 @@ class NodeRegistry:
             registry.load_plugin("adaclip", {
                 "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
                 "tag": "v1.2.3",
-                "provides": ["cuvis_ai_adaclip.node.AdaCLIPDetector"]
+                "provides": [{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}]
             })
 
             # ✅ CORRECT: Catalog fast path (register-then-materialise)
@@ -436,7 +436,7 @@ class NodeRegistry:
             registry = NodeRegistry()
             registry.load_plugin("local_dev", {
                 "path": "../my-plugin",
-                "provides": ["my_plugin.MyNode"]
+                "provides": [{"class_name": "my_plugin.MyNode"}]
             })
 
             # ❌ WRONG: Don't call as class method
@@ -483,13 +483,12 @@ class NodeRegistry:
         self._add_to_sys_path(plugin_path)
 
         # Extract package prefixes and clear module cache
-        package_prefixes = git_os.extract_package_prefixes(plugin_config.provides)
+        class_paths = [node.class_name for node in plugin_config.provides]
+        package_prefixes = git_os.extract_package_prefixes(class_paths)
         git_os.clear_package_modules(package_prefixes)
 
         # Import all provided node classes
-        imported_nodes = git_os.import_plugin_nodes(
-            plugin_config.provides, clear_cache=True
-        )
+        imported_nodes = git_os.import_plugin_nodes(class_paths, clear_cache=True)
 
         # Register all imported nodes in instance registries
         for class_name, node_class in imported_nodes.items():
@@ -531,8 +530,8 @@ class NodeRegistry:
         config = self.plugin_configs[name]
 
         # Remove nodes from registry
-        for class_path in config.provides:
-            class_name = class_path.rsplit(".", 1)[1]
+        for node in config.provides:
+            class_name = node.class_name.rsplit(".", 1)[1]
             self.plugin_registry.pop(class_name, None)
 
         # Remove config

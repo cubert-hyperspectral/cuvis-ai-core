@@ -383,14 +383,6 @@ class PipelineVisualizer:
         detail = self._format_port_spec(spec)
         return f"{port_name} ({detail})" if detail else port_name
 
-    @staticmethod
-    def _unwrap_spec(spec: Any) -> PortSpec | None:
-        # Variadic ports declare spec as `[PortSpec(...)]`; rendering only
-        # needs the element spec. Mirrors pipeline.py's normalization.
-        if isinstance(spec, list):
-            return spec[0] if spec else None
-        return spec
-
     def _resolve_port_spec(
         self,
         node: Node,
@@ -406,10 +398,9 @@ class PipelineVisualizer:
         port = ports.get(port_name)
         if port is None:
             return None
-        return self._unwrap_spec(getattr(port, "spec", None))
+        return getattr(port, "spec", None)
 
     def _format_port_spec(self, spec: PortSpec | None) -> str:
-        spec = self._unwrap_spec(spec)
         if spec is None:
             return ""
         dtype = self._format_dtype(spec.dtype)
@@ -599,7 +590,7 @@ class PipelineVisualizer:
 
         rows: list[str] = []
         for port_name, port in ports.items():
-            spec = self._unwrap_spec(getattr(port, "spec", None))
+            spec = getattr(port, "spec", None)
             color = self._dtype_hex_color(spec.dtype if spec else None)
             safe_name = self._escape_html(port_name)
             port_id = self._port_anchor_id(port_name, is_output=is_output)

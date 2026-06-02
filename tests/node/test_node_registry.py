@@ -245,12 +245,15 @@ class TestCatalogSplit:
         plugin_root.mkdir()
         cfg = LocalPluginConfig(
             path=str(plugin_root),
-            provides=["fake_pkg.module.FakeNode"],
+            provides=[{"class_name": "fake_pkg.module.FakeNode"}],
         )
         registry.register_catalog_entries({"fake_plugin": cfg})
 
         assert "fake_plugin" in registry.plugin_catalog
-        assert registry.plugin_catalog["fake_plugin"].provides == ["fake_pkg.module.FakeNode"]
+        assert [
+            entry.class_name
+            for entry in registry.plugin_catalog["fake_plugin"].provides
+        ] == ["fake_pkg.module.FakeNode"]
         # Side-effect snapshot must be unchanged.
         assert set(sys.modules) == modules_before
         assert sys.path == sys_path_before
@@ -276,7 +279,11 @@ class TestCatalogSplit:
 
         registry = NodeRegistry()
         registry.register_catalog_entries(
-            {"p": LocalPluginConfig(path=str(plugin_root_a), provides=["pkg.X"])}
+            {
+                "p": LocalPluginConfig(
+                    path=str(plugin_root_a), provides=[{"class_name": "pkg.X"}]
+                )
+            }
         )
 
         sink_messages: list[str] = []
@@ -285,7 +292,11 @@ class TestCatalogSplit:
         )
         try:
             registry.register_catalog_entries(
-                {"p": LocalPluginConfig(path=str(plugin_root_b), provides=["pkg.X"])}
+                {
+                    "p": LocalPluginConfig(
+                        path=str(plugin_root_b), provides=[{"class_name": "pkg.X"}]
+                    )
+                }
             )
         finally:
             logger.remove(handler_id)

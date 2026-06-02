@@ -1,5 +1,6 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
+import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -105,10 +106,13 @@ def restore_pipeline(
     config_overrides : list[str] | None
         Optional list of config overrides in dot notation (e.g., ["nodes.10.hparams.output_dir=outputs/my_tb"])
     plugins_path : str | Path | None
-        Back-compat: path to a single plugins manifest YAML file (or a
+        Deprecated. Path to a single plugins manifest YAML file (or a
         plugins directory). When this points at a directory, it is merged
         into ``plugins_dirs``. When it points at a file, the file is
-        loaded directly via the legacy aggregator-manifest path.
+        loaded directly via the legacy aggregator-manifest path. Prefer
+        ``plugins_dirs`` (the ``--plugins-dir`` CLI flag) pointing at a
+        ``configs/plugins/`` catalog together with the pipeline's
+        ``plugins:`` field.
     plugins_dirs : list[str | Path] | None
         Optional list of plugins directories to scan for per-plugin
         manifests. Used by the pipeline-driven plugin resolver
@@ -139,6 +143,13 @@ def restore_pipeline(
     # Back-compat: aggregator manifest file via plugins_path bypasses the
     # resolver entirely. Eager-loads every entry — same as before this PR.
     if plugins_path is not None:
+        warnings.warn(
+            "plugins_path (--plugins-path) is deprecated; pass plugins_dirs=[...] "
+            "(--plugins-dir) pointing at a configs/plugins/ catalog and declare the "
+            "pipeline's plugins: field instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         plugins_path_obj = Path(plugins_path)
         if not plugins_path_obj.exists():
             raise FileNotFoundError(f"Plugins manifest not found: {plugins_path_obj}")
@@ -617,9 +628,10 @@ Examples:
         "--plugins-path",
         type=str,
         default=None,
-        help="Path to plugins manifest YAML file (or a plugins directory) for "
-        "loading external plugin nodes. A file argument uses the legacy "
-        "aggregator-manifest path; a directory is merged into --plugins-dir.",
+        help="[DEPRECATED] Path to a single plugins manifest YAML file (or a "
+        "plugins directory). A file argument uses the legacy aggregator-manifest "
+        "path; a directory is merged into --plugins-dir. Use --plugins-dir "
+        "(repeatable) pointing at a configs/plugins/ catalog instead.",
     )
     parser.add_argument(
         "--plugins-dir",

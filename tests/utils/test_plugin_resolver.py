@@ -7,12 +7,9 @@ from textwrap import dedent
 
 import pytest
 
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline import (
-    CatalogPluginRef,
-    InlineGitPluginRef,
-    InlineLocalPluginRef,
     NodeConfig,
     PipelineConfig,
 )
@@ -34,8 +31,8 @@ def plugins_dir(tmp_path: Path) -> Path:
           cuvis_ai_builtin:
             path: "../.."
             provides:
-              - cuvis_ai.node.anomaly.rx_detector.RXGlobal
-              - cuvis_ai.node.normalization.MinMaxNormalizer
+              - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
+              - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
         """,
     )
     _write_manifest(
@@ -46,7 +43,7 @@ def plugins_dir(tmp_path: Path) -> Path:
             repo: "https://github.com/example/adaclip.git"
             tag: "v0.1.2"
             provides:
-              - cuvis_ai_adaclip.node.AdaCLIPDetector
+              - class_name: cuvis_ai_adaclip.node.AdaCLIPDetector
         """,
     )
     return pdir
@@ -54,7 +51,9 @@ def plugins_dir(tmp_path: Path) -> Path:
 
 def _pipeline_with(class_names: list[str], plugins=None) -> PipelineConfig:
     return PipelineConfig(
-        nodes=[NodeConfig(name=f"n{i}", class_name=c) for i, c in enumerate(class_names)],
+        nodes=[
+            NodeConfig(name=f"n{i}", class_name=c) for i, c in enumerate(class_names)
+        ],
         connections=[],
         plugins=plugins,
     )
@@ -76,63 +75,12 @@ def test_declared_bare_name(plugins_dir: Path):
     assert isinstance(resolved["cuvis_ai_builtin"], LocalPluginConfig)
 
 
-def test_declared_catalog_ref_with_tag_override(plugins_dir: Path):
-    """CatalogPluginRef with tag overrides the catalog entry's tag."""
-    pipeline = _pipeline_with(
-        ["cuvis_ai_adaclip.node.AdaCLIPDetector"],
-        plugins=[CatalogPluginRef(name="adaclip", tag="v0.9.9")],
-    )
-    resolved = resolve_pipeline_plugins(pipeline, [plugins_dir])
-    assert isinstance(resolved["adaclip"], GitPluginConfig)
-    assert resolved["adaclip"].tag == "v0.9.9"
-
-
-def test_declared_inline_git_no_catalog_needed():
-    """Inline git refs do not require a catalog dir."""
-    inline = InlineGitPluginRef(
-        name="private",
-        repo="https://github.com/example/private.git",
-        tag="v0.0.1",
-        provides=["pkg.module.Foo"],
-    )
-    pipeline = _pipeline_with(["pkg.module.Foo"], plugins=[inline])
-    resolved = resolve_pipeline_plugins(pipeline, [])
-    assert "private" in resolved
-    assert resolved["private"].repo == "https://github.com/example/private.git"
-
-
-def test_declared_inline_local_no_catalog_needed(tmp_path: Path):
-    """Inline local refs do not require a catalog dir."""
-    inline = InlineLocalPluginRef(
-        name="dev_plug",
-        path=str(tmp_path),
-        provides=["pkg.module.Bar"],
-    )
-    pipeline = _pipeline_with(["pkg.module.Bar"], plugins=[inline])
-    resolved = resolve_pipeline_plugins(pipeline, [])
-    assert "dev_plug" in resolved
-    assert resolved["dev_plug"].path == str(tmp_path)
-
-
 def test_declared_unknown_bare_name(plugins_dir: Path):
     pipeline = _pipeline_with(
         ["cuvis_ai_adaclip.node.AdaCLIPDetector"],
         plugins=["does_not_exist"],
     )
     with pytest.raises(ValueError, match="does_not_exist"):
-        resolve_pipeline_plugins(pipeline, [plugins_dir])
-
-
-def test_declared_same_name_conflict(plugins_dir: Path):
-    """Same-name PluginRefs with diverging config raise."""
-    pipeline = _pipeline_with(
-        ["cuvis_ai_adaclip.node.AdaCLIPDetector"],
-        plugins=[
-            "adaclip",
-            CatalogPluginRef(name="adaclip", tag="v0.9.9"),
-        ],
-    )
-    with pytest.raises(ValueError, match="adaclip.*diverging"):
         resolve_pipeline_plugins(pipeline, [plugins_dir])
 
 
@@ -198,7 +146,8 @@ def test_auto_resolve_ambiguous(tmp_path: Path):
         plugins:
           a:
             path: "."
-            provides: [pkg.module.Shared]
+            provides:
+              - class_name: pkg.module.Shared
         """,
     )
     _write_manifest(
@@ -207,7 +156,8 @@ def test_auto_resolve_ambiguous(tmp_path: Path):
         plugins:
           b:
             path: "."
-            provides: [pkg.module.Shared]
+            provides:
+              - class_name: pkg.module.Shared
         """,
     )
     pipeline = _pipeline_with(["pkg.module.Shared"])
@@ -241,7 +191,8 @@ def test_multi_dir_override_logged(tmp_path: Path):
         plugins:
           p:
             path: {old_target.as_posix()!r}
-            provides: [pkg.X]
+            provides:
+              - class_name: pkg.X
         """,
     )
     dir2 = tmp_path / "dir2"
@@ -252,7 +203,8 @@ def test_multi_dir_override_logged(tmp_path: Path):
         plugins:
           p:
             path: {new_target.as_posix()!r}
-            provides: [pkg.X]
+            provides:
+              - class_name: pkg.X
         """,
     )
     pipeline = _pipeline_with(["pkg.X"], plugins=["p"])
@@ -260,18 +212,13 @@ def test_multi_dir_override_logged(tmp_path: Path):
     assert Path(resolved["p"].path) == new_target.resolve()
 
 
-def test_nonexistent_dirs_silently_skipped(tmp_path: Path):
-    """Non-existent dirs in the candidate list are ignored."""
+def test_nonexistent_dirs_silently_skipped(plugins_dir: Path):
+    """Non-existent dirs in the candidate list are ignored; real dirs still resolve."""
     pipeline = _pipeline_with(
-        ["pkg.module.Foo"],
-        plugins=[
-            InlineGitPluginRef(
-                name="p",
-                repo="https://x/y.git",
-                tag="v1",
-                provides=["pkg.module.Foo"],
-            )
-        ],
+        ["cuvis_ai_adaclip.node.AdaCLIPDetector"],
+        plugins=["adaclip"],
     )
-    resolved = resolve_pipeline_plugins(pipeline, [tmp_path / "does_not_exist"])
-    assert "p" in resolved
+    resolved = resolve_pipeline_plugins(
+        pipeline, [plugins_dir.parent / "does_not_exist", plugins_dir]
+    )
+    assert "adaclip" in resolved

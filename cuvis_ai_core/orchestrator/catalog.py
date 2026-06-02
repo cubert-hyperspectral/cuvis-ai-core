@@ -1,21 +1,21 @@
-"""Server-side I/O wrapper around the static node catalog.
+"""Server-side wrapper around the static node catalog.
 
 The wire shape — :class:`CatalogPortSpec`, :class:`CatalogNodeEntry`,
-:class:`CatalogPluginEntry` — lives in :mod:`cuvis_ai_schemas.catalog`
-so plugin repos can emit ``metadata.json`` against the same Pydantic
-models the server reads back. This module only adds the server-side
-glue: read ``metadata_path`` off a plugin manifest entry, resolve it,
-and dispatch to the schemas-provided validator.
+:class:`CatalogPluginEntry` — lives in :mod:`cuvis_ai_schemas.catalog`.
+The catalog is carried **inline** in each plugin manifest entry: the
+entry's ``provides`` list *is* the node catalog (every item is a
+:class:`CatalogNodeEntry` — an FQCN ``class_name`` plus optional palette
+metadata). This module only adds the server-side glue: build the catalog
+from a registered manifest entry without importing the plugin package.
 
 The parent gRPC server has no business importing plugin packages: the
 orchestrator confines plugin code to child venvs. The GUI's node-palette
 RPC needs to enumerate every plugin's node classes before any pipeline
-has been built — the static catalog closes that gap.
+has been built — the inline catalog closes that gap.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from cuvis_ai_schemas.catalog import (
@@ -30,34 +30,18 @@ def load_catalog_entry(
     plugin_name: str,
     config_dict: dict[str, Any],
 ) -> CatalogPluginEntry | None:
-    """Load a plugin's static node catalog without importing plugin code.
+    """Build a plugin's static node catalog without importing plugin code.
 
-    Returns ``None`` when the plugin's manifest entry carries no
-    ``metadata_path``; the caller should then fall back to import-based
-    discovery (a transitional path the next phase removes entirely).
+    The catalog comes from the manifest entry's inline ``provides`` list.
+    Returns ``None`` when the entry provides no nodes, so the caller
+    surfaces nothing in the palette for it.
 
     Raises:
-        ValueError: ``metadata_path`` is set but not absolute, or the
-            JSON payload fails Pydantic validation (the schema module
-            raises ``pydantic.ValidationError``, which is a ``ValueError``
-            subclass).
-        FileNotFoundError: ``metadata_path`` is set but the file is
-            missing on disk.
+        ValueError: the ``provides`` payload fails Pydantic validation
+            (the schema module raises ``pydantic.ValidationError``, a
+            ``ValueError`` subclass).
     """
-    metadata_path = config_dict.get("metadata_path")
-    if not metadata_path:
-        return None
-
-    path = Path(metadata_path)
-    if not path.is_absolute():
-        raise ValueError(
-            f"Plugin '{plugin_name}' metadata_path must be absolute "
-            f"(got: {metadata_path!r}). Relative paths in YAML manifests are "
-            "resolved by PluginManifest.from_yaml; manifests submitted via the "
-            "LoadPlugins RPC must use an absolute path."
-        )
-
-    return CatalogPluginEntry.from_metadata_file(path)
+    return CatalogPluginEntry.from_manifest_entry(plugin_name, config_dict)
 
 
 __all__ = [

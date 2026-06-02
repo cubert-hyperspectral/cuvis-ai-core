@@ -47,7 +47,7 @@ def load_preinstalled_plugins(
     """
     for name, config in resolved_plugins.items():
         imported_nodes = git_and_os.import_plugin_nodes(
-            config.provides,
+            [node.class_name for node in config.provides],
             clear_cache=False,  # nothing stale to clear in a fresh child
         )
         for class_name, node_class in imported_nodes.items():

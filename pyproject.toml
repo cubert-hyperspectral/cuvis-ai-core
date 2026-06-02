@@ -61,6 +61,7 @@ dependencies = [
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
     "click>=8.0",
+    "packaging>=23.0",
     # Per-run child-env composer (orchestrator package)
     "filelock>=3.13",
     "tomli-w>=1.0",
@@ -80,6 +81,8 @@ dev = [
     "types-PyYAML>=6.0.0",
     "pytest",
     "pytest-cov",
+    # Comment-preserving YAML round-trip for tools/emit_metadata.py
+    "ruamel.yaml>=0.18",
     "ipympl>=0.9.8",
     "ipdb>=0.13.13",
     "psutil",
@@ -112,10 +115,12 @@ restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
 restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
 suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
+audit-plugin-deps = "scripts.audit_plugin_deps:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cuvis_ai_core"]
+include = ["cuvis_ai_core", "scripts*"]
+namespaces = true
 
 [tool.black]
 line-length = 88

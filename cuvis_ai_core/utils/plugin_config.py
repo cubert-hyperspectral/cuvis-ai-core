@@ -5,6 +5,8 @@ from typing import List, Dict, Optional, Union, Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import yaml
 
+from cuvis_ai_schemas.catalog import CatalogNodeEntry
+
 
 class _BasePluginConfig(BaseModel):
     """Base plugin configuration with strict validation.
@@ -19,21 +21,13 @@ class _BasePluginConfig(BaseModel):
         populate_by_name=True,  # Allow field aliases
     )
 
-    provides: List[str] = Field(
-        description="List of fully-qualified class paths this plugin provides",
-        min_length=1,  # At least one class required
-    )
-
-    metadata_path: Optional[str] = Field(
-        default=None,
+    provides: List[CatalogNodeEntry] = Field(
         description=(
-            "Optional path to a metadata.json describing this plugin's node "
-            "classes (port specs, category, tags, icon). When provided the "
-            "server reads the JSON instead of importing the plugin to answer "
-            "ListAvailableNodes. Relative paths are resolved against the "
-            "manifest YAML's directory in PluginManifest.from_yaml; manifests "
-            "submitted via the LoadPlugins RPC must use an absolute path."
+            "Node catalog this plugin provides. Each entry is one node: an FQCN "
+            "'class_name' (the install + import target) plus optional palette "
+            "metadata (category, tags, icon_svg, input/output specs, doc_summary)."
         ),
+        min_length=1,  # At least one class required
     )
 
     package_name: Optional[str] = Field(
@@ -53,24 +47,17 @@ class _BasePluginConfig(BaseModel):
 
     @field_validator("provides")
     @classmethod
-    def _validate_class_paths(cls, value: List[str]) -> List[str]:
-        """Ensure class paths are well-formed."""
-        for class_path in value:
-            if not class_path or "." not in class_path:
+    def _validate_class_paths(
+        cls, value: List[CatalogNodeEntry]
+    ) -> List[CatalogNodeEntry]:
+        """Ensure each provided node's class_name is a fully-qualified path."""
+        for node in value:
+            if "." not in node.class_name:
                 raise ValueError(
-                    f"Invalid class path '{class_path}'. "
+                    f"Invalid class path '{node.class_name}'. "
                     "Must be fully-qualified (e.g., 'package.module.ClassName')"
                 )
         return value
-
-    @field_validator("metadata_path")
-    @classmethod
-    def _validate_metadata_path(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if not value.strip():
-            raise ValueError("metadata_path cannot be empty")
-        return value.strip()
 
 
 class GitPluginConfig(_BasePluginConfig):
@@ -191,11 +178,7 @@ class PluginManifest(BaseModel):
 
     @classmethod
     def from_yaml(cls, yaml_path: Path) -> "PluginManifest":
-        """Load and validate manifest from YAML file.
-
-        Relative ``metadata_path`` entries are resolved against
-        ``yaml_path.parent`` so the catalog loader sees an absolute path.
-        """
+        """Load and validate manifest from YAML file."""
         if not yaml_path.exists():
             raise FileNotFoundError(f"Plugin manifest not found: {yaml_path}")
 
@@ -205,15 +188,7 @@ class PluginManifest(BaseModel):
         if not data:
             return cls(plugins={})
 
-        manifest = cls.model_validate(data)
-        manifest_dir = yaml_path.parent.resolve()
-        for plugin_config in manifest.plugins.values():
-            if plugin_config.metadata_path is None:
-                continue
-            candidate = Path(plugin_config.metadata_path)
-            if not candidate.is_absolute():
-                plugin_config.metadata_path = str((manifest_dir / candidate).resolve())
-        return manifest
+        return cls.model_validate(data)
 
     @classmethod
     def from_dict(cls, data: Dict) -> "PluginManifest":

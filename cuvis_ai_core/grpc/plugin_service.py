@@ -69,6 +69,7 @@ def _convert_port_spec_to_proto(spec: PortSpec, name: str) -> cuvis_ai_pb2.PortS
         shape=shape_list,
         optional=spec.optional,
         description=spec.description,
+        variadic=getattr(spec, "variadic", False),
     )
 
 
@@ -184,18 +185,18 @@ def _catalog_port_spec_to_proto(
         shape=list(spec.shape),
         optional=spec.optional,
         description=spec.description,
+        variadic=spec.variadic,
     )
 
 
 def _catalog_specs_map_to_proto(
-    specs: dict[str, tuple[CatalogPortSpec, ...]],
-) -> dict[str, cuvis_ai_pb2.PortSpecList]:
-    """Convert a {port → tuple-of-CatalogPortSpec} map into proto PortSpecList map."""
-    out: dict[str, cuvis_ai_pb2.PortSpecList] = {}
-    for port_name, specs_tuple in specs.items():
-        proto_specs = [_catalog_port_spec_to_proto(port_name, s) for s in specs_tuple]
-        out[port_name] = cuvis_ai_pb2.PortSpecList(specs=proto_specs)
-    return out
+    specs: dict[str, CatalogPortSpec],
+) -> dict[str, cuvis_ai_pb2.PortSpec]:
+    """Convert a {port → CatalogPortSpec} map into a proto {port → PortSpec} map."""
+    return {
+        port_name: _catalog_port_spec_to_proto(port_name, spec)
+        for port_name, spec in specs.items()
+    }
 
 
 def _catalog_entry_to_node_info(
@@ -218,9 +219,13 @@ def _catalog_entry_to_node_info(
     tag_ints.sort()
 
     icon_svg_bytes = entry.icon_svg.encode("utf-8") if entry.icon_svg else b""
+    # entry.class_name is the FQCN; the proto carries both the FQCN
+    # (full_path) and the short display name derived from it.
+    fqcn = entry.class_name
+    short_name = fqcn.rpartition(".")[-1] or fqcn
     return cuvis_ai_pb2.NodeInfo(
-        class_name=entry.class_name,
-        full_path=entry.full_path,
+        class_name=short_name,
+        full_path=fqcn,
         source="plugin",
         plugin_name=plugin_name,
         input_specs=_catalog_specs_map_to_proto(entry.input_specs),
@@ -311,7 +316,7 @@ class PluginService:
             plugin_type = "git" if "repo" in config else "local"
             source = config.get("repo") or config.get("path", "")
             tag = config.get("tag", "")
-            provides = config.get("provides", [])
+            provides = [n["class_name"] for n in config.get("provides", [])]
 
             plugins.append(
                 cuvis_ai_pb2.PluginInfo(
@@ -347,7 +352,7 @@ class PluginService:
         plugin_type = "git" if "repo" in config else "local"
         source = config.get("repo") or config.get("path", "")
         tag = config.get("tag", "")
-        provides = config.get("provides", [])
+        provides = [n["class_name"] for n in config.get("provides", [])]
 
         return cuvis_ai_pb2.GetPluginInfoResponse(
             plugin=cuvis_ai_pb2.PluginInfo(
@@ -367,13 +372,10 @@ class PluginService:
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         """List all available nodes (built-in + session plugins).
 
-        Plugin nodes come exclusively from each plugin's static
-        ``metadata.json`` (pointed at by ``metadata_path`` in the
-        manifest entry). The server never imports plugin code to
-        answer this RPC. Plugins whose manifest entry has no
-        ``metadata_path`` — or whose metadata file fails to load —
-        contribute no nodes; a warning surfaces and the caller should
-        ship metadata.json with the plugin.
+        Plugin nodes come exclusively from each plugin's inline
+        catalog — the ``provides`` list in its manifest entry. The
+        server never imports plugin code to answer this RPC. Plugins
+        whose entry provides no nodes contribute nothing to the palette.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -452,67 +454,32 @@ class PluginService:
 
         if plugins_missing_metadata:
             logger.warning(
-                f"Plugins {sorted(plugins_missing_metadata)} ship no metadata.json — "
-                "their nodes will not appear in the palette. Add 'metadata_path' "
-                "to the plugin manifest and emit metadata via 'tools/emit_metadata.py'."
+                f"Plugins {sorted(plugins_missing_metadata)} provide no nodes — "
+                "their nodes will not appear in the palette. Add node entries to "
+                "the plugin manifest's 'provides:' list."
             )
 
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)
 
     def _extract_port_specs(
         self, node_class: type
-    ) -> tuple[
-        dict[str, cuvis_ai_pb2.PortSpecList], dict[str, cuvis_ai_pb2.PortSpecList]
-    ]:
-        """Extract INPUT_SPECS and OUTPUT_SPECS from node class and convert to proto.
+    ) -> tuple[dict[str, cuvis_ai_pb2.PortSpec], dict[str, cuvis_ai_pb2.PortSpec]]:
+        """Extract INPUT_SPECS and OUTPUT_SPECS from a node class as proto maps.
 
         Args:
             node_class: Node class to extract specs from
 
         Returns:
-            Tuple of (input_specs_map, output_specs_map) as proto PortSpecList maps
+            Tuple of (input_specs_map, output_specs_map) as proto {port → PortSpec} maps
         """
-        input_specs_map = {}
-        output_specs_map = {}
-
-        # Extract INPUT_SPECS
-        if hasattr(node_class, "INPUT_SPECS"):
-            input_specs_dict = getattr(node_class, "INPUT_SPECS")
-            for port_name, spec in input_specs_dict.items():
-                # Handle variadic ports (list of PortSpec)
-                if isinstance(spec, list):
-                    proto_specs = []
-                    for s in spec:
-                        proto_specs.append(_convert_port_spec_to_proto(s, port_name))
-                    input_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
-                        specs=proto_specs
-                    )
-                else:
-                    # Single PortSpec
-                    proto_spec = _convert_port_spec_to_proto(spec, port_name)
-                    input_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
-                        specs=[proto_spec]
-                    )
-
-        # Extract OUTPUT_SPECS
-        if hasattr(node_class, "OUTPUT_SPECS"):
-            output_specs_dict = getattr(node_class, "OUTPUT_SPECS")
-            for port_name, spec in output_specs_dict.items():
-                # Handle variadic ports (list of PortSpec)
-                if isinstance(spec, list):
-                    proto_specs = []
-                    for s in spec:
-                        proto_specs.append(_convert_port_spec_to_proto(s, port_name))
-                    output_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
-                        specs=proto_specs
-                    )
-                else:
-                    # Single PortSpec
-                    proto_spec = _convert_port_spec_to_proto(spec, port_name)
-                    output_specs_map[port_name] = cuvis_ai_pb2.PortSpecList(
-                        specs=[proto_spec]
-                    )
-
+        input_specs_map = {
+            port_name: _convert_port_spec_to_proto(spec, port_name)
+            for port_name, spec in getattr(node_class, "INPUT_SPECS", {}).items()
+        }
+        output_specs_map = {
+            port_name: _convert_port_spec_to_proto(spec, port_name)
+            for port_name, spec in getattr(node_class, "OUTPUT_SPECS", {}).items()
+        }
         return input_specs_map, output_specs_map
 
     @grpc_handler("Failed to clear cache")

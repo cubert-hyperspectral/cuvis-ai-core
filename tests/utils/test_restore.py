@@ -180,3 +180,48 @@ def test_restore_pipeline_cli_parses_measurement_indices_and_annotation_json(
     assert captured["annotation_json_path"] == "data/sample.json"
     assert captured["measurement_indices"] == [0, 2, 5]
     assert captured["processing_mode"] == "SpectralRadiance"
+
+
+class _FakeRegistry:
+    instances: list["_FakeRegistry"] = []
+
+    def __init__(self) -> None:
+        self.loaded: list[Path] = []
+        self.__class__.instances.append(self)
+
+    def load_plugins(self, path) -> None:
+        self.loaded.append(Path(path))
+
+
+def test_restore_pipeline_plugins_path_warns_and_still_loads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The legacy ``plugins_path`` aggregator manifest is deprecated.
+
+    It must keep working (load the manifest) while emitting a
+    ``DeprecationWarning`` that points callers at ``plugins_dirs`` /
+    ``--plugins-dir``.
+    """
+    manifest = tmp_path / "plugins.yaml"
+    manifest.write_text("plugins: {}\n", encoding="utf-8")
+
+    _FakeRegistry.instances.clear()
+    monkeypatch.setattr(restore_mod, "NodeRegistry", _FakeRegistry)
+    monkeypatch.setattr(
+        restore_mod.CuvisPipeline,
+        "load_pipeline",
+        staticmethod(lambda *args, **kwargs: _FakePipeline()),
+    )
+
+    with pytest.warns(DeprecationWarning, match="plugins_path"):
+        pipeline = restore_mod.restore_pipeline(
+            pipeline_path=tmp_path / "pipeline.yaml",
+            device="cpu",
+            plugins_path=manifest,
+        )
+
+    # Still loaded the manifest through the legacy aggregator path.
+    assert pipeline is not None
+    assert len(_FakeRegistry.instances) == 1
+    assert _FakeRegistry.instances[0].loaded == [manifest]

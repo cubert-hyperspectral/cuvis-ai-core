@@ -40,25 +40,27 @@ def test_plugin_config_validation():
     git_config = GitPluginConfig(
         repo="git@gitlab.cubert.local:cubert/test-plugin.git",
         tag="v1.2.3",
-        provides=["test_plugin.TestNode"],
+        provides=[{"class_name": "test_plugin.TestNode"}],
     )
     assert git_config.repo.endswith("test-plugin.git")
     assert git_config.tag == "v1.2.3"
 
     local_config = LocalPluginConfig(
         path="/path/to/plugin",
-        provides=["local_plugin.LocalNode"],
+        provides=[{"class_name": "local_plugin.LocalNode"}],
     )
     assert local_config.path == "/path/to/plugin"
 
     with pytest.raises(Exception):
-        GitPluginConfig(repo="invalid-url", tag="v1.0.0", provides=["test.Node"])
+        GitPluginConfig(
+            repo="invalid-url", tag="v1.0.0", provides=[{"class_name": "test.Node"}]
+        )
 
     with pytest.raises(Exception):
         GitPluginConfig(
             repo="git@gitlab.com:user/repo.git",
             tag="v1.0.0",
-            provides=["InvalidPath"],
+            provides=[{"class_name": "InvalidPath"}],
         )
 
     with pytest.raises(Exception):
@@ -75,9 +77,12 @@ def test_plugin_manifest_validation(tmp_path: Path):
             "test_git": {
                 "repo": "git@gitlab.com:user/repo.git",
                 "tag": "v1.0.0",
-                "provides": ["repo.TestNode"],
+                "provides": [{"class_name": "repo.TestNode"}],
             },
-            "test_local": {"path": "../my-plugin", "provides": ["my_plugin.MyNode"]},
+            "test_local": {
+                "path": "../my-plugin",
+                "provides": [{"class_name": "my_plugin.MyNode"}],
+            },
         }
     }
 
@@ -86,7 +91,10 @@ def test_plugin_manifest_validation(tmp_path: Path):
 
     invalid_data = {
         "plugins": {
-            "invalid-name!": {"path": "../my-plugin", "provides": ["my_plugin.MyNode"]}
+            "invalid-name!": {
+                "path": "../my-plugin",
+                "provides": [{"class_name": "my_plugin.MyNode"}],
+            }
         }
     }
     with pytest.raises(Exception):
@@ -106,7 +114,10 @@ def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject):
 
     registry.load_plugin(
         "simple_test",
-        {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
+        {
+            "path": str(plugin_root),
+            "provides": [{"class_name": "simple_node.SimpleTestNode"}],
+        },
     )
 
     assert "simple_test" in registry.list_plugins()
@@ -124,7 +135,7 @@ def test_manifest_relative_path_resolution(tmp_path: Path, create_plugin_pyproje
         "plugins": {
             "rel_test": {
                 "path": "plugins/rel_plugin",
-                "provides": ["simple_node.SimpleTestNode"],
+                "provides": [{"class_name": "simple_node.SimpleTestNode"}],
             }
         }
     }
@@ -146,7 +157,10 @@ def test_pipeline_integration_with_plugin(tmp_path: Path, create_plugin_pyprojec
 
     registry.load_plugin(
         "simple_test",
-        {"path": str(plugin_root), "provides": ["simple_node.SimpleTestNode"]},
+        {
+            "path": str(plugin_root),
+            "provides": [{"class_name": "simple_node.SimpleTestNode"}],
+        },
     )
     config = {
         "metadata": {"name": "plugin_pipeline"},

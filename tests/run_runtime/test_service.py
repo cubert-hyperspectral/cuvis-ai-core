@@ -47,11 +47,11 @@ def test_decode_resolved_plugins_discriminates_git_vs_local(tmp_path):
             "from_git": {
                 "repo": "https://example.com/repo.git",
                 "tag": "v1.2.3",
-                "provides": ["pkg.Cls"],
+                "provides": [{"class_name": "pkg.Cls"}],
             },
             "from_local": {
                 "path": str(tmp_path),
-                "provides": ["pkg2.Cls"],
+                "provides": [{"class_name": "pkg2.Cls"}],
             },
         }
     ).encode("utf-8")
@@ -61,7 +61,7 @@ def test_decode_resolved_plugins_discriminates_git_vs_local(tmp_path):
 
 
 def test_decode_resolved_plugins_missing_key_raises():
-    payload = json.dumps({"bad": {"provides": ["x.Y"]}}).encode("utf-8")
+    payload = json.dumps({"bad": {"provides": [{"class_name": "x.Y"}]}}).encode("utf-8")
     with pytest.raises(ValueError, match="neither 'repo' nor 'path'"):
         _decode_resolved_plugins(payload)
 
@@ -150,7 +150,7 @@ def test_initialize_session_imports_class_and_registers_it():
         {
             "fake_plugin": {
                 "path": "/tmp/does-not-need-to-exist",
-                "provides": [f"{__name__}._FakeTestNode"],
+                "provides": [{"class_name": f"{__name__}._FakeTestNode"}],
             }
         }
     ).encode("utf-8")

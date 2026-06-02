@@ -23,8 +23,8 @@ def test_load_preinstalled_registers_one_entry_per_class():
         repo="https://example.com/repo.git",
         tag="v1.0",
         provides=[
-            f"{__name__}._DummyClassA",
-            f"{__name__}._DummyClassB",
+            {"class_name": f"{__name__}._DummyClassA"},
+            {"class_name": f"{__name__}._DummyClassB"},
         ],
     )
     load_preinstalled_plugins(registry, {"fake_plugin": cfg})
@@ -43,7 +43,7 @@ def test_load_preinstalled_local_config_path_resolves(tmp_path):
     registry = NodeRegistry()
     cfg = LocalPluginConfig(
         path=str(tmp_path),
-        provides=[f"{__name__}._DummyClassA"],
+        provides=[{"class_name": f"{__name__}._DummyClassA"}],
     )
     load_preinstalled_plugins(registry, {"local_p": cfg})
     assert registry.plugin_registry["_DummyClassA"] is _DummyClassA
@@ -61,7 +61,7 @@ def test_load_preinstalled_unknown_class_raises():
     cfg = GitPluginConfig(
         repo="https://example.com/repo.git",
         tag="v1.0",
-        provides=["package.that.does.not.exist.Cls"],
+        provides=[{"class_name": "package.that.does.not.exist.Cls"}],
     )
     with pytest.raises((ImportError, AttributeError)):
         load_preinstalled_plugins(registry, {"missing": cfg})

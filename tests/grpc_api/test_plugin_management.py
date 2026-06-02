@@ -43,7 +43,7 @@ class WorkflowTestNode(Node):
             plugins={
                 "workflow_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
-                    provides=["workflow_plugin.node.WorkflowTestNode"],
+                    provides=[{"class_name": "workflow_plugin.node.WorkflowTestNode"}],
                 )
             }
         )
@@ -81,15 +81,20 @@ class WorkflowTestNode(Node):
             assert info_resp.plugin.name == "workflow_plugin"
             assert info_resp.plugin.type == "local"
 
-            # Step 6: List available nodes — plugin nodes are NOT importable
-            # yet. LoadPlugins only registered into the catalog; only
-            # LoadPipeline triggers the import. ListAvailableNodes therefore
-            # returns built-ins only.
+            # Step 6: List available nodes — the plugin's inline catalog
+            # (its manifest ``provides`` list) surfaces immediately after
+            # LoadPlugins; no plugin import is needed. The proto NodeInfo
+            # carries the short class name plus the FQCN as full_path.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
             node_names = [node.class_name for node in nodes_resp.nodes]
-            assert "WorkflowTestNode" not in node_names
+            assert "WorkflowTestNode" in node_names
+            workflow_node = next(
+                node for node in nodes_resp.nodes if node.class_name == "WorkflowTestNode"
+            )
+            assert workflow_node.source == "plugin"
+            assert workflow_node.full_path == "workflow_plugin.node.WorkflowTestNode"
 
             # Step 7: Close session (should cleanup plugins)
             close_resp = grpc_stub.CloseSession(
@@ -146,10 +151,12 @@ class Plugin2Node(Node):
         manifest = PluginManifest(
             plugins={
                 "plugin1": LocalPluginConfig(
-                    path=str(plugin1_dir), provides=["plugin1.node.Plugin1Node"]
+                    path=str(plugin1_dir),
+                    provides=[{"class_name": "plugin1.node.Plugin1Node"}],
                 ),
                 "plugin2": LocalPluginConfig(
-                    path=str(plugin2_dir), provides=["plugin2.node.Plugin2Node"]
+                    path=str(plugin2_dir),
+                    provides=[{"class_name": "plugin2.node.Plugin2Node"}],
                 ),
             }
         )
@@ -223,7 +230,8 @@ class IsolatedNode(Node):
         manifest = PluginManifest(
             plugins={
                 "isolated_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["isolated_plugin.node.IsolatedNode"]
+                    path=str(plugin_dir),
+                    provides=[{"class_name": "isolated_plugin.node.IsolatedNode"}],
                 )
             }
         )
@@ -254,15 +262,15 @@ class IsolatedNode(Node):
             )
             assert len(list2_resp.plugins) == 0
 
-            # Plugin registered in session1's catalog but not materialised
-            # yet — ListAvailableNodes returns built-ins only. Session2
-            # likewise sees only built-ins. Session isolation is asserted
-            # via ListLoadedPlugins (catalog) above.
+            # Session1's inline catalog surfaces the plugin node in
+            # ListAvailableNodes immediately after LoadPlugins (no import).
+            # Session2 never registered the plugin, so its catalog — and
+            # therefore its ListAvailableNodes response — must not include it.
             nodes1_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session1_id)
             )
             node1_names = [node.class_name for node in nodes1_resp.nodes]
-            assert "IsolatedNode" not in node1_names
+            assert "IsolatedNode" in node1_names
 
             nodes2_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session2_id)
@@ -310,7 +318,8 @@ class CleanupNode(Node):
         manifest = PluginManifest(
             plugins={
                 "cleanup_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["cleanup_plugin.node.CleanupNode"]
+                    path=str(plugin_dir),
+                    provides=[{"class_name": "cleanup_plugin.node.CleanupNode"}],
                 )
             }
         )
@@ -397,9 +406,9 @@ class NodeC(Node):
                 "multi_node_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
                     provides=[
-                        "multi_node_plugin.nodes.NodeA",
-                        "multi_node_plugin.nodes.NodeB",
-                        "multi_node_plugin.nodes.NodeC",
+                        {"class_name": "multi_node_plugin.nodes.NodeA"},
+                        {"class_name": "multi_node_plugin.nodes.NodeB"},
+                        {"class_name": "multi_node_plugin.nodes.NodeC"},
                     ],
                 )
             }
@@ -431,17 +440,21 @@ class NodeC(Node):
             assert "multi_node_plugin.nodes.NodeB" in info_resp.plugin.provides
             assert "multi_node_plugin.nodes.NodeC" in info_resp.plugin.provides
 
-            # Catalog registration only — plugin nodes do not appear in
-            # ListAvailableNodes until LoadPipeline materialises the plugin.
-            # The catalog-side assertion is via the GetPluginInfo.provides
-            # check above.
+            # The plugin's inline catalog provides all three classes, so
+            # ListAvailableNodes surfaces every one immediately after
+            # LoadPlugins (no import). Proto NodeInfo carries the short
+            # class name; the FQCN lives in full_path.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
             node_names = [node.class_name for node in nodes_resp.nodes]
-            assert "NodeA" not in node_names
-            assert "NodeB" not in node_names
-            assert "NodeC" not in node_names
+            assert "NodeA" in node_names
+            assert "NodeB" in node_names
+            assert "NodeC" in node_names
+            full_paths = {node.full_path for node in nodes_resp.nodes}
+            assert "multi_node_plugin.nodes.NodeA" in full_paths
+            assert "multi_node_plugin.nodes.NodeB" in full_paths
+            assert "multi_node_plugin.nodes.NodeC" in full_paths
 
             # Cleanup
             grpc_stub.CloseSession(
@@ -461,7 +474,7 @@ class NodeC(Node):
             plugins={
                 "invalid_plugin": LocalPluginConfig(
                     path="/nonexistent/invalid/path",
-                    provides=["invalid.node.InvalidNode"],
+                    provides=[{"class_name": "invalid.node.InvalidNode"}],
                 )
             }
         )
@@ -541,7 +554,8 @@ class PluginNode(Node):
         manifest = PluginManifest(
             plugins={
                 "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["test_plugin.node.PluginNode"]
+                    path=str(plugin_dir),
+                    provides=[{"class_name": "test_plugin.node.PluginNode"}],
                 )
             }
         )
@@ -560,25 +574,25 @@ class PluginNode(Node):
                 )
             )
 
-            # ListAvailableNodes returns the *materialised* set. After only
-            # LoadPlugins (which registers into the catalog without
-            # importing), built-ins are the only nodes returned — the
-            # plugin's node appears once LoadPipeline materialises it via
-            # the catalog fast path. Driving that through gRPC requires a
-            # pipeline yaml that references the plugin; this test stops at
-            # the register-only assertion to keep the gRPC surface tight.
+            # ListAvailableNodes returns both built-ins and the plugin's
+            # inline-catalog nodes. The plugin entry's ``provides`` list is
+            # the catalog, so LoadPlugins alone is enough for the plugin
+            # node to surface — no import, no LoadPipeline needed.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
 
             sources = {node.source for node in nodes_resp.nodes}
             assert "builtin" in sources
+            assert "plugin" in sources
 
             plugin_nodes = [n for n in nodes_resp.nodes if n.class_name == "PluginNode"]
-            assert plugin_nodes == [], (
-                "Plugin nodes should NOT appear in ListAvailableNodes until "
-                "LoadPipeline materialises the plugin from the catalog."
+            assert len(plugin_nodes) == 1, (
+                "The plugin's inline catalog should surface its node in "
+                "ListAvailableNodes immediately after LoadPlugins."
             )
+            assert plugin_nodes[0].source == "plugin"
+            assert plugin_nodes[0].full_path == "test_plugin.node.PluginNode"
 
             # Cleanup
             grpc_stub.CloseSession(

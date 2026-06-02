@@ -39,7 +39,7 @@ def _simple_plugin() -> dict:
         "p": GitPluginConfig(
             repo="https://example.com/p.git",
             tag="v0.1.0",
-            provides=["p.Node"],
+            provides=[{"class_name": "p.Node"}],
         )
     }
 
@@ -223,7 +223,7 @@ def test_compose_env_moving_tag_rejected_via_resolver(tmp_path: Path):
                     "p": GitPluginConfig(
                         repo="https://example.com/p.git",
                         tag="main",
-                        provides=["p.Node"],
+                        provides=[{"class_name": "p.Node"}],
                     )
                 },
                 core_source=PYPI_CORE,

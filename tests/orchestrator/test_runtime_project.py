@@ -129,12 +129,12 @@ def test_resolve_plugin_sources_resolves_git_tag_and_sorts_by_name(tmp_path: Pat
         "z_plugin": GitPluginConfig(
             repo="https://example.com/z.git",
             tag="v0.1.0",
-            provides=["z.Node"],
+            provides=[{"class_name": "z.Node"}],
         ),
         "a_plugin": GitPluginConfig(
             repo="https://example.com/a.git",
             tag="v0.2.0",
-            provides=["a.Node"],
+            provides=[{"class_name": "a.Node"}],
         ),
     }
     with patch(
@@ -152,7 +152,9 @@ def test_resolve_plugin_sources_stamps_local_provenance(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")
     configs = {
-        "my_local": LocalPluginConfig(path=str(tmp_path), provides=["x.Node"])
+        "my_local": LocalPluginConfig(
+            path=str(tmp_path), provides=[{"class_name": "x.Node"}]
+        )
     }
     with patch(
         "cuvis_ai_core.orchestrator.runtime_project.local_plugin_provenance",
@@ -327,7 +329,9 @@ def test_resolve_plugin_sources_reads_local_package_name(tmp_path: Path):
         encoding="utf-8",
     )
 
-    config = LocalPluginConfig(path=str(plugin_dir), provides=["actual.module.Foo"])
+    config = LocalPluginConfig(
+        path=str(plugin_dir), provides=[{"class_name": "actual.module.Foo"}]
+    )
     resolved = resolve_plugin_sources({"manifest_key_only": config})
 
     assert len(resolved) == 1

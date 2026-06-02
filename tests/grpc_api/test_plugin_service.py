@@ -56,7 +56,8 @@ class TestPluginNode(Node):
         manifest = PluginManifest(
             plugins={
                 "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir), provides=["test_plugin.node.TestPluginNode"]
+                    path=str(plugin_dir),
+                    provides=[{"class_name": "test_plugin.node.TestPluginNode"}],
                 )
             }
         )
@@ -127,11 +128,12 @@ class ValidNode(Node):
         manifest = PluginManifest(
             plugins={
                 "valid_plugin": LocalPluginConfig(
-                    path=str(valid_plugin_dir), provides=["valid_plugin.node.ValidNode"]
+                    path=str(valid_plugin_dir),
+                    provides=[{"class_name": "valid_plugin.node.ValidNode"}],
                 ),
                 "unreachable_plugin": LocalPluginConfig(
                     path="/nonexistent/path",
-                    provides=["unreachable_plugin.node.UnreachableNode"],
+                    provides=[{"class_name": "unreachable_plugin.node.UnreachableNode"}],
                 ),
             }
         )
@@ -261,7 +263,7 @@ class TestNode(Node):
             plugins={
                 "list_loaded_test_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
-                    provides=["list_loaded_test_plugin.node.TestNode"],
+                    provides=[{"class_name": "list_loaded_test_plugin.node.TestNode"}],
                 )
             }
         )
@@ -323,7 +325,7 @@ class TestNode(Node):
             plugins={
                 "get_info_test_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
-                    provides=["get_info_test_plugin.node.TestNode"],
+                    provides=[{"class_name": "get_info_test_plugin.node.TestNode"}],
                 )
             }
         )
@@ -413,11 +415,9 @@ class TestNode(Node):
 
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
         """``ListAvailableNodes`` populates plugin nodes from each plugin's
-        static ``metadata.json``. No plugin module gets imported on the
-        parent side — the JSON file is the only source.
+        inline ``provides`` catalog. No plugin module gets imported on the
+        parent side — the manifest entry is the only source.
         """
-        import json
-
         session_id = self.session_manager.create_session()
 
         plugin_dir = tmp_path / "available_nodes_plugin"
@@ -425,17 +425,13 @@ class TestNode(Node):
         (plugin_dir / "__init__.py").write_text("")
         create_plugin_pyproject(plugin_dir)
 
-        metadata_path = tmp_path / "available_nodes_plugin.metadata.json"
-        metadata_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "plugin_name": "available_nodes_plugin",
-                    "plugin_version": "0.1.0",
-                    "nodes": [
+        manifest = PluginManifest(
+            plugins={
+                "available_nodes_plugin": LocalPluginConfig(
+                    path=str(plugin_dir),
+                    provides=[
                         {
-                            "class_name": "PluginTestNode",
-                            "full_path": "available_nodes_plugin.nodes.PluginTestNode",
+                            "class_name": "available_nodes_plugin.nodes.PluginTestNode",
                             "category": "unspecified",
                             "tags": [],
                             "icon_svg": "<svg/>",
@@ -444,17 +440,6 @@ class TestNode(Node):
                             "doc_summary": "",
                         }
                     ],
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        manifest = PluginManifest(
-            plugins={
-                "available_nodes_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=["available_nodes_plugin.nodes.PluginTestNode"],
-                    metadata_path=str(metadata_path),
                 )
             }
         )
@@ -637,7 +622,7 @@ class IsolatedNode(Node):
             plugins={
                 "isolation_test_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
-                    provides=["isolation_test_plugin.node.IsolatedNode"],
+                    provides=[{"class_name": "isolation_test_plugin.node.IsolatedNode"}],
                 )
             }
         )

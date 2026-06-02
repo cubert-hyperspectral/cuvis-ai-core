@@ -33,8 +33,8 @@ def workspace(tmp_path: Path) -> Path:
           cuvis_ai_builtin:
             path: "../.."
             provides:
-              - cuvis_ai.node.anomaly.rx_detector.RXGlobal
-              - cuvis_ai.node.normalization.MinMaxNormalizer
+              - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
+              - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
         """,
     )
     return tmp_path

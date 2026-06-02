@@ -69,7 +69,7 @@ class SessionTestNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.SessionTestNode"],
+                "provides": [{"class_name": "test_plugin.test_node.SessionTestNode"}],
             }
 
             NodeRegistry.load_plugin("test_plugin", config, session_id="session_1")
@@ -110,7 +110,7 @@ class GlobalTestNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.GlobalTestNode"],
+                "provides": [{"class_name": "test_plugin.test_node.GlobalTestNode"}],
             }
 
             NodeRegistry.load_plugin("test_plugin", config, session_id=None)
@@ -149,7 +149,7 @@ class SessionNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.SessionNode"],
+                "provides": [{"class_name": "test_plugin.test_node.SessionNode"}],
             }
 
             NodeRegistry.load_plugin("test_plugin", config, session_id="session_1")
@@ -204,7 +204,7 @@ class BuiltinNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.BuiltinNode"],
+                "provides": [{"class_name": "test_plugin.test_node.BuiltinNode"}],
             }
 
             NodeRegistry.load_plugin("test_plugin", config, session_id="session_1")
@@ -264,11 +264,17 @@ class TestNode(Node):
         sys.path.insert(0, str(tmp_path))
         try:
             # Load plugin1 into session_1
-            config1 = {"path": str(plugin1_dir), "provides": ["plugin1.node1.TestNode"]}
+            config1 = {
+                "path": str(plugin1_dir),
+                "provides": [{"class_name": "plugin1.node1.TestNode"}],
+            }
             NodeRegistry.load_plugin("plugin1", config1, session_id="session_1")
 
             # Load plugin2 into session_2
-            config2 = {"path": str(plugin2_dir), "provides": ["plugin2.node2.TestNode"]}
+            config2 = {
+                "path": str(plugin2_dir),
+                "provides": [{"class_name": "plugin2.node2.TestNode"}],
+            }
             NodeRegistry.load_plugin("plugin2", config2, session_id="session_2")
 
             # Verify session_1 sees plugin1 version
@@ -310,7 +316,7 @@ class CleanupTestNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.CleanupTestNode"],
+                "provides": [{"class_name": "test_plugin.test_node.CleanupTestNode"}],
             }
 
             NodeRegistry.load_plugin("test_plugin", config, session_id="session_1")
@@ -373,8 +379,8 @@ class SessionPluginNode2(Node):
             config = {
                 "path": str(plugin_dir),
                 "provides": [
-                    "test_plugin.test_node.SessionPluginNode1",
-                    "test_plugin.test_node.SessionPluginNode2",
+                    {"class_name": "test_plugin.test_node.SessionPluginNode1"},
+                    {"class_name": "test_plugin.test_node.SessionPluginNode2"},
                 ],
             }
 
@@ -414,7 +420,9 @@ class GlobalPluginNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["global_list_plugin.test_node.GlobalPluginNode"],
+                "provides": [
+                    {"class_name": "global_list_plugin.test_node.GlobalPluginNode"}
+                ],
             }
 
             NodeRegistry.load_plugin("global_list_plugin", config, session_id=None)
@@ -451,7 +459,7 @@ class MultiSessionNode(Node):
         try:
             config = {
                 "path": str(plugin_dir),
-                "provides": ["test_plugin.test_node.MultiSessionNode"],
+                "provides": [{"class_name": "test_plugin.test_node.MultiSessionNode"}],
             }
 
             # Load into both sessions

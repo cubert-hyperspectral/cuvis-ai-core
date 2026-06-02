@@ -74,7 +74,7 @@ def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Pat
         f"  {plugin_name}:\n"
         f"    path: {plugin_dir.as_posix()!r}\n"
         f"    provides:\n"
-        f"      - {fqcn}\n"
+        f"      - class_name: {fqcn}\n"
     )
 
 
