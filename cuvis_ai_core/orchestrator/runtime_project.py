@@ -23,7 +23,7 @@ from cuvis_ai_core.orchestrator.cache_key import (
     ResolvedPlugin,
     local_plugin_provenance,
 )
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 PluginConfig = GitPluginConfig | LocalPluginConfig
 

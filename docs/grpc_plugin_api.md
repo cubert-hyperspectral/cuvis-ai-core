@@ -71,7 +71,7 @@ message LoadPluginsResponse {
 
 **Python Example**:
 ```python
-from cuvis_ai_core.utils.plugin_config import PluginManifest, GitPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest, GitPluginConfig
 
 manifest = PluginManifest(
     plugins={
@@ -265,7 +265,7 @@ print(f"Cleared all caches: {response.cleared_count} repo(s)")
 ```python
 import grpc
 from cuvis_ai_core.grpc.v1 import cuvis_ai_core_pb2, cuvis_ai_core_pb2_grpc
-from cuvis_ai_core.utils.plugin_config import PluginManifest, GitPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest, GitPluginConfig
 
 # 1. Connect to server
 channel = grpc.insecure_channel("localhost:50051")

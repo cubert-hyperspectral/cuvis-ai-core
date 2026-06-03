@@ -21,11 +21,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from cuvis_ai_core.utils.plugin_config import (
-    GitPluginConfig,
-    LocalPluginConfig,
-    PluginManifest,
-)
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig, PluginManifest
 from cuvis_ai_schemas.pipeline.config import PipelineConfig
 
 PluginConfig = GitPluginConfig | LocalPluginConfig

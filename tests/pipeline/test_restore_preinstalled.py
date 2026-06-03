@@ -6,7 +6,7 @@ import pytest
 
 from cuvis_ai_core.pipeline.restore_preinstalled import load_preinstalled_plugins
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 
 class _DummyClassA:

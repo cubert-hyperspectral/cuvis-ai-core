@@ -47,7 +47,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     DeclaredPaths,
     LocalChildRuntimeSpawner,
 )
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 
 PluginConfig = GitPluginConfig | LocalPluginConfig

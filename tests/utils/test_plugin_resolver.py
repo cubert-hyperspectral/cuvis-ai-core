@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+from cuvis_ai_schemas.plugin import LocalPluginConfig
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline import (
     NodeConfig,

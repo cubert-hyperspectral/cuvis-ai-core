@@ -28,7 +28,7 @@ from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.training_service import TrainingService
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.pipeline.restore_preinstalled import load_preinstalled_plugins
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 PluginConfig = GitPluginConfig | LocalPluginConfig
 

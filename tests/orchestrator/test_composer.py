@@ -19,7 +19,7 @@ from cuvis_ai_core.orchestrator import composer as composer_mod
 from cuvis_ai_core.orchestrator.cache_key import CoreSource
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
 from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig
 
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")

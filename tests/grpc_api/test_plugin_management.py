@@ -3,7 +3,7 @@
 import pytest
 
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_core.utils.plugin_config import PluginManifest, LocalPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest, LocalPluginConfig
 
 
 @pytest.mark.slow

@@ -25,7 +25,7 @@ from cuvis_ai_core.orchestrator.runtime_project import (
     resolve_git_tag,
     resolve_plugin_sources,
 )
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")
 

@@ -233,7 +233,7 @@ class TestCatalogSplit:
         import sys
         from pathlib import Path
 
-        from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+        from cuvis_ai_schemas.plugin import LocalPluginConfig
 
         registry = NodeRegistry()
         modules_before = set(sys.modules)
@@ -270,7 +270,7 @@ class TestCatalogSplit:
         """Re-registering a plugin with diverging config logs an override note."""
         from loguru import logger
 
-        from cuvis_ai_core.utils.plugin_config import LocalPluginConfig
+        from cuvis_ai_schemas.plugin import LocalPluginConfig
 
         plugin_root_a = tmp_path / "a"
         plugin_root_a.mkdir()

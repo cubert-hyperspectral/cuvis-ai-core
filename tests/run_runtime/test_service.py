@@ -15,7 +15,7 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.run_runtime.service import RunRuntimeServicer, _decode_resolved_plugins
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 
 class FakeContext:

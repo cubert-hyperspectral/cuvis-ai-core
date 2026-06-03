@@ -20,7 +20,7 @@ from cuvis_ai_core.orchestrator.catalog import (
 )
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_config import PluginManifest
+from cuvis_ai_schemas.plugin import PluginManifest
 from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 from cuvis_ai_schemas.grpc.conversions import (
     node_category_to_proto,
