@@ -13,13 +13,13 @@ live node specs).
 
 Usage::
 
-    uv run python -m tools.emit_metadata \\
+    uv run python -m scripts.emit_metadata \\
         --manifest configs/plugins/cuvis_ai_builtin.yaml \\
         --plugin cuvis_ai_builtin
 
 CI guard (in the plugin repo's release workflow)::
 
-    uv run python -m tools.emit_metadata --manifest ... --plugin ... --check
+    uv run python -m scripts.emit_metadata --manifest ... --plugin ... --check
     # non-zero exit → the committed catalog has drifted from the live specs
 """
 
