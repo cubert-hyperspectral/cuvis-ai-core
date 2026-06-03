@@ -1,6 +1,5 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
-import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -30,7 +29,6 @@ from cuvis_ai_schemas.pipeline import PipelineConfig
 def _discover_plugins_dirs(
     pipeline_path: Path,
     explicit_dirs: list[str | Path] | None,
-    plugins_path: str | Path | None,
 ) -> list[Path]:
     """Build the list of candidate plugins directories for the resolver.
 
@@ -38,10 +36,7 @@ def _discover_plugins_dirs(
 
     1. Any ``configs/plugins/`` discovered by walking upward from
        ``pipeline_path``'s parent.
-    2. The ``plugins_path`` kwarg if it points at a directory (its
-       file-pointing form is handled separately as a back-compat
-       single-manifest load — see ``restore_pipeline``).
-    3. Any ``--plugins-dir`` values from the CLI.
+    2. Any ``--plugins-dir`` values from the CLI.
     """
     candidates: list[Path] = []
     for ancestor in pipeline_path.resolve().parents:
@@ -49,11 +44,6 @@ def _discover_plugins_dirs(
         if candidate.is_dir():
             candidates.append(candidate)
             break
-
-    if plugins_path is not None:
-        pp = Path(plugins_path)
-        if pp.is_dir():
-            candidates.append(pp)
 
     if explicit_dirs:
         candidates.extend(Path(p) for p in explicit_dirs)
@@ -85,7 +75,6 @@ def restore_pipeline(
     annotation_json_path: str | Path | None = None,
     measurement_indices: list[int] | None = None,
     config_overrides: list[str] | None = None,
-    plugins_path: str | Path | None = None,
     plugins_dirs: list[str | Path] | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
 ) -> CuvisPipeline:
@@ -105,14 +94,6 @@ def restore_pipeline(
         Cuvis processing mode string ("Raw", "Reflectance")
     config_overrides : list[str] | None
         Optional list of config overrides in dot notation (e.g., ["nodes.10.hparams.output_dir=outputs/my_tb"])
-    plugins_path : str | Path | None
-        Deprecated. Path to a single plugins manifest YAML file (or a
-        plugins directory). When this points at a directory, it is merged
-        into ``plugins_dirs``. When it points at a file, the file is
-        loaded directly via the legacy aggregator-manifest path. Prefer
-        ``plugins_dirs`` (the ``--plugins-dir`` CLI flag) pointing at a
-        ``configs/plugins/`` catalog together with the pipeline's
-        ``plugins:`` field.
     plugins_dirs : list[str | Path] | None
         Optional list of plugins directories to scan for per-plugin
         manifests. Used by the pipeline-driven plugin resolver
@@ -140,33 +121,15 @@ def restore_pipeline(
 
     registry: NodeRegistry | None = None
 
-    # Back-compat: aggregator manifest file via plugins_path bypasses the
-    # resolver entirely. Eager-loads every entry — same as before this PR.
-    if plugins_path is not None:
-        warnings.warn(
-            "plugins_path (--plugins-path) is deprecated; pass plugins_dirs=[...] "
-            "(--plugins-dir) pointing at a configs/plugins/ catalog and declare the "
-            "pipeline's plugins: field instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        plugins_path_obj = Path(plugins_path)
-        if not plugins_path_obj.exists():
-            raise FileNotFoundError(f"Plugins manifest not found: {plugins_path_obj}")
-        if plugins_path_obj.is_file():
-            registry = NodeRegistry()
-            registry.load_plugins(plugins_path_obj)
-            logger.info(f"Loaded plugins from aggregator manifest: {plugins_path_obj}")
-
-    if registry is None and pipeline_path.is_file():
+    if pipeline_path.is_file():
         # Pipeline-driven plugin resolution: materialise only what the pipeline declares.
         # Skip when the file doesn't exist on disk — mocked/programmatic
         # callers handle pipeline loading downstream without our pre-read.
         pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
-        candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs, plugins_path)
+        candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs)
         # Only engage the resolver when the user has declared plugins OR a
         # catalog dir is discoverable. A pipeline that uses only built-in
-        # core nodes falls through to legacy behavior.
+        # core nodes needs no resolver pass and loads with no plugin registry.
         if pipeline_cfg.plugins or candidate_dirs:
             resolved_plugins = resolve_pipeline_plugins(pipeline_cfg, candidate_dirs)
             if resolved_plugins:
@@ -625,15 +588,6 @@ Examples:
         help="Override config values in dot notation. Can be specified multiple times.",
     )
     parser.add_argument(
-        "--plugins-path",
-        type=str,
-        default=None,
-        help="[DEPRECATED] Path to a single plugins manifest YAML file (or a "
-        "plugins directory). A file argument uses the legacy aggregator-manifest "
-        "path; a directory is merged into --plugins-dir. Use --plugins-dir "
-        "(repeatable) pointing at a configs/plugins/ catalog instead.",
-    )
-    parser.add_argument(
         "--plugins-dir",
         action="append",
         default=None,
@@ -670,7 +624,6 @@ Examples:
         annotation_json_path=args.annotation_json_path,
         measurement_indices=meas_indices,
         config_overrides=args.override,
-        plugins_path=args.plugins_path,
         plugins_dirs=args.plugins_dir,
         pipeline_vis_ext=vis_ext,
     )

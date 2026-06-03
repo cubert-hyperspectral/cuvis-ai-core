@@ -8,10 +8,7 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 import cuvis_ai_core.utils.git_and_os as git_os
-from cuvis_ai_core.utils.plugin_config import (
-    GitPluginConfig,
-    LocalPluginConfig,
-)
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 
 class NodeRegistry:
@@ -147,8 +144,8 @@ class NodeRegistry:
             error_msg += (
                 "\n⚠️  This appears to be an external plugin node!\n"
                 "   Did you forget to load plugins?\n\n"
-                "   For CLI usage:\n"
-                "     uv run restore-pipeline --pipeline-path <path> --plugins-path examples/adaclip/plugins.yaml\n\n"
+                "   For CLI usage (the pipeline yaml must declare its plugins: field):\n"
+                "     uv run restore-pipeline --pipeline-path <path> --plugins-dir configs/plugins\n\n"
                 "   For Python usage:\n"
                 "     registry = NodeRegistry()\n"
                 "     registry.load_plugins('path/to/plugins.yaml')\n"
@@ -313,7 +310,7 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        from cuvis_ai_core.utils.plugin_config import PluginManifest
+        from cuvis_ai_schemas.plugin import PluginManifest
 
         manifest_path = Path(manifest_path)
         manifest = PluginManifest.from_yaml(manifest_path)

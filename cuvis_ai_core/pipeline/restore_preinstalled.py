@@ -28,7 +28,7 @@ from loguru import logger
 
 from cuvis_ai_core.utils import git_and_os
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_config import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 PluginConfig = GitPluginConfig | LocalPluginConfig
 
@@ -53,13 +53,11 @@ def load_preinstalled_plugins(
         for class_name, node_class in imported_nodes.items():
             registry.plugin_registry[class_name] = node_class
             logger.debug(
-                f"Registered preinstalled plugin node '{class_name}' "
-                f"from '{name}'"
+                f"Registered preinstalled plugin node '{class_name}' from '{name}'"
             )
         registry.plugin_configs[name] = config
         logger.info(
-            f"Loaded preinstalled plugin '{name}' with "
-            f"{len(config.provides)} nodes"
+            f"Loaded preinstalled plugin '{name}' with {len(config.provides)} nodes"
         )
 
 
@@ -74,10 +72,10 @@ def restore_pipeline_preinstalled(
     """``restore_pipeline`` against a venv whose plugins are already installed.
 
     Delegates to :func:`cuvis_ai_core.utils.restore.restore_pipeline`
-    with the manifest-driven ``plugins_path`` / ``plugins_dirs``
-    arguments left unset so the legacy clone+install branch is never
-    reached. Plugin class registration happens here, before the
-    pipeline factory tries to resolve any class name.
+    with the manifest-driven ``plugins_dirs`` argument left unset so the
+    resolver's clone+install branch is never reached. Plugin class
+    registration happens here, before the pipeline factory tries to
+    resolve any class name.
     """
     from cuvis_ai_core.utils.restore import restore_pipeline
 
@@ -90,7 +88,6 @@ def restore_pipeline_preinstalled(
         pipeline_path,
         weights_path=weights_path,
         device=device,
-        plugins_path=None,
         plugins_dirs=None,
         **kwargs,
     )
