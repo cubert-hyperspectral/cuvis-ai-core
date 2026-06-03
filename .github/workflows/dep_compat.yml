@@ -1,0 +1,32 @@
+name: Dependency Compatibility
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: dep-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dep-compat:
+    name: Audit dependency floors
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The audit only reads pyproject.toml + uv.lock, so run it in a tiny
+      # ephemeral environment instead of installing the full project.
+      - name: Audit dependency floors
+        run: >
+          uv run --no-project --python 3.11 --with click --with packaging
+          python scripts/audit_plugin_deps.py --check host --strict

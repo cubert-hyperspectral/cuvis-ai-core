@@ -59,6 +59,48 @@ def load_lock(path: Path) -> dict[str, Version]:
     return locked
 
 
+def load_installed_versions() -> dict[str, Version]:
+    """Map every distribution installed in the current env to its version.
+
+    Used by per-plugin-repo CI: install the target ``cuvis-ai-core`` release
+    into the job's venv, then audit the plugin against the versions actually
+    resolved there. This sidesteps the fact that a published sdist/wheel does
+    not ship ``uv.lock``.
+    """
+    from importlib import metadata
+
+    locked: dict[str, Version] = {}
+    for dist in metadata.distributions():
+        name = dist.metadata["Name"]
+        if not name:
+            continue
+        try:
+            locked[normalize(name)] = Version(dist.version)
+        except InvalidVersion:
+            continue
+    return locked
+
+
+def resolve_core_lock(
+    against_core: str | None, project_dir: Path
+) -> dict[str, Version]:
+    """Resolve the cuvis-ai-core locked-version set for the plugin check.
+
+    ``--against-core`` accepts:
+
+    * unset → the lock in ``--project-dir`` (the repo being audited).
+    * ``installed`` → versions of the distributions installed in this env
+      (``importlib.metadata``), i.e. the core release CI just pip-installed.
+    * any other value → a path to a cuvis-ai-core checkout whose ``uv.lock``
+      is read.
+    """
+    if against_core is None:
+        return load_lock(project_dir / "uv.lock")
+    if against_core == "installed":
+        return load_installed_versions()
+    return load_lock(Path(against_core) / "uv.lock")
+
+
 def project_dependencies(pyproject: dict) -> list[Requirement]:
     """Parse ``[project].dependencies`` whose markers apply to this environment."""
     reqs: list[Requirement] = []
@@ -149,7 +191,9 @@ def check_host(
         floor = floor_of(req)
         if floor is None:
             findings.append(
-                HostFinding(req.name, str(req.specifier), str(locked_ver), "missing-floor")
+                HostFinding(
+                    req.name, str(req.specifier), str(locked_ver), "missing-floor"
+                )
             )
         elif floor_lags(floor, locked_ver):
             findings.append(
@@ -182,6 +226,27 @@ def _resolve_manifest_pyproject(
     return None
 
 
+def _check_one_pyproject(
+    plugin_name: str, pp_path: Path, core_lock: dict[str, Version]
+) -> list[PluginFinding]:
+    """Flag deps in one plugin pyproject whose specifier excludes the core lock."""
+    findings: list[PluginFinding] = []
+    for req in project_dependencies(load_pyproject(pp_path)):
+        key = normalize(req.name)
+        if key in {"cuvis-ai-core", "cuvis-ai-schemas"}:
+            continue
+        locked_ver = core_lock.get(key)
+        if locked_ver is None or not req.specifier:
+            continue
+        if not req.specifier.contains(locked_ver, prereleases=True):
+            findings.append(
+                PluginFinding(
+                    plugin_name, req.name, str(req.specifier), str(locked_ver)
+                )
+            )
+    return findings
+
+
 def check_plugins(
     plugins_dir: Path, core_lock: dict[str, Version]
 ) -> tuple[list[PluginFinding], list[str]]:
@@ -194,26 +259,41 @@ def check_plugins(
     for manifest in sorted(plugins_dir.glob("*.yaml")):
         data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
         for name, cfg in (data.get("plugins") or {}).items():
+            # Local-path entries are dev checkouts or the built-in catalog
+            # (e.g. ``cuvis_ai_builtin`` → the host repo). They are host-checked
+            # in their own repo's --check host run, not against core's lock, so
+            # the registry check skips them and audits only tag-pinned externals.
+            if "path" in cfg:
+                warnings.append(
+                    f"{name}: local-path entry - skipped (host-checked separately)"
+                )
+                continue
             pp_path = _resolve_manifest_pyproject(name, cfg, plugins_dir, cache_dir)
             if pp_path is None:
-                warnings.append(f"{name}: pyproject not available locally — skipped")
+                warnings.append(f"{name}: pyproject not available locally - skipped")
                 continue
-            for req in project_dependencies(load_pyproject(pp_path)):
-                key = normalize(req.name)
-                if key in {"cuvis-ai-core", "cuvis-ai-schemas"}:
-                    continue
-                locked_ver = core_lock.get(key)
-                if locked_ver is None or not req.specifier:
-                    continue
-                if not req.specifier.contains(locked_ver, prereleases=True):
-                    findings.append(
-                        PluginFinding(name, req.name, str(req.specifier), str(locked_ver))
-                    )
+            findings.extend(_check_one_pyproject(name, pp_path, core_lock))
     return findings, warnings
 
 
+def check_plugin_pyproject(
+    pyproject_path: Path, core_lock: dict[str, Version]
+) -> tuple[list[PluginFinding], list[str]]:
+    """Compare a single plugin's ``pyproject.toml`` against the core lock.
+
+    Used by per-plugin-repo CI (``--plugin-pyproject ./pyproject.toml``), where
+    the plugin under test is the repo being checked out rather than a manifest
+    in a catalog directory.
+    """
+    if not pyproject_path.exists():
+        return [], [f"{pyproject_path}: not found - skipped"]
+    pyproject = load_pyproject(pyproject_path)
+    name = pyproject.get("project", {}).get("name", pyproject_path.parent.name)
+    return _check_one_pyproject(name, pyproject_path, core_lock), []
+
+
 def _print_host(findings: list[HostFinding], warnings: list[str]) -> None:
-    click.echo("Host check — pyproject floors vs uv.lock")
+    click.echo("Host check - pyproject floors vs uv.lock")
     for f in findings:
         label = "STALE" if f.kind == "stale" else "NO FLOOR"
         click.echo(f"  {label:9} {f.name}{f.specifier}  (locked {f.locked})")
@@ -223,7 +303,7 @@ def _print_host(findings: list[HostFinding], warnings: list[str]) -> None:
 
 
 def _print_plugins(findings: list[PluginFinding], warnings: list[str]) -> None:
-    click.echo("Plugin check — plugin requirements vs core lock")
+    click.echo("Plugin check - plugin requirements vs core lock")
     for f in findings:
         click.echo(
             f"  MISMATCH  {f.plugin}: {f.name}{f.specifier}  (core locks {f.core_locked})"
@@ -270,12 +350,20 @@ def _print_plugins(findings: list[PluginFinding], warnings: list[str]) -> None:
     help="Directory of per-plugin manifest YAMLs for the plugin check.",
 )
 @click.option(
+    "--plugin-pyproject",
+    "plugin_pyproject",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="A single plugin's pyproject.toml to audit against the core lock "
+    "(per-plugin-repo CI; use instead of --plugins-dir).",
+)
+@click.option(
     "--against-core",
     "against_core",
-    type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="cuvis-ai-core checkout whose uv.lock the plugin check compares against "
-    "(defaults to --project-dir's lock).",
+    help="cuvis-ai-core lock source for the plugin check: 'installed' (read the "
+    "versions pip-installed in this env), a path to a cuvis-ai-core checkout "
+    "(reads its uv.lock), or unset (defaults to --project-dir's lock).",
 )
 @click.option(
     "--strict",
@@ -297,7 +385,8 @@ def main(
     pyproject_path: Path | None,
     lock_path: Path | None,
     plugins_dir: Path | None,
-    against_core: Path | None,
+    plugin_pyproject: Path | None,
+    against_core: str | None,
     strict: bool,
     output_format: str,
 ) -> None:
@@ -314,14 +403,21 @@ def main(
         }
 
     if check in ("plugins", "all"):
-        if plugins_dir is None:
+        if plugins_dir is None and plugin_pyproject is None:
             if check == "plugins":
-                raise click.UsageError("--plugins-dir is required for the plugin check")
-            report["plugins"] = {"skipped": "no --plugins-dir provided"}
+                raise click.UsageError(
+                    "the plugin check needs --plugins-dir (a manifest catalog) "
+                    "or --plugin-pyproject (a single plugin)"
+                )
+            report["plugins"] = {"skipped": "no --plugins-dir / --plugin-pyproject"}
         else:
-            core_dir = against_core or project_dir
-            core_lock = load_lock(core_dir / "uv.lock")
-            findings_p, warnings_p = check_plugins(plugins_dir, core_lock)
+            core_lock = resolve_core_lock(against_core, project_dir)
+            if plugin_pyproject is not None:
+                findings_p, warnings_p = check_plugin_pyproject(
+                    plugin_pyproject, core_lock
+                )
+            else:
+                findings_p, warnings_p = check_plugins(plugins_dir, core_lock)
             has_findings = has_findings or bool(findings_p)
             report["plugins"] = {
                 "findings": [asdict(f) for f in findings_p],
