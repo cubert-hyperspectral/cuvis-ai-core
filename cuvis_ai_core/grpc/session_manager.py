@@ -45,11 +45,11 @@ class SessionState:
     # ``node_registry.plugin_registry``. On the wire this is the
     # ``registered_plugins`` field of ``LoadPluginsResponse``.
     registered_plugins: dict[str, dict] = field(default_factory=dict)
-    # Orchestrator-only state, populated when ``CUVIS_USE_ORCHESTRATOR``
-    # is on and the parent has spawned a child runtime for this
-    # session. The handle keeps the child alive; ``resolved_plugins``
-    # is the dict the parent computed via ``resolve_pipeline_plugins``
-    # and forwarded to the child via ``InitializeSession``.
+    # Orchestrator state, populated once the parent has spawned a child
+    # runtime for this session. The handle keeps the child alive;
+    # ``resolved_plugins`` is the dict the parent computed via
+    # ``resolve_pipeline_plugins`` and forwarded to the child via
+    # ``InitializeSession``.
     child_handle: Any | None = None
     resolved_plugins: dict[str, Any] | None = None
     created_at: float = field(default_factory=time.time)
