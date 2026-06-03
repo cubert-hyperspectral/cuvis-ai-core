@@ -43,9 +43,15 @@ from loguru import logger
 
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 
+# Child-runtime startup deadlines (seconds). The two *_TIMEOUT defaults are
+# overridable via env so a slow cold start — e.g. the first CUDA-torch import in
+# a freshly composed venv on Windows — does not trip them before the child's gRPC
+# server comes up. Env unset / non-positive / invalid falls back to the default.
 _ENDPOINT_POLL_TIMEOUT_SECONDS = 30.0
+_ENDPOINT_POLL_TIMEOUT_ENV = "CUVIS_RUNTIME_ENDPOINT_TIMEOUT_SECONDS"
 _ENDPOINT_POLL_INTERVAL_SECONDS = 0.05
 _HEALTH_POLL_TIMEOUT_SECONDS = 30.0
+_HEALTH_POLL_TIMEOUT_ENV = "CUVIS_RUNTIME_HEALTH_TIMEOUT_SECONDS"
 _HEALTH_POLL_INTERVAL_SECONDS = 0.2
 _HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
 _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
@@ -58,6 +64,23 @@ _CUDA_VARS = (
     "LD_LIBRARY_PATH",
     "NVIDIA_VISIBLE_DEVICES",
 )
+
+
+def _timeout_from_env(env_name: str, default: float) -> float:
+    """Read a positive float timeout from ``env_name``; fall back to ``default``."""
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(f"{env_name}={raw!r} is not a number; using {default}s.")
+        return default
+    if value <= 0:
+        logger.warning(f"{env_name}={raw!r} must be > 0; using {default}s.")
+        return default
+    return value
+
 
 # Env vars that must never leak from the parent into the child, stripped
 # after the initial os.environ copy. Exact names are removed outright;
@@ -346,7 +369,10 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         *,
         stderr_log: Path | None = None,
     ) -> str:
-        deadline = time.monotonic() + _ENDPOINT_POLL_TIMEOUT_SECONDS
+        timeout_s = _timeout_from_env(
+            _ENDPOINT_POLL_TIMEOUT_ENV, _ENDPOINT_POLL_TIMEOUT_SECONDS
+        )
+        deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 stderr = _read_stderr_log(stderr_log)
@@ -361,12 +387,14 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             time.sleep(_ENDPOINT_POLL_INTERVAL_SECONDS)
         process.terminate()
         raise SpawnError(
-            f"Child runtime did not write endpoint within "
-            f"{_ENDPOINT_POLL_TIMEOUT_SECONDS}s."
+            f"Child runtime did not write endpoint within {timeout_s}s."
         )
 
     def _wait_for_health(self, handle: ChildHandle) -> None:
-        deadline = time.monotonic() + _HEALTH_POLL_TIMEOUT_SECONDS
+        timeout_s = _timeout_from_env(
+            _HEALTH_POLL_TIMEOUT_ENV, _HEALTH_POLL_TIMEOUT_SECONDS
+        )
+        deadline = time.monotonic() + timeout_s
         last_error: Exception | None = None
         while time.monotonic() < deadline:
             if handle.process.poll() is not None:
@@ -390,7 +418,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             time.sleep(_HEALTH_POLL_INTERVAL_SECONDS)
         raise SpawnError(
             f"Child runtime at {handle.endpoint} did not become SERVING within "
-            f"{_HEALTH_POLL_TIMEOUT_SECONDS}s. Last error: {last_error}"
+            f"{timeout_s}s. Last error: {last_error}"
         )
 
 
