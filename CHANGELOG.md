@@ -1,11 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## 0.7.0 - 2026-06-08
 
+- Added the **child-env-per-run orchestrator** (new `cuvis_ai_core/orchestrator/` package): `cache_key` (a structured per-run venv key), `runtime_project` (generates the child `pyproject.toml`), `composer` (atomic build+publish via `filelock`, `uv lock` / `uv sync`, cache hits and broken-dir recovery), `spawner`, `venv_paths`, `uv_runner`, and `catalog`; plus `grpc/orchestrator_bridge.py`. The child runtime becomes the server's **sole** execution path — `LoadPipeline` / `Inference` / `Train` / `RestoreTrainRun` route through the orchestrator unconditionally.
+- Added the **child runtime** (`cuvis_ai_core/run_runtime/`, run via `python -m cuvis_ai_core.run_runtime`) and `pipeline/restore_preinstalled.py`, which loads the resolved plugin set without re-installing, cloning, or mutating `sys.path`.
+- **Breaking:** `LoadPlugins` is now **register-only** — it registers catalog entries instead of installing/importing; `SessionState.loaded_plugins` → `registered_plugins`. A pipeline that omits the mandatory `plugins:` field hard-fails with a fix-it pointer to the new `suggest-plugins-fix` CLI (`plugin_fixer.py`).
+- Added **pipeline-driven plugin resolution**: the pure `plugin_resolver.resolve_pipeline_plugins(...)` materialises only the bare names declared in the pipeline's `plugins:` field.
+- Changed `list_available_nodes` to read the inline node catalog from each manifest entry (no plugin imports); dropped the import-based fallback. New `scripts/emit_metadata.py` regenerates a manifest's inline catalog.
+- **Breaking (CLI):** removed the legacy `--plugins-path` flag; `--plugins-dir` (the plugins directory + the pipeline's `plugins:` field) is the sole loader flag.
+- **Breaking:** `SetTrainRunConfig` now requires an existing pipeline (no embedded pipeline section).
 - **Breaking:** ports are one `PortSpec` each. `Node.INPUT_SPECS` / `OUTPUT_SPECS` are typed `dict[str, PortSpec]`; node init rejects list-form specs and a `variadic=True` output spec with a clear migration error. The pipeline accumulates a fan-in list only for `variadic` input ports.
-- Changed `NodeInfo` construction and `tools/emit_metadata.py` to the single-spec form (`map<string, PortSpec>` / `dict[str, CatalogPortSpec]`), carrying `variadic`. Dropped the `_unwrap_spec` list-normalization from the pipeline visualizer.
+- Changed `NodeInfo` construction and `scripts/emit_metadata.py` to the single-spec form (`map<string, PortSpec>` / `dict[str, CatalogPortSpec]`), carrying `variadic`. Dropped the `_unwrap_spec` list-normalization from the pipeline visualizer.
 - Realigned plugin loading to the bare-name manifest flow (resolver, plugin config, restore) and removed the standalone gRPC plugin-management example.
-- Added a `ruamel.yaml` dev dependency for the comment-preserving metadata emitter.
+- Cleaned up `node_registry`: dropped the unused `cache_dir` / `plugin_class_map` fields and added a `plugin_catalog` dict plus `register_catalog_entries`. Re-export the `cuvis_ai_core_pb2` type stub from cuvis-ai-schemas so the proto types have a single source of truth.
+- Orchestrator robustness: child-runtime spawn timeouts are env-configurable; child stdout/stderr is routed to files (not `subprocess.PIPE`); relative config paths resolve against the server cwd; local plugins are pinned by `[project]` name rather than manifest key.
+- Extended `scripts/audit_plugin_deps.py` for per-plugin CI and bumped stale dependency floors; added the `.github/workflows/dep_compat.yml` host-floor check and synced `uv.lock`. Added a `ruamel.yaml` dev dependency for the comment-preserving metadata emitter.
 
 ## 0.6.0 - 2026-05-11
 
