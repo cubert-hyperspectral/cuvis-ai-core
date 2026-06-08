@@ -123,11 +123,16 @@ def suggest_plugins_fix_cli(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--pipeline-path", required=True, type=Path,
+        "--pipeline-path",
+        required=True,
+        type=Path,
         help="Path to the pipeline yaml to inspect.",
     )
     parser.add_argument(
-        "--plugins-dir", action="append", default=[], type=Path,
+        "--plugins-dir",
+        action="append",
+        default=[],
+        type=Path,
         help=(
             "Directory containing per-plugin manifests (repeatable). If "
             "omitted, walks upward from the pipeline yaml looking for a "
@@ -135,7 +140,9 @@ def suggest_plugins_fix_cli(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--output", choices=("yaml", "diff", "json"), default="yaml",
+        "--output",
+        choices=("yaml", "diff", "json"),
+        default="yaml",
         help=(
             "Output form. yaml: patched pipeline yaml on stdout (pipe to "
             "file). diff: unified diff fragment. json: {pipeline, plugins, "

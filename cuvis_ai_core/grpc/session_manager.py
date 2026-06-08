@@ -129,8 +129,7 @@ class SessionManager:
             raise ValueError("session_id must be non-empty")
         if session_id in self._sessions:
             logger.debug(
-                f"Session {session_id} already exists; reusing without "
-                f"re-initialising."
+                f"Session {session_id} already exists; reusing without re-initialising."
             )
             return session_id
         self._sessions[session_id] = SessionState(

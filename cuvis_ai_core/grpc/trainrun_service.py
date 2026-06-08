@@ -139,7 +139,9 @@ class TrainRunService:
             )
 
         pipeline_config_path: Path | None = None
-        pipeline_section = trainrun_dict.get("pipeline") if isinstance(trainrun_dict, dict) else None
+        pipeline_section = (
+            trainrun_dict.get("pipeline") if isinstance(trainrun_dict, dict) else None
+        )
         if isinstance(pipeline_section, dict) and "config_path" in pipeline_section:
             if "nodes" not in pipeline_section or "connections" not in pipeline_section:
                 pipeline_config_path = helpers.resolve_pipeline_path(

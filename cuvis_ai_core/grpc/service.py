@@ -132,9 +132,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def Train(self, request, context) -> Iterable[cuvis_ai_pb2.TrainResponse]:
         from . import orchestrator_bridge
 
-        return orchestrator_bridge.forward_train(
-            self.session_manager, request, context
-        )
+        return orchestrator_bridge.forward_train(self.session_manager, request, context)
 
     def GetTrainStatus(self, request, context) -> cuvis_ai_pb2.GetTrainStatusResponse:
         from . import orchestrator_bridge
