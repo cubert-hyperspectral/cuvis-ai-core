@@ -9,14 +9,17 @@ in-memory mode used by the rest of the suite.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import grpc
 import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
 from cuvis_ai_core.grpc.orchestrator_bridge import (
     _InMemoryChildHandle,
+    _InMemoryContext,
     _InMemoryRpcError,
     _InMemorySpawner,
     _InMemoryStub,
@@ -24,6 +27,7 @@ from cuvis_ai_core.grpc.orchestrator_bridge import (
     install_in_memory_orchestrator,
     reset_orchestrator,
 )
+from cuvis_ai_core.grpc.session_manager import SessionManager
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +145,180 @@ def test_inmemory_stub_returns_response_on_success():
     servicer = RunRuntimeServicer()
     stub = _InMemoryStub(servicer)
     response = stub.HealthCheck(cuvis_ai_pb2.HealthCheckRequest())
-    assert (
-        response.status
-        == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+    assert response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+
+
+# ---------------------------------------------------------------------------
+# ensure_child_for_session: idempotency (runs through the autouse in-memory mode)
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_child_for_session_is_idempotent():
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = SimpleNamespace(plugins=None)
+
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, [])
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, [])
+
+    assert first is second
+    assert sm.get_session(sid).child_handle is first
+
+
+# ---------------------------------------------------------------------------
+# forward_* guards: missing session / missing child / bad request
+# ---------------------------------------------------------------------------
+
+
+def test_forward_load_pipeline_unknown_session_returns_failure():
+    sm = SessionManager()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, cuvis_ai_pb2.LoadPipelineRequest(session_id="nope"), ctx
     )
+    assert resp.success is False
+
+
+def test_forward_load_pipeline_missing_config_bytes_is_invalid_argument():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, cuvis_ai_pb2.LoadPipelineRequest(session_id=sid), ctx
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert "config_bytes" in ctx.details()
+
+
+def test_forward_inference_without_child_is_failed_precondition():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "child runtime" in ctx.details().lower()
+
+
+def test_forward_train_without_child_yields_empty():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    gen = orchestrator_bridge.forward_train(
+        sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+    )
+    assert list(gen) == []
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+
+
+def test_forward_pipeline_op_without_child_is_failed_precondition():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    # Exercises the shared _forward_pipeline_op no-child branch.
+    resp = orchestrator_bridge.forward_get_pipeline_inputs(
+        sm, cuvis_ai_pb2.GetPipelineInputsRequest(session_id=sid), ctx
+    )
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert resp == cuvis_ai_pb2.GetPipelineInputsResponse()
+
+
+def test_forward_set_train_run_config_missing_config_bytes_is_invalid_argument():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_set_train_run_config(
+        sm, cuvis_ai_pb2.SetTrainRunConfigRequest(session_id=sid), ctx
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+
+
+# ---------------------------------------------------------------------------
+# _initialize_child_session: child rejects the handshake
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_child_session_rejection_terminates_and_raises(tmp_path):
+    from cuvis_ai_core.orchestrator.spawner import DeclaredPaths
+
+    handle = MagicMock()
+    handle.stub.return_value.InitializeSession.return_value = SimpleNamespace(ok=False)
+    session = SimpleNamespace(search_paths=[])
+    declared = DeclaredPaths(output_dir=tmp_path, scratch_dir=tmp_path)
+
+    with pytest.raises(RuntimeError, match="rejected InitializeSession"):
+        orchestrator_bridge._initialize_child_session(
+            handle, "sid-x", session, {}, declared
+        )
+    handle.terminate.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _propagate_rpc_error / _call_child_with_error_propagation
+# ---------------------------------------------------------------------------
+
+
+def test_propagate_rpc_error_copies_code_and_details():
+    ctx = _InMemoryContext()
+    err = _InMemoryRpcError(grpc.StatusCode.NOT_FOUND, "missing thing")
+    orchestrator_bridge._propagate_rpc_error(err, ctx)
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert ctx.details() == "missing thing"
+
+
+def test_propagate_rpc_error_defaults_to_unknown_when_code_absent():
+    ctx = _InMemoryContext()
+    # A bare RpcError has no code()/details() methods → UNKNOWN + str(exc).
+    orchestrator_bridge._propagate_rpc_error(grpc.RpcError(), ctx)
+    assert ctx.code() is grpc.StatusCode.UNKNOWN
+
+
+def test_call_child_with_error_propagation_surfaces_rpc_error():
+    class _RaisingStub:
+        def SomeMethod(self, request):
+            raise _InMemoryRpcError(grpc.StatusCode.INTERNAL, "boom")
+
+    ctx = _InMemoryContext()
+    factory = MagicMock(return_value="empty")
+    out = orchestrator_bridge._call_child_with_error_propagation(
+        _RaisingStub(), "SomeMethod", object(), ctx, factory
+    )
+    assert out == "empty"
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert ctx.details() == "boom"
+
+
+# ---------------------------------------------------------------------------
+# forward_restore_train_run: cleans up the allocated session on resolver error
+# ---------------------------------------------------------------------------
+
+
+def test_forward_restore_train_run_cleans_up_session_on_resolver_error(
+    monkeypatch, tmp_path
+):
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["needs_this"]))
+    monkeypatch.setattr(
+        "cuvis_ai_core.grpc.trainrun_service.TrainRunService.parse_trainrun_yaml",
+        lambda path: (fake_cfg, None),
+    )
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=ValueError("unresolved plugins")),
+    )
+    ctx = _InMemoryContext()
+
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "tr.yaml")),
+        ctx,
+    )
+
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    # The parent session allocated before the failure was dropped.
+    assert sm._sessions == {}
