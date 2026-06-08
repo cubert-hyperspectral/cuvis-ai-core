@@ -1,10 +1,23 @@
+import mmap
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
 import torch
 from cuvis_ai_schemas.pipeline import PortSpec
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
+from cuvis_ai_core.grpc.helpers import ShmBufferOwner
 from cuvis_ai_core.grpc.plugin_service import _convert_port_spec_to_proto
+
+
+def _make_owner(data: bytes) -> ShmBufferOwner:
+    """Create a ShmBufferOwner backed by an anonymous mmap pre-filled with data."""
+    size = max(len(data), 1)
+    mm = mmap.mmap(-1, size)
+    mm.write(data)
+    mm.seek(0)
+    return ShmBufferOwner(mm)
 
 
 class TestProtoToNumpy:
@@ -180,6 +193,21 @@ class TestTorchConversion:
         assert "Supported dtypes:" in message
         assert "torch.float32" in message
 
+    def test_proto_to_tensor_copy_false_raw_data(self):
+        """copy=False on raw_data path yields tensor with correct values.
+
+        PyTorch does not support non-writable tensors (warns but allows); just
+        verify the values are correct.
+        """
+        arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        tensor_proto = helpers.numpy_to_proto(arr)
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with helpers.proto_to_tensor(tensor_proto, copy=False) as tensor:
+                torch.testing.assert_close(tensor, torch.tensor(arr))
+
 
 class TestProcessingModeMapping:
     """Test ProcessingMode enum mapping"""
@@ -351,3 +379,184 @@ class TestConvertPortSpecToProto:
 
         assert result.optional is True
         assert result.description == "frame index"
+
+
+class TestShmBufferOwner:
+    """Test ShmBufferOwner lifecycle."""
+
+    def test_close_sets_closed_flag(self):
+        owner = _make_owner(b"\x00" * 16)
+        assert not owner.closed
+        owner.close()
+        assert owner.closed
+
+    def test_close_idempotent(self):
+        owner = _make_owner(b"\x00" * 16)
+        owner.close()
+        owner.close()  # must not raise
+
+    def test_context_manager_closes_on_exit(self):
+        owner = _make_owner(b"\x00" * 16)
+        with owner:
+            assert not owner.closed
+        assert owner.closed
+
+    def test_buffer_error_on_close_does_not_set_closed(self):
+        mock_mm = MagicMock()
+        mock_mm.close.side_effect = BufferError("view still active")
+        owner = ShmBufferOwner(mock_mm)
+        owner.close()  # must not raise
+        assert not owner.closed
+
+    def test_file_obj_closed_on_normal_close(self):
+        mock_mm = MagicMock()
+        mock_file = MagicMock()
+        owner = ShmBufferOwner(mock_mm, file_obj=mock_file)
+        owner.close()
+        mock_file.close.assert_called_once()
+        assert owner.closed
+
+
+class TestProtoToNumpyShmRef:
+    """Test proto_to_numpy with shm_ref payload (SHM path)."""
+
+    def _make_tensor_proto(self, arr: np.ndarray, byte_offset: int = 0) -> cuvis_ai_pb2.Tensor:
+        data = arr.tobytes()
+        return cuvis_ai_pb2.Tensor(
+            shape=list(arr.shape),
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(
+                name="/test_seg",
+                byte_offset=byte_offset,
+                byte_size=len(data),
+            ),
+        )
+
+    def test_shm_ref_copy_true(self):
+        arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        tensor_proto = self._make_tensor_proto(arr)
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+            with helpers.proto_to_numpy(tensor_proto, copy=True) as result:
+                assert isinstance(result, np.ndarray)
+                assert result.flags.writeable
+                np.testing.assert_array_equal(result, arr)
+
+    def test_shm_ref_copy_false(self):
+        arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        tensor_proto = self._make_tensor_proto(arr)
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+            with helpers.proto_to_numpy(tensor_proto, copy=False) as result:
+                np.testing.assert_array_equal(result, arr)
+
+    def test_shm_ref_with_byte_offset(self):
+        arr = np.array([10.0, 20.0], dtype=np.float32)
+        padding = b"\xff" * 8
+        raw = padding + arr.tobytes()
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[2],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=8, byte_size=8),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(raw)):
+            with helpers.proto_to_numpy(tensor_proto) as result:
+                np.testing.assert_array_equal(result, arr)
+
+    def test_shm_ref_unaligned_byte_size_raises(self):
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=5),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(b"\x00" * 5)):
+            with pytest.raises(ValueError, match="not divisible"):
+                with helpers.proto_to_numpy(tensor_proto) as _:
+                    pass
+
+    def test_shm_ref_close_called_after_context_exit(self):
+        """owner.close() is called in the finally block even if the mmap has live views."""
+        arr = np.array([1.0, 2.0], dtype=np.float32)
+        owner = _make_owner(arr.tobytes())
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[2],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=8),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=owner):
+            with patch.object(owner, "close") as mock_close:
+                with helpers.proto_to_numpy(tensor_proto) as _:
+                    pass
+        mock_close.assert_called_once()
+
+
+class TestProtoToTensorShmRef:
+    """Test proto_to_tensor with shm_ref and raw_data payloads."""
+
+    def test_shm_ref_yields_tensor(self):
+        arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[2, 2],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=16),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+            with helpers.proto_to_tensor(tensor_proto) as tensor:
+                assert isinstance(tensor, torch.Tensor)
+                assert tensor.shape == torch.Size([2, 2])
+                assert tensor.dtype == torch.float32
+                torch.testing.assert_close(tensor, torch.tensor(arr))
+
+    def test_shm_ref_copy_true_writable(self):
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[3],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=12),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+            with helpers.proto_to_tensor(tensor_proto, copy=True) as tensor:
+                tensor[0] = 99.0  # must not raise
+                assert tensor[0].item() == 99.0
+
+    def test_shm_ref_copy_false_shares_memory(self):
+        """copy=False yields tensor backed by the mmap; modifications write through."""
+        arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        owner = _make_owner(arr.tobytes())
+        tensor_proto = cuvis_ai_pb2.Tensor(
+            shape=[3],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=12),
+        )
+        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=owner):
+            with helpers.proto_to_tensor(tensor_proto, copy=False) as tensor:
+                assert isinstance(tensor, torch.Tensor)
+                torch.testing.assert_close(tensor, torch.tensor(arr))
+                # Modifying the tensor writes through to the mmap (zero-copy semantics)
+                tensor[0] = 99.0
+                owner.mmap_obj.seek(0)
+                raw = owner.mmap_obj.read(12)
+                assert np.frombuffer(raw, dtype=np.float32)[0] == pytest.approx(99.0)
+
+    def test_raw_data_copy_false(self):
+        arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        tensor_proto = helpers.numpy_to_proto(arr)
+        with helpers.proto_to_tensor(tensor_proto, copy=False) as tensor:
+            torch.testing.assert_close(tensor, torch.tensor(arr))
+
+
+class TestMapShmDispatch:
+    """Test _map_shm platform dispatch."""
+
+    def test_dispatches_to_windows_on_win32(self):
+        mock_owner = MagicMock()
+        with patch("cuvis_ai_core.grpc.helpers._map_shm_windows", return_value=mock_owner) as mock_win:
+            with patch("sys.platform", "win32"):
+                result = helpers._map_shm("test_name", 16)
+        mock_win.assert_called_once_with("test_name", 16)
+        assert result is mock_owner
+
+    def test_dispatches_to_posix_on_linux(self):
+        mock_owner = MagicMock()
+        with patch("cuvis_ai_core.grpc.helpers._map_shm_posix", return_value=mock_owner) as mock_posix:
+            with patch("sys.platform", "linux"):
+                result = helpers._map_shm("test_name", 16)
+        mock_posix.assert_called_once_with("test_name", 16)
