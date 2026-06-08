@@ -125,10 +125,10 @@ class TestWorkflow2_InferenceWithPretrained:
         assert len(inference_response.outputs) > 0
         assert "SoftChannelSelector.selected" in inference_response.outputs
 
-        selected = helpers.proto_to_numpy(
+        with helpers.proto_to_numpy(
             inference_response.outputs["SoftChannelSelector.selected"]
-        )
-        assert selected.shape == cube.shape
+        ) as selected:
+            assert selected.shape == cube.shape
 
         # Step 4: CloseSession
         close_response = grpc_stub.CloseSession(
@@ -452,10 +452,10 @@ class TestWorkflowIntegration:
             assert len(inference_response.outputs) > 0
             assert "SoftChannelSelector.selected" in inference_response.outputs
 
-            selected = helpers.proto_to_numpy(
+            with helpers.proto_to_numpy(
                 inference_response.outputs["SoftChannelSelector.selected"]
-            )
-            assert selected.shape == cube.shape
+            ) as selected:
+                assert selected.shape == cube.shape
 
         finally:
             grpc_stub.CloseSession(

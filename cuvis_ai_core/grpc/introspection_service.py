@@ -8,6 +8,7 @@ from pathlib import Path
 import grpc
 
 from .error_handling import get_session_or_error, grpc_handler
+from .helpers import spec_to_tensor_spec
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -33,12 +34,7 @@ class IntrospectionService:
 
         input_specs_dict = session.pipeline.get_input_specs()
         input_specs = {
-            name: cuvis_ai_pb2.TensorSpec(
-                name=spec.get("name", name),
-                shape=list(spec.get("shape", [])),
-                dtype=self._dtype_str_to_proto(spec.get("dtype")),
-                required=bool(spec.get("required", False)),
-            )
+            name: spec_to_tensor_spec(name, spec)
             for name, spec in input_specs_dict.items()
         }
 
@@ -62,12 +58,7 @@ class IntrospectionService:
 
         output_specs_dict = session.pipeline.get_output_specs()
         output_specs = {
-            name: cuvis_ai_pb2.TensorSpec(
-                name=spec.get("name", name),
-                shape=list(spec.get("shape", [])),
-                dtype=self._dtype_str_to_proto(spec.get("dtype")),
-                required=bool(spec.get("required", False)),
-            )
+            name: spec_to_tensor_spec(name, spec)
             for name, spec in output_specs_dict.items()
         }
 
@@ -123,19 +114,6 @@ class IntrospectionService:
             image_data=image_data,
             format=format_type,
         )
-
-    def _dtype_str_to_proto(self, dtype_str: str | None) -> int:
-        """Convert dtype strings produced by pipeline introspection to proto enums."""
-        dtype_map = {
-            "float32": cuvis_ai_pb2.D_TYPE_FLOAT32,
-            "float64": cuvis_ai_pb2.D_TYPE_FLOAT64,
-            "int32": cuvis_ai_pb2.D_TYPE_INT32,
-            "int64": cuvis_ai_pb2.D_TYPE_INT64,
-            "uint8": cuvis_ai_pb2.D_TYPE_UINT8,
-            "bool": cuvis_ai_pb2.D_TYPE_BOOL,
-            "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
-        }
-        return dtype_map.get((dtype_str or "").lower(), cuvis_ai_pb2.D_TYPE_UNSPECIFIED)
 
 
 __all__ = ["IntrospectionService"]

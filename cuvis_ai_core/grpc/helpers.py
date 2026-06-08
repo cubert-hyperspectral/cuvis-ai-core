@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import mmap
 import os
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +16,68 @@ import torch
 import yaml
 from loguru import logger
 from .v1 import cuvis_ai_pb2
+
+
+@dataclass
+class ShmBufferOwner:
+    """Owns a mapped SHM buffer for as long as zero-copy tensors need it."""
+
+    mmap_obj: mmap.mmap
+    file_obj: Any | None = None
+    closed: bool = False
+
+    @property
+    def buffer(self) -> mmap.mmap:
+        return self.mmap_obj
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        try:
+            self.mmap_obj.close()
+        except BufferError:
+            # A torch/numpy view can still be alive at request teardown. In that
+            # case leave the mapping for Python to close when the final view dies.
+            return
+        finally:
+            if self.file_obj is not None:
+                self.file_obj.close()
+                self.file_obj = None
+        self.closed = True
+
+    def __enter__(self) -> "ShmBufferOwner":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+
+def _map_shm_windows(name: str, byte_size: int) -> ShmBufferOwner:
+    """Map a Windows named file-mapping created by C++ ShmTensorWriter."""
+    mm = mmap.mmap(-1, byte_size, tagname=name, access=mmap.ACCESS_READ)
+    return ShmBufferOwner(mm)
+
+
+def _map_shm_posix(name: str, byte_size: int) -> ShmBufferOwner:
+    """Map a POSIX SHM object created by C++ ShmTensorWriter.
+
+    name has a leading '/' (e.g. "/cuvis_1234_0"); the file lives at
+    /dev/shm/<name-without-slash>.
+    """
+    shm_path = f"/dev/shm/{name.lstrip('/')}"
+    file_obj = open(shm_path, "rb")
+    try:
+        mm = mmap.mmap(file_obj.fileno(), byte_size, access=mmap.ACCESS_READ)
+    except Exception:
+        file_obj.close()
+        raise
+    return ShmBufferOwner(mm, file_obj)
+
+
+def _map_shm(name: str, byte_size: int) -> ShmBufferOwner:
+    if sys.platform == "win32":
+        return _map_shm_windows(name, byte_size)
+    return _map_shm_posix(name, byte_size)
 
 # Dtype mappings
 DTYPE_PROTO_TO_NUMPY = {
@@ -85,6 +152,35 @@ STRING_TO_POINT_TYPE = {
 }
 
 
+_DTYPE_STR_TO_PROTO: dict[str, int] = {
+    "float32": cuvis_ai_pb2.D_TYPE_FLOAT32,
+    "float64": cuvis_ai_pb2.D_TYPE_FLOAT64,
+    "int32":   cuvis_ai_pb2.D_TYPE_INT32,
+    "int64":   cuvis_ai_pb2.D_TYPE_INT64,
+    "uint8":   cuvis_ai_pb2.D_TYPE_UINT8,
+    "bool":    cuvis_ai_pb2.D_TYPE_BOOL,
+    "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
+}
+
+
+def spec_to_tensor_spec(name: str, spec: dict) -> cuvis_ai_pb2.TensorSpec:
+    """Build a TensorSpec proto from a pipeline port-spec dict.
+
+    Coerces shape elements to int so dynamic-dim strings ("-1", "None", etc.)
+    returned by pipeline introspection work with the strict upb protobuf runtime.
+    """
+    raw_shape = spec.get("shape") or []
+    shape = [int(x) for x in raw_shape]
+    dtype_str = (spec.get("dtype") or "").lower()
+    dtype = _DTYPE_STR_TO_PROTO.get(dtype_str, cuvis_ai_pb2.D_TYPE_UNSPECIFIED)
+    return cuvis_ai_pb2.TensorSpec(
+        name=spec.get("name", name),
+        shape=shape,
+        dtype=dtype,
+        required=bool(spec.get("required", False)),
+    )
+
+
 def dtype_to_proto(dtype: Any) -> int:
     """Map a Python dtype-like value to a proto ``D_TYPE_*`` enum.
 
@@ -137,15 +233,27 @@ def dtype_to_proto(dtype: Any) -> int:
     raise ValueError(f"Unsupported dtype type: {type(dtype)}")
 
 
-def proto_to_numpy(tensor_proto: cuvis_ai_pb2.Tensor, copy: bool = True) -> np.ndarray:
-    """Convert proto Tensor to numpy array.
+@contextmanager
+def proto_to_numpy(
+    tensor_proto: cuvis_ai_pb2.Tensor,
+    copy: bool = True,
+) -> Generator[np.ndarray, None, None]:
+    """Convert proto Tensor to numpy array, yielding it as a context manager.
+
+    Supports both the legacy ``raw_data`` payload and the newer ``shm_ref``
+    payload written by the C++ ``ShmTensorWriter``.
+
+    For ``shm_ref`` payloads with ``copy=False``, the yielded array is backed
+    directly by the mapped SHM region. The mapping is kept alive for the
+    duration of the ``with`` block and closed on exit — callers must not use
+    the array after exiting the context.
 
     Args:
         tensor_proto: Proto Tensor message
-        copy: If True, return a writable copy. If False, return a read-only view
-              of the buffer (zero-copy, but not writable). Default: True
+        copy: If True, yield a writable copy (independent of any SHM mapping).
+              If False, yield a read-only zero-copy view. Default: True
 
-    Returns:
+    Yields:
         numpy array with correct shape and dtype
 
     Raises:
@@ -157,15 +265,37 @@ def proto_to_numpy(tensor_proto: cuvis_ai_pb2.Tensor, copy: bool = True) -> np.n
     dtype = DTYPE_PROTO_TO_NUMPY[tensor_proto.dtype]
     shape = tuple(tensor_proto.shape)
 
-    # Convert raw bytes to numpy array
-    arr = np.frombuffer(tensor_proto.raw_data, dtype=dtype)
+    payload = tensor_proto.WhichOneof("payload")
 
-    # Reshape if needed
+    if payload == "shm_ref":
+        ref = tensor_proto.shm_ref
+        map_size = ref.byte_offset + ref.byte_size
+        if ref.byte_size % np.dtype(dtype).itemsize != 0:
+            raise ValueError(
+                f"SHM byte_size {ref.byte_size} is not divisible by dtype {dtype}"
+            )
+
+        owner = _map_shm(ref.name, map_size)
+        try:
+            count = ref.byte_size // np.dtype(dtype).itemsize
+            arr = np.frombuffer(
+                owner.buffer,
+                dtype=dtype,
+                count=count,
+                offset=ref.byte_offset,
+            )
+            if shape:
+                arr = arr.reshape(shape)
+            yield arr.copy() if copy else arr
+        finally:
+            owner.close()
+        return
+
+    # raw_data path (payload == "raw_data" or legacy proto without oneof)
+    arr = np.frombuffer(tensor_proto.raw_data, dtype=dtype)
     if shape:
         arr = arr.reshape(shape)
-
-    # Return writable copy if requested (default), otherwise read-only view
-    return arr.copy() if copy else arr
+    yield arr.copy() if copy else arr
 
 
 def numpy_to_proto(arr: np.ndarray) -> cuvis_ai_pb2.Tensor:
@@ -190,18 +320,26 @@ def numpy_to_proto(arr: np.ndarray) -> cuvis_ai_pb2.Tensor:
     )
 
 
-def proto_to_tensor(tensor_proto: cuvis_ai_pb2.Tensor) -> torch.Tensor:
-    """Convert proto Tensor to PyTorch tensor.
+@contextmanager
+def proto_to_tensor(
+    tensor_proto: cuvis_ai_pb2.Tensor,
+    copy: bool = True,
+) -> Generator[torch.Tensor, None, None]:
+    """Convert proto Tensor to PyTorch tensor, yielding it as a context manager.
+
+    For ``shm_ref`` payloads with ``copy=False``, the yielded tensor shares
+    memory with the SHM region. The mapping is kept alive for the duration of
+    the ``with`` block — callers must not use the tensor after exiting.
 
     Args:
         tensor_proto: Proto Tensor message
+        copy: Passed through to ``proto_to_numpy``. Default: True
 
-    Returns:
+    Yields:
         PyTorch tensor
     """
-    # proto_to_numpy returns a writable copy by default
-    arr = proto_to_numpy(tensor_proto)
-    return torch.from_numpy(arr)
+    with proto_to_numpy(tensor_proto, copy=copy) as arr:
+        yield torch.from_numpy(arr)
 
 
 def tensor_to_proto(tensor: torch.Tensor) -> cuvis_ai_pb2.Tensor:
