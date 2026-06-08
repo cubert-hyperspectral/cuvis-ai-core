@@ -79,6 +79,7 @@ def _map_shm(name: str, byte_size: int) -> ShmBufferOwner:
         return _map_shm_windows(name, byte_size)
     return _map_shm_posix(name, byte_size)
 
+
 # Dtype mappings
 DTYPE_PROTO_TO_NUMPY = {
     cuvis_ai_pb2.D_TYPE_FLOAT32: np.float32,
@@ -155,10 +156,10 @@ STRING_TO_POINT_TYPE = {
 _DTYPE_STR_TO_PROTO: dict[str, int] = {
     "float32": cuvis_ai_pb2.D_TYPE_FLOAT32,
     "float64": cuvis_ai_pb2.D_TYPE_FLOAT64,
-    "int32":   cuvis_ai_pb2.D_TYPE_INT32,
-    "int64":   cuvis_ai_pb2.D_TYPE_INT64,
-    "uint8":   cuvis_ai_pb2.D_TYPE_UINT8,
-    "bool":    cuvis_ai_pb2.D_TYPE_BOOL,
+    "int32": cuvis_ai_pb2.D_TYPE_INT32,
+    "int64": cuvis_ai_pb2.D_TYPE_INT64,
+    "uint8": cuvis_ai_pb2.D_TYPE_UINT8,
+    "bool": cuvis_ai_pb2.D_TYPE_BOOL,
     "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
 }
 
