@@ -11,10 +11,22 @@ import pytest
 import yaml
 
 from cuvis_ai_core.utils.plugin_fixer import (
+    _discover_plugins_dirs,
     reorder_pipeline_with_plugins,
     suggest_plugins_field,
+    suggest_plugins_fix_cli,
 )
 from cuvis_ai_schemas.pipeline import PipelineConfig
+
+_PIPELINE_BODY = """
+metadata:
+  name: p
+nodes:
+  - name: n
+    class_name: cuvis_ai.node.normalization.MinMaxNormalizer
+    hparams: {}
+connections: []
+"""
 
 
 def _write(path: Path, body: str) -> None:
@@ -125,9 +137,7 @@ def test_suggest_refuses_when_plugins_already_present(workspace: Path):
     pipeline_config = PipelineConfig.load_from_file(pipeline_yaml)
 
     with pytest.raises(ValueError, match="already declares 'plugins:'"):
-        suggest_plugins_field(
-            pipeline_config, raw, [workspace / "configs" / "plugins"]
-        )
+        suggest_plugins_field(pipeline_config, raw, [workspace / "configs" / "plugins"])
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +162,11 @@ def test_cli_yaml_output_round_trips(workspace: Path):
     )
     result = subprocess.run(
         [
-            sys.executable, "-m", "cuvis_ai_core.utils.plugin_fixer",
-            "--pipeline-path", str(pipeline_yaml),
+            sys.executable,
+            "-m",
+            "cuvis_ai_core.utils.plugin_fixer",
+            "--pipeline-path",
+            str(pipeline_yaml),
         ],
         capture_output=True,
         text=True,
@@ -179,13 +192,115 @@ def test_cli_idempotent_when_already_declared(workspace: Path):
     )
     result = subprocess.run(
         [
-            sys.executable, "-m", "cuvis_ai_core.utils.plugin_fixer",
-            "--pipeline-path", str(pipeline_yaml),
+            sys.executable,
+            "-m",
+            "cuvis_ai_core.utils.plugin_fixer",
+            "--pipeline-path",
+            str(pipeline_yaml),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0
-    # No patched yaml on stdout — only the "nothing to do" log line went to stderr.
+    # No patched yaml on stdout, only the "nothing to do" log line went to stderr.
     assert result.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# CLI, called in-process so coverage measures suggest_plugins_fix_cli
+# ---------------------------------------------------------------------------
+
+
+def test_cli_missing_pipeline_file_returns_1(tmp_path):
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(tmp_path / "nope.yaml")])
+    assert rc == 1
+
+
+def test_cli_non_dict_yaml_returns_1(tmp_path):
+    bad = tmp_path / "list.yaml"
+    bad.write_text("- one\n- two\n", encoding="utf-8")
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(bad)])
+    assert rc == 1
+
+
+def test_cli_yaml_output_emits_patched_yaml(workspace, capsys):
+    pipeline = workspace / "p.yaml"
+    _write(pipeline, _PIPELINE_BODY)
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(pipeline)])
+    assert rc == 0
+    patched = yaml.safe_load(capsys.readouterr().out)
+    assert patched["plugins"] == ["cuvis_ai_builtin"]
+    assert list(patched.keys()) == ["metadata", "plugins", "nodes", "connections"]
+
+
+def test_cli_diff_output_emits_unified_diff(workspace, capsys):
+    pipeline = workspace / "p.yaml"
+    _write(pipeline, _PIPELINE_BODY)
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(pipeline), "--output", "diff"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("---") or "@@" in out
+    assert "plugins" in out
+
+
+def test_cli_json_output_emits_envelope(workspace, capsys):
+    import json
+
+    pipeline = workspace / "p.yaml"
+    _write(pipeline, _PIPELINE_BODY)
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(pipeline), "--output", "json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["plugins"] == ["cuvis_ai_builtin"]
+    assert payload["pipeline"].endswith("p.yaml")
+    assert "diff" in payload
+
+
+def test_cli_already_declared_returns_0_without_output(workspace, capsys):
+    pipeline = workspace / "p.yaml"
+    _write(
+        pipeline,
+        """
+        metadata:
+          name: p
+        plugins:
+          - cuvis_ai_builtin
+        nodes: []
+        connections: []
+        """,
+    )
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(pipeline)])
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_unresolvable_class_returns_1(workspace):
+    pipeline = workspace / "p.yaml"
+    _write(
+        pipeline,
+        """
+        metadata:
+          name: p
+        nodes:
+          - name: n
+            class_name: totally.unknown.MysteryNode
+            hparams: {}
+        connections: []
+        """,
+    )
+    rc = suggest_plugins_fix_cli(["--pipeline-path", str(pipeline)])
+    assert rc == 1
+
+
+def test_discover_plugins_dirs_walks_up_and_extends_explicit(workspace):
+    nested = workspace / "a" / "b"
+    nested.mkdir(parents=True)
+    pipeline = nested / "p.yaml"
+    pipeline.write_text("metadata:\n  name: p\n", encoding="utf-8")
+
+    explicit = Path("/explicit/plugins")
+    dirs = _discover_plugins_dirs(pipeline, [explicit])
+
+    assert (workspace / "configs" / "plugins") in dirs
+    assert dirs[-1] == explicit
