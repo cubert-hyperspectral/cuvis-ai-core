@@ -57,11 +57,16 @@ _HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
 _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
 _TERMINATE_KILL_WAIT_SECONDS = 5.0
 _GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
+# CUDA device-selection vars dropped from the child env when GPU is not
+# requested. LD_LIBRARY_PATH is deliberately NOT in this set: it is the
+# dynamic-linker search path the child interpreter (and torch's own shared
+# libraries) may need to start at all. Dropping it made the child exit 127
+# before Python could run on runners whose interpreter resolves its libs via
+# LD_LIBRARY_PATH.
 _CUDA_VARS = (
     "CUDA_VISIBLE_DEVICES",
     "CUDA_HOME",
     "CUDA_PATH",
-    "LD_LIBRARY_PATH",
     "NVIDIA_VISIBLE_DEVICES",
 )
 
@@ -386,9 +391,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
                     return text
             time.sleep(_ENDPOINT_POLL_INTERVAL_SECONDS)
         process.terminate()
-        raise SpawnError(
-            f"Child runtime did not write endpoint within {timeout_s}s."
-        )
+        raise SpawnError(f"Child runtime did not write endpoint within {timeout_s}s.")
 
     def _wait_for_health(self, handle: ChildHandle) -> None:
         timeout_s = _timeout_from_env(

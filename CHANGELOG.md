@@ -13,7 +13,7 @@
 - Changed `NodeInfo` construction and `scripts/emit_metadata.py` to the single-spec form (`map<string, PortSpec>` / `dict[str, CatalogPortSpec]`), carrying `variadic`. Dropped the `_unwrap_spec` list-normalization from the pipeline visualizer.
 - Realigned plugin loading to the bare-name manifest flow (resolver, plugin config, restore) and removed the standalone gRPC plugin-management example.
 - Cleaned up `node_registry`: dropped the unused `cache_dir` / `plugin_class_map` fields and added a `plugin_catalog` dict plus `register_catalog_entries`. Re-export the `cuvis_ai_core_pb2` type stub from cuvis-ai-schemas so the proto types have a single source of truth.
-- Orchestrator robustness: child-runtime spawn timeouts are env-configurable; child stdout/stderr is routed to files (not `subprocess.PIPE`); relative config paths resolve against the server cwd; local plugins are pinned by `[project]` name rather than manifest key.
+- Orchestrator robustness: child-runtime spawn timeouts are env-configurable; child stdout/stderr is routed to files (not `subprocess.PIPE`); relative config paths resolve against the server cwd; local plugins are pinned by `[project]` name rather than manifest key; the child env keeps `LD_LIBRARY_PATH` (dropping it as a CUDA var made the child interpreter exit 127 before Python ran on runners that resolve libs via it).
 - Extended `scripts/audit_plugin_deps.py` for per-plugin CI and bumped stale dependency floors; added the `.github/workflows/dep_compat.yml` host-floor check and synced `uv.lock`. Added a `ruamel.yaml` dev dependency for the comment-preserving metadata emitter.
 
 ## 0.6.0 - 2026-05-11

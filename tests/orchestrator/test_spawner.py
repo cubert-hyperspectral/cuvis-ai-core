@@ -172,6 +172,24 @@ def test_spawn_gpu_flag_passes_cuda_vars_through(
     assert env.get("CUDA_VISIBLE_DEVICES") == "0,1"
 
 
+def test_spawn_keeps_ld_library_path_without_gpu(
+    fake_venv: Path, declared_paths, monkeypatch
+):
+    """LD_LIBRARY_PATH must survive curation even when GPU is not requested.
+
+    It is the dynamic-linker search path the child interpreter may need to
+    start; dropping it made the child exit 127 before Python ran.
+    """
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/python/lib")
+    spawner = LocalChildRuntimeSpawner()
+    env = spawner._build_child_env(
+        venv_path=fake_venv,
+        declared_paths=declared_paths,
+        request_gpu=False,
+    )
+    assert env.get("LD_LIBRARY_PATH") == "/opt/python/lib"
+
+
 def test_spawn_terminate_returns_returncode(fake_venv: Path, declared_paths):
     spawner = LocalChildRuntimeSpawner()
     handle = spawner.spawn(
