@@ -19,12 +19,11 @@ class TestProtoToNumpy:
         )
 
         # Act
-        result = helpers.proto_to_numpy(tensor_proto)
-
-        # Assert
-        assert isinstance(result, np.ndarray)
-        np.testing.assert_array_equal(result, arr)
-        assert result.dtype == np.float32
+        with helpers.proto_to_numpy(tensor_proto) as result:
+            # Assert
+            assert isinstance(result, np.ndarray)
+            np.testing.assert_array_equal(result, arr)
+            assert result.dtype == np.float32
 
     def test_proto_to_numpy_int32(self):
         """Test converting int32 tensor proto to numpy"""
@@ -33,10 +32,9 @@ class TestProtoToNumpy:
             shape=[4], dtype=cuvis_ai_pb2.D_TYPE_INT32, raw_data=arr.tobytes()
         )
 
-        result = helpers.proto_to_numpy(tensor_proto)
-
-        np.testing.assert_array_equal(result, arr)
-        assert result.dtype == np.int32
+        with helpers.proto_to_numpy(tensor_proto) as result:
+            np.testing.assert_array_equal(result, arr)
+            assert result.dtype == np.int32
 
     def test_proto_to_numpy_invalid_dtype(self):
         """Test error handling for unsupported dtype"""
@@ -47,7 +45,8 @@ class TestProtoToNumpy:
         )
 
         with pytest.raises(ValueError, match="Unsupported dtype"):
-            helpers.proto_to_numpy(tensor_proto)
+            with helpers.proto_to_numpy(tensor_proto) as _:
+                pass
 
     def test_proto_to_numpy_empty_tensor(self):
         """Test handling empty tensors"""
@@ -56,10 +55,9 @@ class TestProtoToNumpy:
             shape=[0], dtype=cuvis_ai_pb2.D_TYPE_FLOAT32, raw_data=arr.tobytes()
         )
 
-        result = helpers.proto_to_numpy(tensor_proto)
-
-        assert result.shape == (0,)
-        assert result.dtype == np.float32
+        with helpers.proto_to_numpy(tensor_proto) as result:
+            assert result.shape == (0,)
+            assert result.dtype == np.float32
 
     def test_proto_to_numpy_writable_by_default(self):
         """Test that proto_to_numpy returns writable arrays by default"""
@@ -68,13 +66,12 @@ class TestProtoToNumpy:
             shape=[2, 2], dtype=cuvis_ai_pb2.D_TYPE_FLOAT32, raw_data=arr.tobytes()
         )
 
-        result = helpers.proto_to_numpy(tensor_proto)
-
-        # Should be writable
-        assert result.flags.writeable
-        # Verify we can modify it
-        result[0, 0] = 999.0
-        assert result[0, 0] == 999.0
+        with helpers.proto_to_numpy(tensor_proto) as result:
+            # Should be writable
+            assert result.flags.writeable
+            # Verify we can modify it
+            result[0, 0] = 999.0
+            assert result[0, 0] == 999.0
 
     def test_proto_to_numpy_copy_true(self):
         """Test proto_to_numpy with copy=True returns writable array"""
@@ -83,12 +80,11 @@ class TestProtoToNumpy:
             shape=[4], dtype=cuvis_ai_pb2.D_TYPE_INT32, raw_data=arr.tobytes()
         )
 
-        result = helpers.proto_to_numpy(tensor_proto, copy=True)
-
-        # Should be writable
-        assert result.flags.writeable
-        result[0] = 999
-        assert result[0] == 999
+        with helpers.proto_to_numpy(tensor_proto, copy=True) as result:
+            # Should be writable
+            assert result.flags.writeable
+            result[0] = 999
+            assert result[0] == 999
 
     def test_proto_to_numpy_copy_false(self):
         """Test proto_to_numpy with copy=False returns read-only view"""
@@ -97,13 +93,12 @@ class TestProtoToNumpy:
             shape=[4], dtype=cuvis_ai_pb2.D_TYPE_INT32, raw_data=arr.tobytes()
         )
 
-        result = helpers.proto_to_numpy(tensor_proto, copy=False)
-
-        # Should be read-only
-        assert not result.flags.writeable
-        # Verify modification raises error
-        with pytest.raises(ValueError, match="assignment destination is read-only"):
-            result[0] = 999
+        with helpers.proto_to_numpy(tensor_proto, copy=False) as result:
+            # Should be read-only
+            assert not result.flags.writeable
+            # Verify modification raises error
+            with pytest.raises(ValueError, match="assignment destination is read-only"):
+                result[0] = 999
 
 
 class TestNumpyToProto:
@@ -124,11 +119,10 @@ class TestNumpyToProto:
         arr = np.random.randn(3, 4, 5).astype(np.float32)
 
         proto = helpers.numpy_to_proto(arr)
-        result = helpers.proto_to_numpy(proto)
-
-        np.testing.assert_array_almost_equal(result, arr)
-        assert result.shape == arr.shape
-        assert result.dtype == arr.dtype
+        with helpers.proto_to_numpy(proto) as result:
+            np.testing.assert_array_almost_equal(result, arr)
+            assert result.shape == arr.shape
+            assert result.dtype == arr.dtype
 
 
 class TestTorchConversion:
@@ -139,12 +133,11 @@ class TestTorchConversion:
         arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
         tensor_proto = helpers.numpy_to_proto(arr)
 
-        tensor = helpers.proto_to_tensor(tensor_proto)
-
-        assert isinstance(tensor, torch.Tensor)
-        assert tensor.shape == torch.Size([2, 2])
-        assert tensor.dtype == torch.float32
-        torch.testing.assert_close(tensor, torch.tensor(arr))
+        with helpers.proto_to_tensor(tensor_proto) as tensor:
+            assert isinstance(tensor, torch.Tensor)
+            assert tensor.shape == torch.Size([2, 2])
+            assert tensor.dtype == torch.float32
+            torch.testing.assert_close(tensor, torch.tensor(arr))
 
     def test_tensor_to_proto(self):
         """Test torch tensor → proto conversion"""
@@ -160,9 +153,8 @@ class TestTorchConversion:
         tensor = torch.randn(3, 4, 5)
 
         proto = helpers.tensor_to_proto(tensor)
-        result = helpers.proto_to_tensor(proto)
-
-        torch.testing.assert_close(result, tensor)
+        with helpers.proto_to_tensor(proto) as result:
+            torch.testing.assert_close(result, tensor)
 
     def test_tensor_to_proto_rejects_numpy_input_with_actionable_error(self):
         """Test tensor_to_proto fails fast on non-torch input with guidance."""

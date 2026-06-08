@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import ExitStack
 from typing import Any
 
 import grpc
@@ -39,38 +40,56 @@ class InferenceService:
         if not require_pipeline(session, context):
             return cuvis_ai_pb2.InferenceResponse()
 
-        batch = self._parse_input_batch(request.inputs)
-        # Ensure all tensor inputs are on the same device as the pipeline
-        batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
+        with ExitStack() as stack:
+            batch = self._parse_input_batch(
+                request.inputs,
+                copy_tensors=False,
+                stack=stack,
+            )
+            # Register clear() last so it fires first on exit (LIFO), releasing
+            # tensor refs before the SHM mappings are closed.
+            stack.callback(batch.clear)
 
-        outputs = session.pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
+            # Ensure all tensor inputs are on the same device as the pipeline
+            batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
 
-        output_specs = set(request.output_specs)
-        tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
-        metrics: dict[str, float] = {}
+            outputs = session.pipeline.forward(
+                batch=batch, stage=ExecutionStage.INFERENCE
+            )
 
-        for raw_key, value in outputs.items():
-            output_name = self._format_output_key(raw_key)
-            if not self._should_return(output_name, output_specs):
-                continue
+            output_specs = set(request.output_specs)
+            tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
+            metrics: dict[str, float] = {}
 
-            # Metrics: plain scalars
-            if isinstance(value, (int, float, np.number)) and not isinstance(
-                value, bool
-            ):
-                metrics[output_name] = float(value)
-                continue
+            for raw_key, value in outputs.items():
+                output_name = self._format_output_key(raw_key)
+                if not self._should_return(output_name, output_specs):
+                    continue
 
-            try:
-                tensor = self._to_tensor(value)
-            except Exception:
-                # Skip non-tensorizable outputs (e.g., artifacts or custom objects)
-                continue
-            tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
+                # Metrics: plain scalars
+                if isinstance(value, (int, float, np.number)) and not isinstance(
+                    value, bool
+                ):
+                    metrics[output_name] = float(value)
+                    continue
 
-        return cuvis_ai_pb2.InferenceResponse(outputs=tensor_outputs, metrics=metrics)
+                try:
+                    tensor = self._to_tensor(value)
+                except Exception:
+                    # Skip non-tensorizable outputs (e.g., artifacts or custom objects)
+                    continue
+                tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
 
-    def _parse_input_batch(self, inputs: cuvis_ai_pb2.InputBatch) -> dict[str, Any]:
+            return cuvis_ai_pb2.InferenceResponse(
+                outputs=tensor_outputs, metrics=metrics
+            )
+
+    def _parse_input_batch(
+        self,
+        inputs: cuvis_ai_pb2.InputBatch,
+        copy_tensors: bool = True,
+        stack: ExitStack | None = None,
+    ) -> dict[str, Any]:
         """Convert InputBatch proto to dict for CuvisPipeline.
 
         Converts proto messages to Python types. The pipeline determines
@@ -78,26 +97,34 @@ class InferenceService:
         """
         batch: dict[str, Any] = {}
 
+        def parse_tensor(tensor_proto: cuvis_ai_pb2.Tensor) -> torch.Tensor:
+            if stack is not None:
+                return stack.enter_context(
+                    helpers.proto_to_tensor(tensor_proto, copy=copy_tensors)
+                )
+            with helpers.proto_to_tensor(tensor_proto, copy=True) as t:
+                return t.clone()
+
         # Parse tensor inputs (if provided)
         if inputs.HasField("cube"):
-            batch["cube"] = helpers.proto_to_tensor(inputs.cube)
+            batch["cube"] = parse_tensor(inputs.cube)
 
         if inputs.HasField("wavelengths"):
-            batch["wavelengths"] = helpers.proto_to_tensor(inputs.wavelengths)
+            batch["wavelengths"] = parse_tensor(inputs.wavelengths)
 
         if inputs.HasField("mask"):
-            batch["mask"] = helpers.proto_to_tensor(inputs.mask)
+            batch["mask"] = parse_tensor(inputs.mask)
 
         if inputs.HasField("rgb_image"):
-            batch["rgb_image"] = helpers.proto_to_tensor(inputs.rgb_image)
+            batch["rgb_image"] = parse_tensor(inputs.rgb_image)
 
         if inputs.HasField("frame_id"):
-            frame_id = helpers.proto_to_tensor(inputs.frame_id)
+            frame_id = parse_tensor(inputs.frame_id)
             if frame_id.numel() > 0:
                 batch["frame_id"] = frame_id
 
         if inputs.HasField("mesu_index"):
-            mesu_index = helpers.proto_to_tensor(inputs.mesu_index)
+            mesu_index = parse_tensor(inputs.mesu_index)
             if mesu_index.numel() > 0:
                 batch["mesu_index"] = mesu_index
 
@@ -113,7 +140,7 @@ class InferenceService:
 
         # Parse extra tensor inputs (node-specific dynamic inputs).
         for key, tensor_proto in inputs.extra_inputs.items():
-            batch[key] = helpers.proto_to_tensor(tensor_proto)
+            batch[key] = parse_tensor(tensor_proto)
 
         return batch
 
