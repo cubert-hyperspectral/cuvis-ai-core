@@ -9,6 +9,7 @@ key is then immutable even if the upstream tag is force-pushed.
 from __future__ import annotations
 
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import Mapping
@@ -154,8 +155,11 @@ def build_runtime_pyproject(
 ) -> str:
     """Build the canonical runtime ``pyproject.toml`` content.
 
-    The same inputs always produce the same bytes — uv resolves
-    against this single file and writes ``uv.lock`` next to it.
+    The same inputs on the same host always produce the same bytes — uv
+    resolves against this single file and writes ``uv.lock`` next to it.
+    The output is host-aware (see :func:`_host_required_environments`), so
+    a Windows cache entry is distinct from a Linux one, which is correct:
+    a venv built for one platform can't be reused on the other.
     """
     dependencies: list[str] = [_core_dependency(core_source)]
     sources: dict[str, dict] = {}
@@ -169,6 +173,11 @@ def build_runtime_pyproject(
         dependencies.append(dep_name)
         sources[dep_name] = source_entry
 
+    uv_table: dict = {}
+    if sources:
+        uv_table["sources"] = sources
+    uv_table["required-environments"] = _host_required_environments()
+
     doc: dict = {
         "project": {
             "name": RUNTIME_PROJECT_NAME,
@@ -176,9 +185,23 @@ def build_runtime_pyproject(
             "requires-python": python_requires,
             "dependencies": dependencies,
         },
-        "tool": {"uv": {"sources": sources}} if sources else {"uv": {}},
+        "tool": {"uv": uv_table},
     }
     return tomli_w.dumps(doc)
+
+
+def _host_required_environments() -> list[str]:
+    """uv ``required-environments`` marker for the composing host.
+
+    The composed venv runs on the same machine that builds it, so the
+    resolution only has to be installable on this host. Declaring the host
+    platform makes uv pick a version that actually ships a wheel for it
+    instead of failing when a dependency's newest release skipped this
+    platform. For example, ``cuvis-il`` ships only manylinux wheels for
+    3.5.3.x, so on Windows uv backtracks to 3.5.0 (which has a ``win_amd64``
+    wheel); on Linux it stays on the latest, which has a manylinux wheel.
+    """
+    return [f"sys_platform == '{sys.platform}'"]
 
 
 def _core_source_entry(core_source: CoreSource) -> dict | None:

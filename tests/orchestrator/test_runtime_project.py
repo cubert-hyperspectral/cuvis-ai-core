@@ -266,6 +266,23 @@ def test_build_runtime_pyproject_local_plugin_uses_editable_path(tmp_path: Path)
     assert "local_p" not in doc["tool"]["uv"]["sources"]
 
 
+def test_build_runtime_pyproject_pins_resolution_to_host_platform():
+    """The generated project declares the composing host as a required
+    environment so uv resolves a wheel that exists for it (e.g. on Windows
+    it backtracks cuvis-il to a version with a win_amd64 wheel)."""
+    import sys
+
+    content = build_runtime_pyproject(
+        core_source=PYPI_CORE,
+        plugins=(),
+        python_requires=">=3.11,<3.14",
+    )
+    doc = tomllib.loads(content)
+    assert doc["tool"]["uv"]["required-environments"] == [
+        f"sys_platform == '{sys.platform}'"
+    ]
+
+
 def test_build_runtime_pyproject_is_byte_stable_for_same_input(tmp_path: Path):
     plugins = (
         ResolvedGitPlugin(
