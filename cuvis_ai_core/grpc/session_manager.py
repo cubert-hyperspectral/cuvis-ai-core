@@ -41,9 +41,9 @@ class SessionState:
     trainer: Any | None = None
     # Plugins registered into this session's catalog. This dict tracks what
     # the session *knows about* (parsed manifest entries), NOT what has been
-    # installed/imported. Materialised plugins live in
-    # ``node_registry.plugin_configs``; the actual class set is in
-    # ``node_registry.plugin_registry``. On the wire this is the
+    # installed/imported. The full config of every known plugin lives in
+    # ``node_registry.plugin_catalog``; the loaded class set is in
+    # ``node_registry.loaded_plugin_nodes``. On the wire this is the
     # ``registered_plugins`` field of ``LoadPluginsResponse``.
     registered_plugins: dict[str, dict] = field(default_factory=dict)
     # Orchestrator state, populated once the parent has spawned a child

@@ -170,8 +170,8 @@ def test_initialize_session_imports_class_and_registers_it():
     )
     assert response.ok is True
     state = servicer._session_manager.get_session("s2")
-    assert "_FakeTestNode" in state.node_registry.plugin_registry
-    assert state.node_registry.plugin_registry["_FakeTestNode"] is _FakeTestNode
+    assert "_FakeTestNode" in state.node_registry.loaded_plugin_nodes
+    assert state.node_registry.loaded_plugin_nodes["_FakeTestNode"] is _FakeTestNode
     assert "fake_plugin" in state.registered_plugins
 
 

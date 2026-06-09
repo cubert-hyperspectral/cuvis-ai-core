@@ -98,10 +98,10 @@ class TestPluginNode(Node):
             assert "test_plugin" in session.registered_plugins
 
             # LoadPlugins registers into the catalog only; nothing is
-            # imported into plugin_registry until LoadPipeline materialises
+            # imported into loaded_plugin_nodes until LoadPipeline materialises
             # the plugin.
             assert "test_plugin" in session.node_registry.plugin_catalog
-            assert "TestPluginNode" not in session.node_registry.plugin_registry
+            assert "TestPluginNode" not in session.node_registry.loaded_plugin_nodes
         finally:
             sys.path.remove(str(tmp_path))
 

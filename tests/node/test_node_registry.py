@@ -228,18 +228,16 @@ class TestCatalogSplit:
         NodeRegistry.clear()
 
     def test_register_catalog_entries_has_no_side_effects(self, tmp_path):
-        """Registering a catalog entry must NOT touch sys.modules, sys.path,
-        plugin_registry, or plugin_configs. Materialisation happens lazily."""
+        """Registering a catalog entry records config in the catalog but must
+        NOT touch sys.modules / sys.path or import anything into
+        loaded_plugin_nodes. Materialisation happens lazily."""
         import sys
-        from pathlib import Path
 
         from cuvis_ai_schemas.plugin import LocalPluginConfig
 
         registry = NodeRegistry()
         modules_before = set(sys.modules)
         sys_path_before = list(sys.path)
-        registry_before = dict(registry.plugin_registry)
-        configs_before = dict(registry.plugin_configs)
 
         plugin_root = tmp_path / "fake_plugin"
         plugin_root.mkdir()
@@ -254,11 +252,10 @@ class TestCatalogSplit:
             entry.class_name
             for entry in registry.plugin_catalog["fake_plugin"].provides
         ] == ["fake_pkg.module.FakeNode"]
-        # Side-effect snapshot must be unchanged.
+        # No import side effects: nothing loaded, sys state unchanged.
+        assert registry.loaded_plugin_nodes == {}
         assert set(sys.modules) == modules_before
         assert sys.path == sys_path_before
-        assert registry.plugin_registry == registry_before
-        assert registry.plugin_configs == configs_before
 
     def test_load_plugin_missing_config_and_catalog_raises_keyerror(self):
         """Catalog fast path requires either an explicit config or a catalog entry."""
@@ -303,3 +300,136 @@ class TestCatalogSplit:
 
         assert any("overridden" in m for m in sink_messages)
         assert registry.plugin_catalog["p"].path == str(plugin_root_b)
+
+    @staticmethod
+    def _local_cfg(path, *class_paths):
+        from cuvis_ai_schemas.plugin import LocalPluginConfig
+
+        return LocalPluginConfig(
+            path=str(path),
+            provides=[{"class_name": cp} for cp in class_paths],
+        )
+
+    @staticmethod
+    def _fake_import(class_paths, clear_cache=True):
+        """Stand in for git_os.import_plugin_nodes: {simple class name -> class}."""
+        return {
+            cp.rsplit(".", 1)[-1]: type(cp.rsplit(".", 1)[-1], (), {})
+            for cp in class_paths
+        }
+
+    def test_is_loaded_all_vs_has_loaded_node_any(self, tmp_path):
+        """_is_loaded needs ALL provided classes live; _has_loaded_node needs ANY."""
+        registry = NodeRegistry()
+        registry.plugin_catalog["p"] = self._local_cfg(
+            tmp_path, "pkg.mod.AlphaNode", "pkg.mod.BetaNode"
+        )
+        registry.loaded_plugin_nodes["AlphaNode"] = type("AlphaNode", (), {})
+
+        assert registry._has_loaded_node("p") is True
+        assert registry._is_loaded("p") is False
+        assert "p" not in registry.list_plugins()
+
+        registry.loaded_plugin_nodes["BetaNode"] = type("BetaNode", (), {})
+        assert registry._is_loaded("p") is True
+        assert registry.list_plugins() == ["p"]
+
+    def test_register_preinstalled_loads_and_clear_wipes_both(self, tmp_path):
+        """register_preinstalled fills catalog + loaded_plugin_nodes; clear_plugins
+        empties BOTH (regression: clear must not forget the catalog)."""
+        from unittest import mock
+
+        registry = NodeRegistry()
+        cfg = self._local_cfg(tmp_path, "pkg.mod.GammaNode")
+        with mock.patch(
+            "cuvis_ai_core.utils.node_registry.git_os.import_plugin_nodes",
+            side_effect=self._fake_import,
+        ):
+            registry.register_preinstalled({"p": cfg})
+
+        assert "p" in registry.plugin_catalog
+        assert "GammaNode" in registry.loaded_plugin_nodes
+        assert registry.list_plugins() == ["p"]
+
+        registry.clear_plugins()
+        assert registry.loaded_plugin_nodes == {}
+        assert registry.plugin_catalog == {}
+
+    def test_load_plugin_explicit_config_populates_catalog(self, tmp_path):
+        """load_plugin(name, config=...) for an unregistered plugin records the
+        parsed config in the catalog (the single-source invariant)."""
+        from unittest import mock
+
+        registry = NodeRegistry()
+        cfg = self._local_cfg(tmp_path, "pkg.mod.DeltaNode")
+        with (
+            mock.patch.object(NodeRegistry, "_install_plugin_dependencies"),
+            mock.patch.object(NodeRegistry, "_add_to_sys_path"),
+            mock.patch(
+                "cuvis_ai_core.utils.node_registry.git_os.parse_plugin_config",
+                return_value=(cfg, tmp_path),
+            ),
+            mock.patch(
+                "cuvis_ai_core.utils.node_registry.git_os.import_plugin_nodes",
+                side_effect=self._fake_import,
+            ),
+        ):
+            registry.load_plugin(
+                "newp",
+                {
+                    "path": str(tmp_path),
+                    "provides": [{"class_name": "pkg.mod.DeltaNode"}],
+                },
+            )
+
+        assert registry.plugin_catalog["newp"] is cfg
+        assert "DeltaNode" in registry.loaded_plugin_nodes
+
+    def test_loaded_plugin_blocks_config_override_without_cloning(self, tmp_path):
+        """A live plugin's catalog entry can't be replaced by
+        register_catalog_entries, and load_plugin must NOT re-parse/clone it.
+        unload_plugin removes exactly its classes and keeps the catalog entry."""
+        from unittest import mock
+
+        registry = NodeRegistry()
+        root_a = tmp_path / "a"
+        root_a.mkdir()
+        root_b = tmp_path / "b"
+        root_b.mkdir()
+        cfg_a = self._local_cfg(root_a, "pkg.mod.EpsilonNode")
+        cfg_b = self._local_cfg(root_b, "pkg.mod.EpsilonNode")
+
+        with mock.patch(
+            "cuvis_ai_core.utils.node_registry.git_os.import_plugin_nodes",
+            side_effect=self._fake_import,
+        ):
+            registry.register_preinstalled({"p": cfg_a})
+        loaded_class = registry.loaded_plugin_nodes["EpsilonNode"]
+
+        # register_catalog_entries must not replace a loaded plugin's config.
+        registry.register_catalog_entries({"p": cfg_b})
+        assert registry.plugin_catalog["p"].path == str(root_a)
+
+        # load_plugin with a divergent explicit config must NOT parse/clone/install.
+        with (
+            mock.patch(
+                "cuvis_ai_core.utils.node_registry.git_os.parse_plugin_config"
+            ) as parse,
+            mock.patch.object(NodeRegistry, "_install_plugin_dependencies") as install,
+        ):
+            registry.load_plugin(
+                "p",
+                {
+                    "path": str(root_b),
+                    "provides": [{"class_name": "pkg.mod.EpsilonNode"}],
+                },
+            )
+        parse.assert_not_called()
+        install.assert_not_called()
+        assert registry.plugin_catalog["p"].path == str(root_a)
+        assert registry.loaded_plugin_nodes["EpsilonNode"] is loaded_class
+
+        # unload removes exactly the plugin's classes; catalog entry stays.
+        registry.unload_plugin("p")
+        assert "EpsilonNode" not in registry.loaded_plugin_nodes
+        assert "p" in registry.plugin_catalog

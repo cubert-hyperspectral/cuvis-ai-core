@@ -150,13 +150,15 @@ class CleanupTestNode(Node):
             # Load plugin into session's registry instance
             config = {
                 "path": str(plugin_dir),
-                "provides": [{"class_name": "cleanup_test_plugin.node.CleanupTestNode"}],
+                "provides": [
+                    {"class_name": "cleanup_test_plugin.node.CleanupTestNode"}
+                ],
             }
             session_state.node_registry.load_plugin("cleanup_test_plugin", config)
             session_state.registered_plugins["cleanup_test_plugin"] = config
 
             # Verify plugin is registered in session's instance
-            assert "CleanupTestNode" in session_state.node_registry.plugin_registry
+            assert "CleanupTestNode" in session_state.node_registry.loaded_plugin_nodes
 
             # Close session
             self.session_manager.close_session(session_id)
@@ -218,13 +220,14 @@ class PluginNode{i}(Node):
 
             # Verify each session has only its plugin
             for i, state in enumerate(session_states):
-                assert f"PluginNode{i}" in state.node_registry.plugin_registry
+                assert f"PluginNode{i}" in state.node_registry.loaded_plugin_nodes
 
                 # Verify other plugins not in this session
                 for j in range(3):
                     if i != j:
                         assert (
-                            f"PluginNode{j}" not in state.node_registry.plugin_registry
+                            f"PluginNode{j}"
+                            not in state.node_registry.loaded_plugin_nodes
                         )
 
             # Close one session and verify others unaffected
@@ -236,8 +239,8 @@ class PluginNode{i}(Node):
             assert sessions[2] in self.session_manager._sessions
 
             # Verify remaining sessions still have their plugins
-            assert "PluginNode0" in session_states[0].node_registry.plugin_registry
-            assert "PluginNode2" in session_states[2].node_registry.plugin_registry
+            assert "PluginNode0" in session_states[0].node_registry.loaded_plugin_nodes
+            assert "PluginNode2" in session_states[2].node_registry.loaded_plugin_nodes
 
             # Cleanup remaining sessions
             self.session_manager.close_session(sessions[0])

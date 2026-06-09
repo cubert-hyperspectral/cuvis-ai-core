@@ -445,8 +445,8 @@ def import_plugin_nodes(
     """Import node classes from fully qualified paths.
 
     Shared between the CLI plugin loader and the orchestrator's child
-    runtime (:mod:`cuvis_ai_core.pipeline.restore_preinstalled`). In
-    the orchestrated path the child is already inside a venv where
+    runtime (:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`).
+    In the orchestrated path the child is already inside a venv where
     every plugin is installed, so this call only iterates the FQCN
     list and collects classes — no install, no clone, no sys.path
     mutation.

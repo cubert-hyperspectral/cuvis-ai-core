@@ -198,12 +198,12 @@ def test_card_omits_plugin_pill_for_unknown_classes_by_default():
 
 
 def test_card_marks_plugins_when_registry_lists_them():
-    """Passing a NodeRegistry with the class in plugin_registry adds the pill."""
+    """Passing a NodeRegistry with the class in loaded_plugin_nodes adds the pill."""
     from cuvis_ai_core.utils.node_registry import NodeRegistry
 
     pipeline, *_ = _build_pipeline()
     registry = NodeRegistry()
-    registry.plugin_registry["ProducerNode"] = ProducerNode
+    registry.loaded_plugin_nodes["ProducerNode"] = ProducerNode
 
     dot = PipelineVisualizer(pipeline).to_graphviz(node_registry=registry)
 

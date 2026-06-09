@@ -3,7 +3,7 @@
 import importlib
 import inspect
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Dict, Mapping, Optional, Union
 
 from loguru import logger
 
@@ -33,12 +33,44 @@ class NodeRegistry:
 
     def __init__(self):
         """Create instance for plugin support."""
-        self.plugin_registry: Dict[str, type] = {}
-        self.plugin_configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
-        # Catalog entries are manifest metadata the session *knows about* but
-        # has not installed/imported. `load_plugin(name)` with no explicit
-        # config materialises a catalog entry on demand.
+        # Every known plugin's config (registered or loaded) — the single
+        # source of plugin config. Anything that needs a config reads it here;
+        # `load_plugin(name)` with no explicit config materialises this entry.
         self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
+        # Loaded node classes, keyed by class name. Membership here *is* the
+        # loaded state: a plugin is loaded iff its provided classes are present.
+        self.loaded_plugin_nodes: Dict[str, type] = {}
+
+    def _provided_class_names(
+        self, cfg: Union[GitPluginConfig, LocalPluginConfig]
+    ) -> list[str]:
+        """Return the simple (unqualified) class names a plugin config provides."""
+        return [node.class_name.rsplit(".", 1)[-1] for node in cfg.provides]
+
+    def _is_loaded(self, name: str) -> bool:
+        """Whether ALL of a catalog plugin's node classes are currently loaded.
+
+        Used for listing and the "already fully loaded" early-exit. A
+        partially-loaded plugin reads as *not* loaded here.
+        """
+        cfg = self.plugin_catalog.get(name)
+        if cfg is None:
+            return False
+        names = self._provided_class_names(cfg)
+        return bool(names) and all(n in self.loaded_plugin_nodes for n in names)
+
+    def _has_loaded_node(self, name: str) -> bool:
+        """Whether ANY of a catalog plugin's node classes are currently loaded.
+
+        Used for mutation guards (catalog replacement, unload): a plugin with
+        even one live class must still block a config swap and remain unloadable.
+        """
+        cfg = self.plugin_catalog.get(name)
+        if cfg is None:
+            return False
+        return any(
+            n in self.loaded_plugin_nodes for n in self._provided_class_names(cfg)
+        )
 
     @classmethod
     def register(cls, node_class: type) -> type:
@@ -111,13 +143,13 @@ class NodeRegistry:
         """
         # 1. Check instance plugins first (if instance provided)
         if instance is not None:
-            if class_identifier in instance.plugin_registry:
-                return instance.plugin_registry[class_identifier]
+            if class_identifier in instance.loaded_plugin_nodes:
+                return instance.loaded_plugin_nodes[class_identifier]
             # For full paths, also check if last component is in plugins
             if "." in class_identifier:
                 class_name = class_identifier.rsplit(".", 1)[1]
-                if class_name in instance.plugin_registry:
-                    return instance.plugin_registry[class_name]
+                if class_name in instance.loaded_plugin_nodes:
+                    return instance.loaded_plugin_nodes[class_name]
 
         # 2. Check built-in registry (both modes)
         if class_identifier in cls._builtin_registry:
@@ -130,7 +162,7 @@ class NodeRegistry:
         # Not found - provide helpful error
         available = cls.list_builtin_nodes()
         if instance is not None:
-            available = available + sorted(instance.plugin_registry.keys())
+            available = available + sorted(instance.loaded_plugin_nodes.keys())
 
         # Check if it looks like a plugin node (has multiple dots or known plugin pattern)
         looks_like_plugin = class_identifier.count(".") >= 2 or any(
@@ -154,7 +186,7 @@ class NodeRegistry:
         elif (
             looks_like_plugin
             and instance is not None
-            and len(instance.plugin_configs) == 0
+            and not instance.loaded_plugin_nodes
         ):
             error_msg += (
                 "\n⚠️  This appears to be an external plugin node, but no plugins are loaded!\n"
@@ -304,7 +336,7 @@ class NodeRegistry:
             count = registry.load_plugins("plugins.yaml")
             print(f"Loaded {count} plugins")
         """
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
                 "load_plugins() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
@@ -341,8 +373,12 @@ class NodeRegistry:
         the plugin).
 
         Idempotent re-registration with a different config logs an override
-        and replaces the catalog entry; the materialised state in
-        ``plugin_registry`` / ``plugin_configs`` is untouched.
+        and replaces the catalog entry. A loaded plugin's entry is *not*
+        replaced: the live class objects came from the old config, so swapping
+        it would make the catalog describe a source the loaded classes never
+        came from (and would desync ``unload_plugin``, which pops
+        ``loaded_plugin_nodes`` by the catalog entry's ``provides``). Such an
+        override is logged and ignored; the caller must ``unload_plugin`` first.
 
         Args:
             configs: dict mapping plugin name → parsed GitPluginConfig /
@@ -356,7 +392,7 @@ class NodeRegistry:
             # registry.plugin_catalog["adaclip"] now holds the metadata.
             # Nothing is imported until registry.load_plugin("adaclip") is called.
         """
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
                 "register_catalog_entries() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
@@ -365,11 +401,19 @@ class NodeRegistry:
         for name, cfg in configs.items():
             if name in self.plugin_catalog:
                 existing = self.plugin_catalog[name]
-                if existing.model_dump() != cfg.model_dump():
-                    logger.info(
-                        f"Plugin '{name}' catalog entry overridden "
-                        f"(was: {existing.model_dump()}; now: {cfg.model_dump()})"
+                if existing.model_dump() == cfg.model_dump():
+                    continue
+                if self._has_loaded_node(name):
+                    logger.warning(
+                        f"Plugin '{name}' is loaded; ignoring catalog override "
+                        f"with a different config. Call unload_plugin('{name}') "
+                        "first to change it."
                     )
+                    continue
+                logger.info(
+                    f"Plugin '{name}' catalog entry overridden "
+                    f"(was: {existing.model_dump()}; now: {cfg.model_dump()})"
+                )
             self.plugin_catalog[name] = cfg
 
     def load_plugin(
@@ -385,24 +429,27 @@ class NodeRegistry:
         path never calls this — production plugin loading composes a
         child venv via :mod:`cuvis_ai_core.orchestrator.composer` and
         the child runtime registers preinstalled classes through
-        :func:`cuvis_ai_core.pipeline.restore_preinstalled.load_preinstalled_plugins`.
-        This method survives so the ``restore-pipeline`` /
-        ``restore-trainrun`` CLI entry points continue to work
-        against a curated venv.
+        :meth:`register_preinstalled`. This method survives so the
+        ``restore-pipeline`` / ``restore-trainrun`` CLI entry points
+        continue to work against a curated venv.
 
         IMPORTANT: This is an INSTANCE METHOD - you must create a NodeRegistry instance first!
 
         Unlike get() which works as both class and instance method, load_plugin() requires
-        an instance for plugin isolation. This is by design from Phase 4's hybrid architecture:
+        an instance for plugin isolation. This is by design of the hybrid class/instance design:
         - Built-in nodes: accessed via class (NodeRegistry.get("MinMaxNormalizer"))
         - Plugin nodes: require instance (registry = NodeRegistry(); registry.load_plugin(...))
 
-        Early-exit hierarchy:
-        1. If ``name in self.plugin_configs`` → already materialised, return.
-        2. If ``config is None`` and ``name in self.plugin_catalog`` →
-           materialise from the catalog entry (the resolver-populated path).
-        3. Otherwise → parse the explicit ``config`` (the inline-from-pipeline
-           or direct-API call path).
+        Order (loaded-state is checked BEFORE parsing — see below):
+        1. If the plugin is already loaded → ignore any explicit config and
+           return. Loaded-state is checked first because parsing an explicit
+           config clones / resolves the source, which is wasted work (and wrong)
+           for an already-live plugin.
+        2. Else resolve the config: the explicit ``config`` (parsed, then stored
+           in the catalog) or, when ``config is None``, the registered
+           ``self.plugin_catalog[name]`` entry.
+        3. Install deps, add to ``sys.path``, then import the provided classes
+           into ``loaded_plugin_nodes``.
 
         Args:
             name: Plugin identifier (e.g., "adaclip")
@@ -440,21 +487,29 @@ class NodeRegistry:
             # NodeRegistry.load_plugin(...)  # TypeError: missing 'self'
         """
         # Check instance mode
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
                 "load_plugin() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        # Early exit if already materialised in this instance
-        if name in self.plugin_configs:
-            logger.debug(f"Plugin '{name}' already loaded, skipping")
+        # Already loaded → no-op. Checked BEFORE parsing: parse_plugin_config /
+        # _ensure_git_plugin / _ensure_local_plugin clone/resolve/stat the
+        # source, so parsing an explicit config for a live plugin would do real
+        # I/O only to discard it. To change a loaded plugin, unload it first.
+        if self._has_loaded_node(name):
+            if config is not None:
+                logger.warning(
+                    f"Plugin '{name}' is already loaded; ignoring the explicit "
+                    f"config. Call unload_plugin('{name}') first to change it."
+                )
+            else:
+                logger.debug(f"Plugin '{name}' already loaded, skipping")
             return
 
-        # Catalog fast path: no explicit config given, but the name is in
-        # the catalog → materialise from there. The catalog already holds
-        # parsed GitPluginConfig / LocalPluginConfig objects with absolute
-        # paths, so we skip the parse step entirely.
+        # Resolve the config (the catalog is the single source). An explicit
+        # config is parsed/validated and stored; otherwise read the registered
+        # catalog entry, which already holds parsed config objects.
         if config is None:
             if name not in self.plugin_catalog:
                 raise KeyError(
@@ -468,34 +523,69 @@ class NodeRegistry:
             else:
                 plugin_path = NodeRegistry._ensure_local_plugin(name, plugin_config)
         else:
-            # Parse and validate config, get plugin path
             plugin_config, plugin_path = git_os.parse_plugin_config(
                 name, config, manifest_dir
             )
+            self.plugin_catalog[name] = plugin_config
 
-        # Install plugin dependencies automatically
+        # Install plugin dependencies and make the package importable.
         self._install_plugin_dependencies(plugin_path, name)
-
-        # Add to sys.path
         self._add_to_sys_path(plugin_path)
 
-        # Extract package prefixes and clear module cache
-        class_paths = [node.class_name for node in plugin_config.provides]
-        package_prefixes = git_os.extract_package_prefixes(class_paths)
-        git_os.clear_package_modules(package_prefixes)
-
-        # Import all provided node classes
-        imported_nodes = git_os.import_plugin_nodes(class_paths, clear_cache=True)
-
-        # Register all imported nodes in instance registries
-        for class_name, node_class in imported_nodes.items():
-            self.plugin_registry[class_name] = node_class
-            logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
-
-        # Track plugin config
-        self.plugin_configs[name] = plugin_config
+        # Import the provided classes into loaded_plugin_nodes (clearing any
+        # stale module cache first, since this path may shadow a curated venv).
+        self._register_node_classes(name, plugin_config, clear_cache=True)
 
         logger.info(f"Loaded plugin '{name}' with {len(plugin_config.provides)} nodes")
+
+    def _register_node_classes(
+        self,
+        name: str,
+        config: Union[GitPluginConfig, LocalPluginConfig],
+        *,
+        clear_cache: bool,
+    ) -> None:
+        """Import a plugin's provided classes into ``loaded_plugin_nodes``.
+
+        The shared registration tail of :meth:`load_plugin` (``clear_cache=True``,
+        run after the install / ``sys.path`` steps) and
+        :meth:`register_preinstalled` (``clear_cache=False``, no install — the
+        child venv already has the package). It does not install dependencies or
+        mutate ``sys.path``; callers do that when the source is not preinstalled.
+        """
+        class_paths = [node.class_name for node in config.provides]
+        if clear_cache:
+            package_prefixes = git_os.extract_package_prefixes(class_paths)
+            git_os.clear_package_modules(package_prefixes)
+        imported_nodes = git_os.import_plugin_nodes(
+            class_paths, clear_cache=clear_cache
+        )
+        for class_name, node_class in imported_nodes.items():
+            self.loaded_plugin_nodes[class_name] = node_class
+            logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
+
+    def register_preinstalled(
+        self,
+        resolved_plugins: Mapping[str, Union[GitPluginConfig, LocalPluginConfig]],
+    ) -> None:
+        """Register classes from already-installed plugin packages.
+
+        When the orchestrator runs a pipeline inside a child runtime, every
+        plugin in the child's venv is already a real installed package (uv put
+        it there during ``compose_env``). The traditional :meth:`load_plugin`
+        flow — clone, install, prepend to ``sys.path``, then import — is wrong
+        here: the work is done, and re-running it would shadow the installed
+        package. This registers each plugin's classes via a plain
+        ``importlib.import_module`` (no clone / install / ``sys.path`` step) and
+        records the config in the catalog so the rest of the registry behaves
+        identically to the ``load_plugin`` path.
+        """
+        for name, config in resolved_plugins.items():
+            self.plugin_catalog[name] = config
+            self._register_node_classes(name, config, clear_cache=False)
+            logger.info(
+                f"Loaded preinstalled plugin '{name}' with {len(config.provides)} nodes"
+            )
 
     def unload_plugin(self, name: str) -> None:
         """
@@ -514,25 +604,22 @@ class NodeRegistry:
             Does not remove the plugin from sys.path (Python limitation).
             Cached Git repositories are NOT deleted (use clear_plugin_cache).
         """
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
                 "unload_plugin() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        if name not in self.plugin_configs:
+        if not self._has_loaded_node(name):
             logger.warning(f"Plugin '{name}' not loaded, nothing to unload")
             return
 
-        config = self.plugin_configs[name]
+        # Pop the plugin's classes from loaded_plugin_nodes. The catalog entry
+        # stays: the plugin is still *known*, just no longer loaded. pop(...,
+        # None) is defensive so a partially-loaded plugin still cleans up.
+        for class_name in self._provided_class_names(self.plugin_catalog[name]):
+            self.loaded_plugin_nodes.pop(class_name, None)
 
-        # Remove nodes from registry
-        for node in config.provides:
-            class_name = node.class_name.rsplit(".", 1)[1]
-            self.plugin_registry.pop(class_name, None)
-
-        # Remove config
-        del self.plugin_configs[name]
         logger.info(f"Unloaded plugin '{name}'")
 
     def list_plugins(self) -> list[str]:
@@ -542,9 +629,9 @@ class NodeRegistry:
         Returns:
             Sorted list of plugin names
         """
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             return []
-        return sorted(self.plugin_configs.keys())
+        return sorted(name for name in self.plugin_catalog if self._is_loaded(name))
 
     def clear_plugins(self) -> None:
         """Unload all plugins and clear plugin registries in THIS INSTANCE.
@@ -554,14 +641,14 @@ class NodeRegistry:
         server path drops the entire child runtime on
         ``CloseSession`` instead.
         """
-        if not hasattr(self, "plugin_registry"):
+        if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
                 "clear_plugins() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        self.plugin_registry.clear()
-        self.plugin_configs.clear()
+        self.loaded_plugin_nodes.clear()
+        self.plugin_catalog.clear()
         logger.info("Cleared all plugins")
 
     @classmethod

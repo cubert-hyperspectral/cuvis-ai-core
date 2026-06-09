@@ -194,7 +194,7 @@ class PipelineService:
         This method is the **in-process** body that runs inside the
         child runtime. Plugins must already be registered on
         ``session.node_registry`` (via
-        :func:`cuvis_ai_core.pipeline.restore_preinstalled.load_preinstalled_plugins`,
+        :meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`,
         which the child invokes from ``InitializeSession``). Plugin
         resolution and dependency installation happen at the
         orchestrator level — see

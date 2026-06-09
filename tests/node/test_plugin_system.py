@@ -117,7 +117,7 @@ def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject):
     )
 
     assert "simple_test" in registry.list_plugins()
-    assert "SimpleTestNode" in registry.plugin_registry
+    assert "SimpleTestNode" in registry.loaded_plugin_nodes
 
     node_class = registry.get("SimpleTestNode")
     instance = node_class()
@@ -142,7 +142,7 @@ def test_manifest_relative_path_resolution(tmp_path: Path, create_plugin_pyproje
     registry = NodeRegistry()
     loaded_count = registry.load_plugins(manifest_file)
     assert loaded_count == 1
-    assert "SimpleTestNode" in registry.plugin_registry
+    assert "SimpleTestNode" in registry.loaded_plugin_nodes
 
 
 def test_pipeline_integration_with_plugin(tmp_path: Path, create_plugin_pyproject):
