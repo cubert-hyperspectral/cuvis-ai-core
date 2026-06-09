@@ -16,7 +16,6 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import grpc
-import pytest
 
 from cuvis_ai_core.grpc import orchestrator_bridge
 from cuvis_ai_core.grpc.session_manager import SessionManager
