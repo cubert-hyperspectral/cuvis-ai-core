@@ -101,7 +101,9 @@ def test_inmemory_spawner_returns_inmemory_child_handle(tmp_path):
     )
     assert isinstance(handle, _InMemoryChildHandle)
     assert handle.endpoint == "in-memory"
-    assert handle.returncode == 0
+    # Fresh handle is "alive" (returncode None), mirroring the real
+    # ChildHandle whose returncode is process.poll() until the child exits.
+    assert handle.returncode is None
 
 
 def test_inmemory_handle_terminate_and_kill_idempotent(tmp_path):
@@ -117,6 +119,8 @@ def test_inmemory_handle_terminate_and_kill_idempotent(tmp_path):
         declared_paths=declared,
     )
     assert handle.terminate(grace_s=1.0) == 0
+    # After terminate the handle reports a returncode (no longer alive).
+    assert handle.returncode == 0
     assert handle.kill() == 0
 
 
@@ -153,16 +157,75 @@ def test_inmemory_stub_returns_response_on_success():
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_child_for_session_is_idempotent():
+def _resolvable_pipeline(tmp_path):
+    """A minimal pipeline config + plugins dir the resolver accepts.
+
+    ``ensure_child_for_session`` always runs ``resolve_pipeline_plugins``
+    now (``plugins:`` is mandatory), so the lifecycle tests below need a
+    config whose declared plugin resolves against a real manifest. The
+    in-memory spawner ignores the plugin ``path``; only the catalog lookup
+    and coverage check matter here.
+    """
+    node_class = "tests.fixtures.mock_nodes.MinMaxNormalizer"
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "m.yaml").write_text(
+        "plugins:\n"
+        "  test_plugin:\n"
+        "    path: '.'\n"
+        "    provides:\n"
+        f"      - class_name: {node_class}\n",
+        encoding="utf-8",
+    )
+    cfg = SimpleNamespace(
+        plugins=["test_plugin"],
+        nodes=[SimpleNamespace(class_name=node_class)],
+    )
+    return cfg, [plugins_dir]
+
+
+def test_ensure_child_for_session_is_idempotent(tmp_path):
     sm = SessionManager()
     sid = sm.create_session()
-    cfg = SimpleNamespace(plugins=None)
+    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
 
-    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, [])
-    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, [])
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
 
     assert first is second
     assert sm.get_session(sid).child_handle is first
+
+
+def test_ensure_child_respawns_when_child_has_exited(tmp_path):
+    """A dead child handle is dropped and replaced, so the session recovers."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
+
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    # Simulate a crash: terminate flips returncode away from None.
+    first.terminate()
+    assert first.returncode is not None
+
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    assert second is not first
+    assert second.returncode is None
+    assert sm.get_session(sid).child_handle is second
+
+
+def test_ensure_child_records_runtime_base_dir_and_close_removes_it(tmp_path):
+    """ensure_child stamps the scratch root; close_session deletes the tree."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
+
+    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    base = sm.get_session(sid).runtime_base_dir
+    assert base is not None
+    assert base.exists()
+
+    sm.close_session(sid)
+    assert not base.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +252,33 @@ def test_forward_load_pipeline_missing_config_bytes_is_invalid_argument():
     assert resp.success is False
     assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
     assert "config_bytes" in ctx.details()
+
+
+@pytest.mark.parametrize(
+    "bad_bytes",
+    [
+        b"{not valid json",  # malformed JSON -> JSONDecodeError
+        b"[1, 2, 3]",  # JSON array -> non-dict ValueError
+        b'"just a string"',  # JSON scalar -> non-dict ValueError
+        b'{"unexpected_key": 123}',  # valid JSON object, invalid schema -> pydantic ValidationError (a ValueError)
+    ],
+)
+def test_forward_load_pipeline_malformed_config_bytes_is_invalid_argument(bad_bytes):
+    """Non-JSON / non-object / invalid-schema config_bytes -> INVALID_ARGUMENT, not a 500."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=bad_bytes),
+        ),
+        ctx,
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert "pipeline config" in ctx.details()
 
 
 def test_forward_inference_without_child_is_failed_precondition():

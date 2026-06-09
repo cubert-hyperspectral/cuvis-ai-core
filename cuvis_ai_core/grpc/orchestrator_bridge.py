@@ -137,8 +137,19 @@ def ensure_child_for_session(
     ``InitializeSession`` before handing back the handle.
     """
     session = session_manager.get_session(session_id)
-    if session.child_handle is not None:
-        return session.child_handle
+    existing = session.child_handle
+    if existing is not None:
+        # Reuse the attached child only while it is still alive. A child that
+        # has exited (crash, OOM-kill) leaves a dead handle behind; without
+        # this check the session could never recover, since every later call
+        # would forward to a dead stub. Drop the stale handle and re-spawn.
+        if existing.returncode is None:
+            return existing
+        logger.warning(
+            f"Child runtime for session {session_id} has exited "
+            f"(returncode={existing.returncode}); re-spawning a fresh child."
+        )
+        session.child_handle = None
 
     resolved = _resolve_plugins(pipeline_config, plugins_dirs)
     core_source = detect_core_source()
@@ -165,6 +176,9 @@ def ensure_child_for_session(
 
     session.child_handle = handle
     session.resolved_plugins = dict(resolved)
+    # Record the child's scratch root (output/scratch share this parent) so
+    # close_session can remove it once the child exits.
+    session.runtime_base_dir = declared.output_dir.parent
     _mirror_plugin_catalog(session, resolved)
     return handle
 
@@ -241,9 +255,18 @@ def forward_load_pipeline(
         context.set_details("pipeline.config_bytes is required")
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
-    config_dict = json.loads(request.pipeline.config_bytes)
-    config_dict.pop("version", None)
-    pipeline_config = PipelineConfig(**config_dict)
+    try:
+        config_dict = json.loads(request.pipeline.config_bytes)
+        if not isinstance(config_dict, dict):
+            raise ValueError("pipeline config must decode to a JSON object")
+        config_dict.pop("version", None)
+        pipeline_config = PipelineConfig(**config_dict)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+        context.set_details(
+            f"pipeline.config_bytes is not a valid pipeline config: {exc}"
+        )
+        return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
     plugins_dirs = _plugins_dirs_for_session(session)
     try:
@@ -697,6 +720,10 @@ class _InMemoryChildHandle:
     def __init__(self, servicer) -> None:
         self._servicer = servicer
         self.endpoint = "in-memory"
+        # None while "alive", set to 0 on terminate/kill — mirrors the real
+        # ChildHandle.returncode (process.poll()) so the orchestrator's
+        # liveness check behaves identically in the in-memory seam.
+        self._returncode: int | None = None
 
     def stub(self) -> _InMemoryStub:
         return _InMemoryStub(self._servicer)
@@ -706,6 +733,7 @@ class _InMemoryChildHandle:
             self._servicer.shutdown_event.set()
         except Exception:  # pragma: no cover
             pass
+        self._returncode = 0
         return 0
 
     def kill(self) -> int:
@@ -713,7 +741,7 @@ class _InMemoryChildHandle:
 
     @property
     def returncode(self) -> int | None:
-        return 0
+        return self._returncode
 
 
 class _InMemorySpawner(ChildRuntimeSpawner):
@@ -765,9 +793,12 @@ def reset_orchestrator() -> None:
 def _resolve_plugins(
     pipeline_config: Any, plugins_dirs: list[Path]
 ) -> Mapping[str, PluginConfig]:
-    plugins = getattr(pipeline_config, "plugins", None)
-    if not plugins and not plugins_dirs:
-        return {}
+    """Resolve the pipeline's declared plugins against the catalog.
+
+    Always runs the resolver: ``plugins:`` is mandatory, so a pipeline
+    that omits it (or names a plugin with no manifest) hard-fails with a
+    ``ValueError`` instead of silently loading with an empty plugin set.
+    """
     return resolve_pipeline_plugins(pipeline_config, plugins_dirs)
 
 

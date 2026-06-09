@@ -119,6 +119,7 @@ def mock_pipeline_dict():
             "tags": ["test"],
             "author": "test",
         },
+        "plugins": ["cuvis_ai_test_nodes"],
         "nodes": [
             {
                 "name": "LentilsAnomalyDataNode",
@@ -163,6 +164,7 @@ def minimal_pipeline_dict():
             "created": "2024-12-04",
             "tags": ["test"],
         },
+        "plugins": ["cuvis_ai_test_nodes"],
         "nodes": [
             {
                 "name": "data",
@@ -301,6 +303,9 @@ metadata:
   description: "Pipeline without weights"
   created: "2024-11-27"
   tags: ["test"]
+
+plugins:
+  - cuvis_ai_test_nodes
 
 nodes:
   - name: LentilsAnomalyDataNode

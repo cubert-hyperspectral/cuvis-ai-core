@@ -74,6 +74,12 @@ class PipelineBuilder:
         # Create pipeline instance
         pipeline = CuvisPipeline(name=pipeline_name)
 
+        # Carry the declared plugin set so serialize() can re-emit the
+        # mandatory ``plugins:`` field on save.
+        declared_plugins = pipeline_cfg.get("plugins")
+        if declared_plugins:
+            pipeline._plugins = [str(name) for name in declared_plugins]
+
         # Instantiate nodes
         nodes = self._instantiate_nodes(
             pipeline_cfg.nodes,

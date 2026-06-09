@@ -42,6 +42,11 @@ class CuvisPipeline:
 
         self._graph = nx.MultiDiGraph()
         self._metadata = PipelineMetadata(name=name, cuvis_ai_version=__version__)
+        # Bare plugin names this pipeline was built from. Carried through
+        # serialize() so a saved pipeline keeps its mandatory ``plugins:``
+        # field and can be reloaded. Populated by the builder from config;
+        # empty for pipelines assembled programmatically.
+        self._plugins: list[str] = []
         self.strict_runtime_io_validation = strict_runtime_io_validation
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
 
@@ -347,6 +352,7 @@ class CuvisPipeline:
 
         return PipelineConfig(
             metadata=metadata,
+            plugins=list(self._plugins) or None,
             nodes=node_configs,
             connections=connection_configs,
         )

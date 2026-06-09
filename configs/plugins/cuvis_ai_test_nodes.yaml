@@ -1,0 +1,17 @@
+# Test-only plugin manifest for cuvis-ai-core's own suite.
+#
+# The shipped pipeline configs under configs/pipeline reference the mock
+# node classes in tests.fixtures.mock_nodes. Because `plugins:` is now
+# mandatory, those configs declare `plugins: [cuvis_ai_test_nodes]` and
+# resolve against this manifest. The in-memory orchestrator never installs
+# from `path`; the mock classes are registered directly in the NodeRegistry
+# by the test fixtures, so `path` is only here to satisfy the schema.
+plugins:
+  cuvis_ai_test_nodes:
+    path: "../.."
+    provides:
+      - class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+      - class_name: tests.fixtures.mock_nodes.SoftChannelSelector
+      - class_name: tests.fixtures.mock_nodes.SimpleLossNode
+      - class_name: tests.fixtures.mock_nodes.MockMetricNode
+      - class_name: tests.fixtures.mock_nodes.MinMaxNormalizer
