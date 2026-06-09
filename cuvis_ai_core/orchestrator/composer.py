@@ -15,6 +15,7 @@ import secrets
 import shutil
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Iterator, Mapping
 
@@ -57,16 +58,26 @@ class ComposerError(RuntimeError):
 
 # Per-key in-process mutex layered on top of the cross-process file
 # lock so two threads in the same process serialise cheaply rather
-# than thrashing the OS lock primitive.
-_in_process_locks: dict[str, threading.Lock] = {}
+# than thrashing the OS lock primitive. A WeakValueDictionary keeps the
+# map from growing without bound on a long-lived server: while a build
+# holds (or waits on) a key's lock the caller's local reference keeps it
+# alive, so concurrent callers share the same object; once no one holds
+# it the entry is garbage-collected. Dirty local plugins mint a fresh
+# digest per run, so an unevicted dict would otherwise leak one lock per
+# run forever.
+_in_process_locks: "weakref.WeakValueDictionary[str, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _in_process_locks_guard = threading.Lock()
 
 
 def _in_process_lock_for(digest: str) -> threading.Lock:
     with _in_process_locks_guard:
-        if digest not in _in_process_locks:
-            _in_process_locks[digest] = threading.Lock()
-        return _in_process_locks[digest]
+        lock = _in_process_locks.get(digest)
+        if lock is None:
+            lock = threading.Lock()
+            _in_process_locks[digest] = lock
+        return lock
 
 
 def _build_dir_name(final_name: str) -> str:

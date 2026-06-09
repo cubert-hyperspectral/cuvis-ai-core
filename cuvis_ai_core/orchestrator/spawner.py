@@ -90,6 +90,10 @@ def _timeout_from_env(env_name: str, default: float) -> float:
 # Env vars that must never leak from the parent into the child, stripped
 # after the initial os.environ copy. Exact names are removed outright;
 # any var whose name starts with one of the prefixes is removed too.
+# This is a best-effort deny-list, deliberately non-exhaustive: the child
+# runs plugin code, so the principled boundary is an allow-list of the
+# vars the runtime actually needs. Until that exists, keep this list
+# covering the common credential carriers.
 _DENY_EXACT = frozenset(
     {
         "PYTHONPATH",  # uv's .pth files handle site-packages; PYTHONPATH would shadow
@@ -102,9 +106,30 @@ _DENY_EXACT = frozenset(
         "HUGGINGFACE_HUB_TOKEN",
         "HF_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "MONGODB_URI",
+        "SLACK_TOKEN",
+        "SLACK_BOT_TOKEN",
+        "NPM_TOKEN",
+        "PYPI_TOKEN",
+        "TWILIO_AUTH_TOKEN",
+        "SENTRY_DSN",
+        "DOCKERHUB_TOKEN",
+        "DOCKER_PASSWORD",
     }
 )
-_DENY_PREFIXES = ("AWS_", "GITHUB_", "AZURE_")
+_DENY_PREFIXES = (
+    "AWS_",
+    "GITHUB_",
+    "AZURE_",
+    "STRIPE_",
+    "GCP_",
+    "CLOUDFLARE_",
+    "DIGITALOCEAN_",
+)
 
 
 def _read_stderr_log(path: Path | None) -> str:

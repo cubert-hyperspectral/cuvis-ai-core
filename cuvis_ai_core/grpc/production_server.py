@@ -105,6 +105,9 @@ class ProductionServer:
 
         self.server: grpc.Server | None = None
         self.health_service: HealthService | None = None
+        # Kept so shutdown() can reach the SessionManager and reap any child
+        # runtimes the orchestrator spawned for live sessions.
+        self.cuvis_service: CuvisAIService | None = None
         self.logger = logging.getLogger(__name__)
         self._shutdown_requested = False
 
@@ -141,9 +144,9 @@ class ProductionServer:
             options=grpc_srv_opts,
         )
 
-        cuvis_ai_service = CuvisAIService()
+        self.cuvis_service = CuvisAIService()
         cuvis_ai_pb2_grpc.add_CuvisAIServiceServicer_to_server(
-            cuvis_ai_service, self.server
+            self.cuvis_service, self.server
         )
 
         self.health_service = HealthService()
@@ -195,12 +198,37 @@ class ProductionServer:
         if self.health_service:
             self.health_service.set_not_serving()
 
+        # Reap any child runtimes the orchestrator spawned for live sessions.
+        # close_session terminates the session's child handle; without this
+        # walk the child subprocesses (which have no kill-on-parent-death)
+        # outlive the server and leak, holding GPU memory until reboot.
+        self._close_all_sessions()
+
         self.logger.info("Waiting for in-flight requests to complete")
         stop_future = self.server.stop(grace=5)
         stop_future.wait(timeout=10)
 
         self.server = None
         self.logger.info("Server shutdown complete")
+
+    def _close_all_sessions(self) -> None:
+        """Close every open session so its child runtime is terminated.
+
+        Best-effort and per-session isolated: a failure closing one session
+        is logged and does not block the rest of shutdown.
+        """
+        if self.cuvis_service is None:
+            return
+        session_manager = self.cuvis_service.session_manager
+        for session_id in session_manager.list_sessions():
+            try:
+                session_manager.close_session(session_id)
+            except Exception as exc:
+                self.logger.warning(
+                    "Failed to close session %s during shutdown: %s",
+                    session_id,
+                    exc,
+                )
 
 
 def serve() -> None:  # pragma: no cover

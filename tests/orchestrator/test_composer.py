@@ -64,6 +64,25 @@ def _patch_resolve_and_uv(*, sync_side_effect=None):
     )
 
 
+def test_in_process_lock_map_is_weak_and_evicts_unreferenced_locks():
+    """Same digest shares one lock while referenced; the map evicts it after.
+
+    Guards against the lock map growing without bound on a long-lived
+    server — dirty local plugins mint a fresh digest per run.
+    """
+    import gc
+
+    composer_mod._in_process_locks.clear()
+    lock_a = composer_mod._in_process_lock_for("digestX")
+    lock_b = composer_mod._in_process_lock_for("digestX")
+    assert lock_a is lock_b
+    assert "digestX" in composer_mod._in_process_locks
+
+    del lock_a, lock_b
+    gc.collect()
+    assert "digestX" not in composer_mod._in_process_locks
+
+
 def test_compose_env_publishes_venv_path_and_writes_key_json(tmp_path: Path):
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:

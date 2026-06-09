@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -52,6 +53,10 @@ class SessionState:
     # ``InitializeSession``.
     child_handle: Any | None = None
     resolved_plugins: dict[str, Any] | None = None
+    # Per-session scratch root the orchestrator created for the child runtime
+    # (HOME / TEMP / output redirect). Removed on close so child logs and
+    # HF/torch caches don't accumulate under the system temp dir.
+    runtime_base_dir: Path | None = None
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -260,6 +265,15 @@ class SessionManager:
                     child.kill()
                 except Exception as kill_exc:
                     logger.warning(f"Child runtime kill also raised: {kill_exc}")
+
+        # Drop the child's scratch root now that it has exited (its file
+        # handles are released). Best-effort: a failure here must not block
+        # session teardown. Done after termination so the child isn't still
+        # writing into the tree.
+        runtime_base_dir = state.runtime_base_dir
+        state.runtime_base_dir = None
+        if runtime_base_dir is not None:
+            shutil.rmtree(runtime_base_dir, ignore_errors=True)
 
         logger.info(f"Closed session: {session_id}")
 
