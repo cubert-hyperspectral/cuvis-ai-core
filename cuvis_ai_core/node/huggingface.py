@@ -1,12 +1,12 @@
 """HuggingFace model integration nodes for cuvis.ai pipeline system.
 
 This module provides nodes for interfacing with HuggingFace models via:
-1. API backend - gradio_client for HF Spaces (Phase 1)
-2. Local backend - transformers for local models (Phase 2)
+1. API backend - gradio_client for HF Spaces
+2. Local backend - transformers for local models
 
 Example
 -------
->>> # API inference (Phase 1)
+>>> # API inference (API backend)
 >>> adaclip_api = AdaCLIPAPINode(space_url="Caoyunkang/AdaCLIP")
 >>> result = adaclip_api.forward(image=rgb_tensor)
 """
@@ -56,7 +56,7 @@ class HuggingFaceAPINode(Node):
     - API calls are not differentiable (no gradient flow)
     - Requires internet connection
     - Subject to HF Space rate limits
-    - Use local backend (Phase 2) for gradient training
+    - Use the local backend for gradient training
     """
 
     def __init__(
@@ -142,7 +142,7 @@ class HuggingFaceAPINode(Node):
 
 
 # ============================================================================
-# Phase 2: Local Model Loading
+# Local Model Loading (local backend)
 # ============================================================================
 
 
