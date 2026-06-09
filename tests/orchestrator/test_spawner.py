@@ -10,8 +10,6 @@ until ``InitializeSession`` is called.
 from __future__ import annotations
 
 import os
-import shutil
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +24,8 @@ from cuvis_ai_core.orchestrator.spawner import (
     LocalChildRuntimeSpawner,
     SpawnError,
     _prepend_path,
+    _read_stderr_log,
+    _timeout_from_env,
 )
 
 
@@ -121,8 +121,7 @@ def test_spawn_boots_child_and_health_checks_ok(fake_venv: Path, declared_paths)
             cuvis_ai_pb2.HealthCheckRequest(), timeout=5.0
         )
         assert (
-            response.status
-            == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+            response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
         )
         assert handle.endpoint.startswith("127.0.0.1:")
         assert handle.process.poll() is None
@@ -231,3 +230,215 @@ def test_spawn_endpoint_polling_surfaces_child_death(
             cwd=declared_paths.output_dir,
             declared_paths=declared_paths,
         )
+
+
+# ---------------------------------------------------------------------------
+# _timeout_from_env
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_from_env_unset_returns_default(monkeypatch):
+    monkeypatch.delenv("CUVIS_TEST_TIMEOUT", raising=False)
+    assert _timeout_from_env("CUVIS_TEST_TIMEOUT", 12.0) == 12.0
+
+
+def test_timeout_from_env_valid_value_is_used(monkeypatch):
+    monkeypatch.setenv("CUVIS_TEST_TIMEOUT", "3.5")
+    assert _timeout_from_env("CUVIS_TEST_TIMEOUT", 12.0) == 3.5
+
+
+def test_timeout_from_env_non_numeric_falls_back(monkeypatch):
+    monkeypatch.setenv("CUVIS_TEST_TIMEOUT", "not-a-number")
+    assert _timeout_from_env("CUVIS_TEST_TIMEOUT", 12.0) == 12.0
+
+
+def test_timeout_from_env_non_positive_falls_back(monkeypatch):
+    monkeypatch.setenv("CUVIS_TEST_TIMEOUT", "0")
+    assert _timeout_from_env("CUVIS_TEST_TIMEOUT", 12.0) == 12.0
+    monkeypatch.setenv("CUVIS_TEST_TIMEOUT", "-4")
+    assert _timeout_from_env("CUVIS_TEST_TIMEOUT", 12.0) == 12.0
+
+
+# ---------------------------------------------------------------------------
+# _read_stderr_log
+# ---------------------------------------------------------------------------
+
+
+def test_read_stderr_log_none_or_missing_returns_empty(tmp_path: Path):
+    assert _read_stderr_log(None) == ""
+    assert _read_stderr_log(tmp_path / "absent.log") == ""
+
+
+def test_read_stderr_log_reads_existing_file(tmp_path: Path):
+    log = tmp_path / "stderr.log"
+    log.write_text("traceback here", encoding="utf-8")
+    assert _read_stderr_log(log) == "traceback here"
+
+
+def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
+    log = tmp_path / "stderr.log"
+    log.write_text("x", encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    out = _read_stderr_log(log)
+    assert out.startswith("<unreadable stderr log")
+    assert "disk gone" in out
+
+
+# ---------------------------------------------------------------------------
+# ChildHandle.terminate / kill, driven by a mocked Popen so the SIGTERM /
+# kill escalation is deterministic and platform-independent.
+# ---------------------------------------------------------------------------
+
+
+def _fake_proc(*, poll, returncode=0):
+    """Build a Popen stand-in. ``poll`` is a value or a side_effect list."""
+    from unittest.mock import MagicMock
+
+    proc = MagicMock(spec=subprocess.Popen)
+    if isinstance(poll, list):
+        proc.poll.side_effect = poll
+    else:
+        proc.poll.return_value = poll
+    proc.returncode = returncode
+    return proc
+
+
+def _quiet_stub(monkeypatch, handle):
+    """Replace handle.stub() with one whose StopRun is a no-op."""
+    from unittest.mock import MagicMock
+
+    stub = MagicMock()
+    monkeypatch.setattr(handle, "stub", lambda: stub)
+    return stub
+
+
+def test_terminate_returns_returncode_when_already_dead():
+    proc = _fake_proc(poll=4, returncode=4)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    assert handle.terminate() == 4
+    proc.terminate.assert_not_called()
+    proc.kill.assert_not_called()
+
+
+def test_terminate_graceful_stop_then_clean_exit(monkeypatch):
+    proc = _fake_proc(poll=None)
+    proc.wait.return_value = 0
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    stub = _quiet_stub(monkeypatch, handle)
+    assert handle.terminate(grace_s=2.0) == 0
+    stub.StopRun.assert_called_once()
+    proc.terminate.assert_not_called()
+
+
+def test_terminate_tolerates_stoprun_rpc_error(monkeypatch):
+    proc = _fake_proc(poll=None)
+    proc.wait.return_value = 0
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    stub = _quiet_stub(monkeypatch, handle)
+    stub.StopRun.side_effect = grpc.RpcError("boom")
+    assert handle.terminate(grace_s=2.0) == 0
+
+
+def test_terminate_escalates_to_sigterm_then_succeeds(monkeypatch):
+    proc = _fake_proc(poll=None)
+    proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd="child", timeout=2.0),
+        0,
+    ]
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    _quiet_stub(monkeypatch, handle)
+    assert handle.terminate(grace_s=2.0) == 0
+    proc.terminate.assert_called_once()
+
+
+def test_terminate_escalates_to_kill_when_sigterm_ignored(monkeypatch):
+    # poll: alive in terminate(), alive again inside kill().
+    proc = _fake_proc(poll=[None, None], returncode=-9)
+    proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd="child", timeout=2.0),
+        subprocess.TimeoutExpired(cmd="child", timeout=2.0),
+        subprocess.TimeoutExpired(cmd="child", timeout=5.0),
+    ]
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    _quiet_stub(monkeypatch, handle)
+    assert handle.terminate(grace_s=2.0) == -9
+    proc.terminate.assert_called_once()
+    proc.kill.assert_called_once()
+
+
+def test_kill_noop_when_already_dead():
+    proc = _fake_proc(poll=0, returncode=0)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    assert handle.kill() == 0
+    proc.kill.assert_not_called()
+
+
+def test_close_channel_closes_open_channel():
+    from unittest.mock import MagicMock
+
+    proc = _fake_proc(poll=0, returncode=0)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    channel = MagicMock()
+    handle._channel = channel
+    handle.kill()  # routes through _close_channel
+    channel.close.assert_called_once()
+    assert handle._channel is None
+
+
+# ---------------------------------------------------------------------------
+# _wait_for_endpoint / _wait_for_health: death and timeout branches, driven
+# by a mocked Popen so they are deterministic on every platform.
+# ---------------------------------------------------------------------------
+
+
+def test_wait_for_endpoint_surfaces_child_death(tmp_path: Path):
+    spawner = LocalChildRuntimeSpawner()
+    stderr = tmp_path / "stderr.log"
+    stderr.write_text("ImportError: boom", encoding="utf-8")
+    proc = _fake_proc(poll=7, returncode=7)
+    with pytest.raises(SpawnError, match="exited before reporting"):
+        spawner._wait_for_endpoint(tmp_path / "endpoint.txt", proc, stderr_log=stderr)
+
+
+def test_wait_for_endpoint_times_out(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "cuvis_ai_core.orchestrator.spawner._ENDPOINT_POLL_TIMEOUT_SECONDS", 0.2
+    )
+    spawner = LocalChildRuntimeSpawner()
+    proc = _fake_proc(poll=None)
+    with pytest.raises(SpawnError, match="did not write endpoint"):
+        spawner._wait_for_endpoint(tmp_path / "endpoint.txt", proc)
+    proc.terminate.assert_called_once()
+
+
+def test_wait_for_health_surfaces_child_death(tmp_path: Path):
+    spawner = LocalChildRuntimeSpawner()
+    stderr = tmp_path / "stderr.log"
+    stderr.write_text("segfault", encoding="utf-8")
+    proc = _fake_proc(poll=1, returncode=1)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=stderr)
+    with pytest.raises(SpawnError, match="died before HealthCheck"):
+        spawner._wait_for_health(handle)
+
+
+def test_wait_for_health_times_out_when_never_serving(monkeypatch):
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(
+        "cuvis_ai_core.orchestrator.spawner._HEALTH_POLL_TIMEOUT_SECONDS", 0.2
+    )
+    monkeypatch.setattr(
+        "cuvis_ai_core.orchestrator.spawner._HEALTH_POLL_INTERVAL_SECONDS", 0.05
+    )
+    spawner = LocalChildRuntimeSpawner()
+    proc = _fake_proc(poll=None)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    stub = MagicMock()
+    stub.HealthCheck.side_effect = grpc.RpcError("not up yet")
+    monkeypatch.setattr(handle, "stub", lambda: stub)
+    with pytest.raises(SpawnError, match="did not become SERVING"):
+        spawner._wait_for_health(handle)

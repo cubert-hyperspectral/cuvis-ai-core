@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -324,3 +325,60 @@ def test_compose_env_keeps_failed_build_dir_for_forensics(tmp_path: Path):
 
 def test_compose_error_class_is_runtime_error_subclass():
     assert issubclass(ComposerError, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# _build_lock timeout, cache-root default, stale-partial sweep, _rmtree
+# ---------------------------------------------------------------------------
+
+
+def test_build_lock_times_out_raises_composer_error(tmp_path: Path, monkeypatch):
+    class _StuckLock:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def acquire(self, timeout=None):
+            raise composer_mod.Timeout("held elsewhere")
+
+        def release(self) -> None:  # pragma: no cover - not reached on timeout
+            pass
+
+    monkeypatch.setattr(composer_mod, "FileLock", _StuckLock)
+    with pytest.raises(ComposerError, match="Timed out"):
+        with composer_mod._build_lock("deadbeef", tmp_path):
+            pass
+
+
+def test_resolve_cache_root_defaults_without_override_or_env(monkeypatch):
+    monkeypatch.delenv("CUVIS_RUN_CACHE_DIR", raising=False)
+    assert composer_mod._resolve_cache_root(None) == composer_mod._DEFAULT_CACHE_ROOT
+
+
+def test_sweep_stale_partials_noop_when_root_missing(tmp_path: Path):
+    # Must not raise when the cache root has never been created.
+    composer_mod._sweep_stale_partials(tmp_path / "never_created")
+
+
+def test_sweep_stale_partials_removes_old_and_keeps_fresh(tmp_path: Path):
+    import os
+
+    stale = tmp_path / f"abc{composer_mod._BUILDING_TAG}123.deadbe"
+    fresh = tmp_path / f"def{composer_mod._BUILDING_TAG}456.beadfe"
+    stale.mkdir()
+    fresh.mkdir()
+    old = time.time() - composer_mod._STALE_PARTIAL_AGE_SECONDS - 100
+    os.utime(stale, (old, old))
+
+    composer_mod._sweep_stale_partials(tmp_path)
+
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+def test_rmtree_swallows_oserror(tmp_path: Path, monkeypatch):
+    def _boom(path, ignore_errors=False):
+        raise OSError("device busy")
+
+    monkeypatch.setattr(composer_mod.shutil, "rmtree", _boom)
+    # Logged, not raised.
+    composer_mod._rmtree(tmp_path)

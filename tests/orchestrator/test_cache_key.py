@@ -272,3 +272,114 @@ def test_human_manifest_marks_local_plugin_state(tmp_path: Path):
     assert "local-plugin" in manifest  # package_name
     assert str(tmp_path) in manifest  # source path
     assert "local (clean)" in manifest
+
+
+# ---------------------------------------------------------------------------
+# human_manifest edge rows + helper functions
+# ---------------------------------------------------------------------------
+
+
+def test_human_manifest_with_no_plugins_lists_none():
+    manifest = compute_cache_key(
+        core_source=CORE,
+        plugins=(),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).human_manifest()
+    assert "_None._" in manifest
+
+
+def test_human_manifest_marks_dirty_local_plugin(tmp_path: Path):
+    dirty = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head=None,
+        dirty=True,
+    )
+    key = compute_cache_key(
+        core_source=CORE,
+        plugins=(dirty,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    )
+    # A dirty local plugin mints a per-run suffix and stamps the dev-mode note.
+    assert key.dirty_suffix is not None
+    manifest = key.human_manifest()
+    assert "Dev mode" in manifest
+    assert "local (dirty)" in manifest
+
+
+def test_short_core_identity_handles_git_and_local():
+    from cuvis_ai_core.orchestrator.cache_key import _short_core_identity
+
+    git_with_sha = CoreSource(kind="git", identity="https://x/core.git@" + "c" * 40)
+    assert _short_core_identity(git_with_sha) == "c" * 8
+
+    git_no_sha = CoreSource(kind="git", identity="weird-identity@")
+    assert _short_core_identity(git_no_sha) == "weird-identity@"
+
+    local = CoreSource(kind="local", identity="/somewhere/cuvis-ai-core")
+    assert _short_core_identity(local) == "local"
+
+
+def test_current_python_version_and_platform_tag():
+    from cuvis_ai_core.orchestrator.cache_key import (
+        current_platform_tag,
+        current_python_version,
+    )
+
+    version = current_python_version()
+    assert re.match(r"^\d+\.\d+\.\d+$", version)
+    assert current_platform_tag()  # non-empty
+
+
+def test_current_platform_tag_appends_machine_when_absent(monkeypatch):
+    from cuvis_ai_core.orchestrator import cache_key as cache_key_mod
+
+    monkeypatch.setattr(cache_key_mod.sysconfig, "get_platform", lambda: "linux-x86_64")
+    monkeypatch.setattr(cache_key_mod.platform, "machine", lambda: "ppc64le")
+    assert cache_key_mod.current_platform_tag() == "linux-x86_64-ppc64le"
+
+
+# ---------------------------------------------------------------------------
+# local_plugin_provenance
+# ---------------------------------------------------------------------------
+
+
+def test_local_plugin_provenance_no_pyproject_no_repo(tmp_path: Path, monkeypatch):
+    from cuvis_ai_core.orchestrator import cache_key as cache_key_mod
+
+    # No git available → head None, dirty True; no pyproject → empty-bytes hash.
+    monkeypatch.setattr(cache_key_mod, "_git", lambda args, cwd: None)
+    sha, head, dirty = cache_key_mod.local_plugin_provenance(tmp_path)
+    import hashlib
+
+    assert sha == hashlib.sha256(b"").hexdigest()
+    assert head is None
+    assert dirty is True
+
+
+def test_local_plugin_provenance_clean_and_dirty(tmp_path: Path, monkeypatch):
+    from cuvis_ai_core.orchestrator import cache_key as cache_key_mod
+
+    (tmp_path / "pyproject.toml").write_bytes(b"[project]\nname = 'x'\n")
+
+    def _git_clean(args, cwd):
+        return "abc123" if args[0] == "rev-parse" else ""
+
+    monkeypatch.setattr(cache_key_mod, "_git", _git_clean)
+    sha, head, dirty = cache_key_mod.local_plugin_provenance(tmp_path)
+    assert head == "abc123"
+    assert dirty is False
+    assert sha != ""
+
+    def _git_dirty(args, cwd):
+        return "abc123" if args[0] == "rev-parse" else " M changed.py"
+
+    monkeypatch.setattr(cache_key_mod, "_git", _git_dirty)
+    _sha, _head, dirty2 = cache_key_mod.local_plugin_provenance(tmp_path)
+    assert dirty2 is True

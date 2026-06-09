@@ -111,7 +111,9 @@ class TestSessionManager:
         pipeline.cleanup.side_effect = RuntimeError("boom")
         session_id = manager.create_session(pipeline=pipeline)
 
-        monkeypatch.setattr("cuvis_ai_core.grpc.session_manager.gc.collect", MagicMock())
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.gc.collect", MagicMock()
+        )
         monkeypatch.setattr(
             "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
             lambda: False,
@@ -227,3 +229,84 @@ class TestSessionManager:
         session_id_without_config = manager.create_session(pipeline=pipeline2)
         state_without_config = manager.get_session(session_id_without_config)
         assert state_without_config.trainrun_config is None
+
+
+# ---------------------------------------------------------------------------
+# pipeline_config property branches
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_config_property_returns_cached_value():
+    manager = SessionManager()
+    marker = object()
+    sid = manager.create_session(pipeline_config=marker)
+    assert manager.get_session(sid).pipeline_config is marker
+
+
+def test_pipeline_config_property_raises_without_pipeline():
+    manager = SessionManager()
+    sid = manager.create_session()
+    with pytest.raises(ValueError, match="not initialized"):
+        _ = manager.get_session(sid).pipeline_config
+
+
+# ---------------------------------------------------------------------------
+# create_session_with_id
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_with_id_rejects_empty():
+    manager = SessionManager()
+    with pytest.raises(ValueError, match="non-empty"):
+        manager.create_session_with_id("")
+
+
+def test_create_session_with_id_is_idempotent():
+    manager = SessionManager()
+    first = manager.create_session_with_id("shared-id")
+    state = manager.get_session("shared-id")
+    second = manager.create_session_with_id("shared-id")
+    assert first == second == "shared-id"
+    # Reuse returns the same state object, not a fresh one.
+    assert manager.get_session("shared-id") is state
+
+
+# ---------------------------------------------------------------------------
+# set_search_paths / _validate_search_path
+# ---------------------------------------------------------------------------
+
+
+def test_set_search_paths_rejects_invalid_paths(tmp_path):
+    manager = SessionManager()
+    sid = manager.create_session()
+    valid_dir = tmp_path / "configs"
+    valid_dir.mkdir()
+    accepted, rejected = manager.set_search_paths(
+        sid, [str(valid_dir), str(tmp_path / "does_not_exist")], append=True
+    )
+    assert str(valid_dir.resolve()) in accepted
+    assert str(tmp_path / "does_not_exist") in rejected
+
+
+def test_validate_search_path_swallows_resolution_errors():
+    manager = SessionManager()
+    # An embedded NUL makes Path.resolve raise; the helper must return None.
+    assert manager._validate_search_path("bad\x00path") is None
+
+
+# ---------------------------------------------------------------------------
+# close_session: trainer cleanup is best-effort
+# ---------------------------------------------------------------------------
+
+
+def test_close_session_isolates_trainer_cleanup_failure():
+    manager = SessionManager()
+    sid = manager.create_session()
+    trainer = MagicMock()
+    trainer.cleanup.side_effect = RuntimeError("trainer cleanup blew up")
+    manager.get_session(sid).trainer = trainer
+
+    # Must not raise even though trainer.cleanup() failed.
+    manager.close_session(sid)
+    assert sid not in manager.list_sessions()
+    trainer.cleanup.assert_called_once()

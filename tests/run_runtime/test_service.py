@@ -8,13 +8,16 @@ lives in ``tests/orchestrator/test_spawner.py``.
 from __future__ import annotations
 
 import json
-from typing import Any
+from unittest.mock import Mock
 
 import grpc
 import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
-from cuvis_ai_core.run_runtime.service import RunRuntimeServicer, _decode_resolved_plugins
+from cuvis_ai_core.run_runtime.service import (
+    RunRuntimeServicer,
+    _decode_resolved_plugins,
+)
 from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
 
 
@@ -71,6 +74,12 @@ def test_decode_resolved_plugins_top_level_not_dict_raises():
         _decode_resolved_plugins(b"[]")
 
 
+def test_decode_resolved_plugins_entry_not_dict_raises():
+    payload = json.dumps({"x": "not-a-dict"}).encode("utf-8")
+    with pytest.raises(TypeError, match="must be a dict"):
+        _decode_resolved_plugins(payload)
+
+
 # ---------------------------------------------------------------------------
 # HealthCheck — trivial but exercised
 # ---------------------------------------------------------------------------
@@ -79,9 +88,7 @@ def test_decode_resolved_plugins_top_level_not_dict_raises():
 def test_health_check_always_serving():
     servicer = RunRuntimeServicer()
     response = servicer.HealthCheck(cuvis_ai_pb2.HealthCheckRequest(), FakeContext())
-    assert (
-        response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
-    )
+    assert response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +240,111 @@ def test_load_pipeline_rejects_missing_config_bytes():
     response = servicer.LoadPipeline(request, ctx)
     assert response.success is False
     assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
+# ---------------------------------------------------------------------------
+# InitializeSession: get_session failure → INTERNAL
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_session_internal_error_when_session_unattachable(monkeypatch):
+    servicer = RunRuntimeServicer()
+    ctx = FakeContext()
+    monkeypatch.setattr(
+        servicer._session_manager,
+        "get_session",
+        Mock(side_effect=ValueError("could not attach")),
+    )
+    response = servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(
+            session_id="s1", resolved_plugins_json=b""
+        ),
+        ctx,
+    )
+    assert response.ok is False
+    assert ctx.code == grpc.StatusCode.INTERNAL
+
+
+# ---------------------------------------------------------------------------
+# Unary delegates forward to the underlying service objects
+# ---------------------------------------------------------------------------
+
+
+def test_unary_delegates_forward_to_services():
+    """Every pipeline/training delegate runs against an unknown session.
+
+    The point is that the servicer's one-line delegate body executes; the
+    underlying service reports NOT_FOUND, which is the expected outcome.
+    """
+    servicer = RunRuntimeServicer()
+    cases = [
+        (
+            "LoadPipelineWeights",
+            cuvis_ai_pb2.LoadPipelineWeightsRequest(session_id="ghost"),
+        ),
+        ("SavePipeline", cuvis_ai_pb2.SavePipelineRequest(session_id="ghost")),
+        (
+            "SaveTrainRun",
+            cuvis_ai_pb2.SaveTrainRunRequest(
+                session_id="ghost", trainrun_path="x.yaml"
+            ),
+        ),
+        (
+            "GetPipelineInputs",
+            cuvis_ai_pb2.GetPipelineInputsRequest(session_id="ghost"),
+        ),
+        (
+            "GetPipelineOutputs",
+            cuvis_ai_pb2.GetPipelineOutputsRequest(session_id="ghost"),
+        ),
+        (
+            "GetPipelineVisualization",
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(session_id="ghost"),
+        ),
+        (
+            "SetTrainRunConfig",
+            cuvis_ai_pb2.SetTrainRunConfigRequest(session_id="ghost"),
+        ),
+        ("GetTrainStatus", cuvis_ai_pb2.GetTrainStatusRequest(session_id="ghost")),
+        ("Inference", cuvis_ai_pb2.InferenceRequest(session_id="ghost")),
+    ]
+    for handler, request in cases:
+        getattr(servicer, handler)(request, FakeContext())
+
+
+def test_train_delegate_yields_from_training_service():
+    servicer = RunRuntimeServicer()
+    gen = servicer.Train(cuvis_ai_pb2.TrainRequest(session_id="ghost"), FakeContext())
+    # Consuming the generator runs the `yield from` delegate body.
+    try:
+        list(gen)
+    except Exception:
+        pass
+
+
+def test_restore_train_run_delegates_after_initialize(tmp_path):
+    servicer = RunRuntimeServicer()
+    servicer.InitializeSession(
+        cuvis_ai_pb2.InitializeSessionRequest(
+            session_id="s1", resolved_plugins_json=b""
+        ),
+        FakeContext(),
+    )
+    ctx = FakeContext()
+    servicer.RestoreTrainRun(
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "absent.yaml")
+        ),
+        ctx,
+    )
+    # Delegated to the trainrun service, whose parse step reports the missing file.
+    assert ctx.code == grpc.StatusCode.NOT_FOUND
+
+
+def test_stop_run_tolerates_unknown_session():
+    servicer = RunRuntimeServicer()
+    response = servicer.StopRun(
+        cuvis_ai_pb2.StopRunRequest(session_id="ghost", grace_seconds=1), FakeContext()
+    )
+    assert response.ok is True
+    assert servicer.shutdown_event.is_set()

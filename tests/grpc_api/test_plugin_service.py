@@ -1,12 +1,23 @@
 """Tests for PluginService gRPC functionality."""
 
-import pytest
+from types import SimpleNamespace
 from unittest.mock import Mock
 
-from cuvis_ai_core.grpc.plugin_service import PluginService
+import grpc
+import numpy as np
+import pytest
+
+from cuvis_ai_core.grpc import plugin_service as plugin_service_mod
+from cuvis_ai_core.grpc.plugin_service import (
+    PluginService,
+    _catalog_entry_to_node_info,
+    _catalog_port_spec_to_proto,
+    _convert_port_spec_to_proto,
+)
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_schemas.catalog import CatalogNodeEntry, CatalogPortSpec
 from cuvis_ai_schemas.plugin import PluginManifest, LocalPluginConfig
 
 
@@ -133,7 +144,9 @@ class ValidNode(Node):
                 ),
                 "unreachable_plugin": LocalPluginConfig(
                     path="/nonexistent/path",
-                    provides=[{"class_name": "unreachable_plugin.node.UnreachableNode"}],
+                    provides=[
+                        {"class_name": "unreachable_plugin.node.UnreachableNode"}
+                    ],
                 ),
             }
         )
@@ -622,7 +635,9 @@ class IsolatedNode(Node):
             plugins={
                 "isolation_test_plugin": LocalPluginConfig(
                     path=str(plugin_dir),
-                    provides=[{"class_name": "isolation_test_plugin.node.IsolatedNode"}],
+                    provides=[
+                        {"class_name": "isolation_test_plugin.node.IsolatedNode"}
+                    ],
                 )
             }
         )
@@ -921,3 +936,300 @@ class TestPluginServiceMetadata:
 
         resolved = plugin_service._resolve_package_root(FakeNode)
         assert resolved == package_root.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Pure proto-conversion helpers (fast, no session)
+# ---------------------------------------------------------------------------
+
+
+def test_convert_port_spec_rejects_non_int_str_dimension():
+    spec = SimpleNamespace(
+        dtype=np.dtype("float32"),
+        shape=(1, None),
+        optional=False,
+        description="",
+        variadic=False,
+    )
+    with pytest.raises(ValueError, match="invalid shape dimension"):
+        _convert_port_spec_to_proto(spec, "p")
+
+
+def test_catalog_port_spec_empty_dtype_is_unspecified():
+    spec = CatalogPortSpec(
+        dtype="", shape=[1, 2], optional=False, description="", variadic=False
+    )
+    proto = _catalog_port_spec_to_proto("p", spec)
+    assert proto.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+    assert list(proto.shape) == [1, 2]
+
+
+def test_catalog_port_spec_unsupported_dtype_falls_back_to_unspecified():
+    spec = CatalogPortSpec(
+        dtype="definitely-not-a-dtype",
+        shape=[1],
+        optional=False,
+        description="",
+        variadic=False,
+    )
+    proto = _catalog_port_spec_to_proto("p", spec)
+    assert proto.dtype == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
+
+
+def test_catalog_entry_to_node_info_tolerates_bogus_category_and_tags():
+    entry = CatalogNodeEntry(
+        class_name="pkg.mod.SomeNode",
+        category="bogus-category",
+        tags=["not-a-real-tag", "hyperspectral"],
+        input_specs={},
+        output_specs={},
+    )
+    info = _catalog_entry_to_node_info(entry, "my_plugin")
+    # Unknown category collapses to UNSPECIFIED; unknown tags are dropped.
+    assert info.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+    assert info.class_name == "SomeNode"
+    assert info.full_path == "pkg.mod.SomeNode"
+    assert info.plugin_name == "my_plugin"
+
+
+# ---------------------------------------------------------------------------
+# Fast handler coverage: load_plugins / list_loaded_plugins / get_plugin_info
+# guards + the list_available_nodes error-isolation branches. These mirror
+# TestPluginService (which is @slow and deselected in the coverage job).
+# ---------------------------------------------------------------------------
+
+
+class TestPluginServiceFastHandlers:
+    """Fast (no-disk) handler tests that run in the default coverage job."""
+
+    def setup_method(self):
+        NodeRegistry.clear()
+        self.session_manager = SessionManager()
+        self.plugin_service = PluginService(self.session_manager)
+        self.mock_context = Mock()
+
+    def teardown_method(self):
+        for session_id in list(self.session_manager._sessions.keys()):
+            self.session_manager.close_session(session_id)
+        NodeRegistry.clear()
+
+    # -- load_plugins -------------------------------------------------------
+
+    def test_load_plugins_unknown_session_returns_empty(self):
+        resp = self.plugin_service.load_plugins(
+            cuvis_ai_pb2.LoadPluginsRequest(session_id="nope"), self.mock_context
+        )
+        assert resp == cuvis_ai_pb2.LoadPluginsResponse()
+
+    def test_load_plugins_missing_config_bytes_is_invalid_argument(self):
+        sid = self.session_manager.create_session()
+        self.plugin_service.load_plugins(
+            cuvis_ai_pb2.LoadPluginsRequest(session_id=sid), self.mock_context
+        )
+        self.mock_context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_load_plugins_registers_local_entry(self):
+        sid = self.session_manager.create_session()
+        manifest = PluginManifest(
+            plugins={
+                "p": LocalPluginConfig(
+                    path=".",
+                    provides=[
+                        {"class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer"}
+                    ],
+                )
+            }
+        )
+        request = cuvis_ai_pb2.LoadPluginsRequest(
+            session_id=sid,
+            manifest=cuvis_ai_pb2.PluginManifest(
+                config_bytes=manifest.model_dump_json().encode()
+            ),
+        )
+        resp = self.plugin_service.load_plugins(request, self.mock_context)
+        assert "p" in resp.registered_plugins
+        assert "p" in self.session_manager.get_session(sid).registered_plugins
+
+    def test_load_plugins_reports_failed_entry(self):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.node_registry.register_catalog_entries = Mock(
+            side_effect=Exception("registration boom")
+        )
+        manifest = PluginManifest(
+            plugins={
+                "p": LocalPluginConfig(
+                    path=".",
+                    provides=[
+                        {"class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer"}
+                    ],
+                )
+            }
+        )
+        request = cuvis_ai_pb2.LoadPluginsRequest(
+            session_id=sid,
+            manifest=cuvis_ai_pb2.PluginManifest(
+                config_bytes=manifest.model_dump_json().encode()
+            ),
+        )
+        resp = self.plugin_service.load_plugins(request, self.mock_context)
+        assert "p" in resp.failed_plugins
+        assert resp.registered_plugins == []
+
+    # -- list_loaded_plugins / get_plugin_info ------------------------------
+
+    def test_list_loaded_plugins_unknown_session_returns_empty(self):
+        resp = self.plugin_service.list_loaded_plugins(
+            cuvis_ai_pb2.ListLoadedPluginsRequest(session_id="nope"), self.mock_context
+        )
+        assert resp == cuvis_ai_pb2.ListLoadedPluginsResponse()
+
+    def test_list_loaded_plugins_reports_git_and_local(self):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["g"] = {
+            "repo": "https://example.com/p.git",
+            "tag": "v1.2.3",
+            "provides": [{"class_name": "a.B"}],
+        }
+        session.registered_plugins["l"] = {"path": ".", "provides": []}
+        resp = self.plugin_service.list_loaded_plugins(
+            cuvis_ai_pb2.ListLoadedPluginsRequest(session_id=sid), self.mock_context
+        )
+        by_name = {p.name: p for p in resp.plugins}
+        assert by_name["g"].type == "git"
+        assert by_name["g"].source == "https://example.com/p.git"
+        assert by_name["g"].tag == "v1.2.3"
+        assert list(by_name["g"].provides) == ["a.B"]
+        assert by_name["l"].type == "local"
+        assert by_name["l"].source == "."
+
+    def test_get_plugin_info_unknown_session_returns_empty(self):
+        resp = self.plugin_service.get_plugin_info(
+            cuvis_ai_pb2.GetPluginInfoRequest(session_id="nope", plugin_name="x"),
+            self.mock_context,
+        )
+        assert resp == cuvis_ai_pb2.GetPluginInfoResponse()
+
+    def test_get_plugin_info_not_found_sets_not_found(self):
+        sid = self.session_manager.create_session()
+        resp = self.plugin_service.get_plugin_info(
+            cuvis_ai_pb2.GetPluginInfoRequest(session_id=sid, plugin_name="missing"),
+            self.mock_context,
+        )
+        assert resp == cuvis_ai_pb2.GetPluginInfoResponse()
+        self.mock_context.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
+
+    def test_get_plugin_info_returns_registered_plugin(self):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["g"] = {
+            "repo": "https://example.com/p.git",
+            "tag": "v2",
+            "provides": [{"class_name": "a.B"}, {"class_name": "a.C"}],
+        }
+        resp = self.plugin_service.get_plugin_info(
+            cuvis_ai_pb2.GetPluginInfoRequest(session_id=sid, plugin_name="g"),
+            self.mock_context,
+        )
+        assert resp.plugin.name == "g"
+        assert resp.plugin.type == "git"
+        assert list(resp.plugin.provides) == ["a.B", "a.C"]
+
+    # -- list_available_nodes error isolation -------------------------------
+
+    def _register_one_builtin(self):
+        from cuvis_ai_core.node import Node
+
+        @NodeRegistry.register
+        class SoloNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {}
+
+            def forward(self, **inputs):
+                return {}
+
+            def load(self, params, serial_dir):
+                pass
+
+        return "SoloNode"
+
+    def test_list_available_nodes_survives_builtin_class_resolution_failure(
+        self, monkeypatch
+    ):
+        sid = self.session_manager.create_session()
+        name = self._register_one_builtin()
+        monkeypatch.setattr(
+            NodeRegistry, "get_builtin_class", Mock(side_effect=Exception("boom"))
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        node = next(n for n in resp.nodes if n.class_name == name)
+        assert len(node.input_specs) == 0
+        assert node.category == cuvis_ai_pb2.NODE_CATEGORY_UNSPECIFIED
+
+    def test_list_available_nodes_survives_port_spec_extraction_failure(
+        self, monkeypatch
+    ):
+        sid = self.session_manager.create_session()
+        name = self._register_one_builtin()
+        monkeypatch.setattr(
+            self.plugin_service,
+            "_extract_port_specs",
+            Mock(side_effect=Exception("spec boom")),
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        node = next(n for n in resp.nodes if n.class_name == name)
+        assert len(node.input_specs) == 0
+        assert len(node.output_specs) == 0
+
+    def test_list_available_nodes_warns_on_plugin_without_nodes(self):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        # A registered plugin whose inline catalog provides nothing → its
+        # entry resolves to None and it contributes no palette nodes.
+        session.registered_plugins["empty"] = {"path": ".", "provides": []}
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        assert all(n.plugin_name != "empty" for n in resp.nodes)
+
+    def test_list_available_nodes_skips_plugin_when_catalog_load_raises(
+        self, monkeypatch
+    ):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["p"] = {
+            "path": ".",
+            "provides": [{"class_name": "a.B"}],
+        }
+        monkeypatch.setattr(
+            plugin_service_mod,
+            "load_catalog_entry",
+            Mock(side_effect=ValueError("bad catalog")),
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        assert all(n.plugin_name != "p" for n in resp.nodes)
+
+    def test_list_available_nodes_skips_unconvertible_catalog_entry(self, monkeypatch):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["p"] = {
+            "path": ".",
+            "provides": [{"class_name": "a.B"}],
+        }
+        monkeypatch.setattr(
+            plugin_service_mod,
+            "_catalog_entry_to_node_info",
+            Mock(side_effect=Exception("convert boom")),
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        # The plugin had one node, but conversion failed → it is skipped.
+        assert all(n.plugin_name != "p" for n in resp.nodes)

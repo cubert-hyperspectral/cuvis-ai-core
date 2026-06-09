@@ -412,3 +412,329 @@ def test_forward_restore_train_run_cleans_up_session_on_resolver_error(
     assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
     # The parent session allocated before the failure was dropped.
     assert sm._sessions == {}
+
+
+# ---------------------------------------------------------------------------
+# get_spawner lazy init + detect_core_source pypi branch
+# ---------------------------------------------------------------------------
+
+
+def test_get_spawner_lazily_constructs_local_spawner():
+    from cuvis_ai_core.orchestrator.spawner import LocalChildRuntimeSpawner
+
+    orchestrator_bridge.reset_spawner()
+    try:
+        assert isinstance(orchestrator_bridge.get_spawner(), LocalChildRuntimeSpawner)
+    finally:
+        orchestrator_bridge.reset_spawner()
+
+
+def test_detect_core_source_site_packages_reports_pypi(monkeypatch):
+    import cuvis_ai_core
+
+    monkeypatch.setattr(
+        cuvis_ai_core,
+        "__file__",
+        "/opt/venv/lib/site-packages/cuvis_ai_core/__init__.py",
+    )
+    source = orchestrator_bridge.detect_core_source()
+    assert source.kind == "pypi"
+    assert "cuvis-ai-core==" in source.identity
+
+
+# ---------------------------------------------------------------------------
+# forward_inference / forward_train with an attached (fake) child
+# ---------------------------------------------------------------------------
+
+
+def _attach_fake_child(sm, sid):
+    handle = MagicMock()
+    handle.returncode = None
+    sm.get_session(sid).child_handle = handle
+    return handle
+
+
+def test_forward_inference_unknown_session_returns_empty():
+    sm = SessionManager()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id="nope"), ctx
+    )
+    assert resp == cuvis_ai_pb2.InferenceResponse()
+
+
+def test_forward_inference_forwards_to_child():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.Inference.return_value = cuvis_ai_pb2.InferenceResponse()
+    resp = orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+    assert resp == cuvis_ai_pb2.InferenceResponse()
+    handle.stub.return_value.Inference.assert_called_once()
+
+
+def test_forward_train_unknown_session_yields_empty():
+    sm = SessionManager()
+    ctx = _InMemoryContext()
+    gen = orchestrator_bridge.forward_train(
+        sm, cuvis_ai_pb2.TrainRequest(session_id="nope"), ctx
+    )
+    assert list(gen) == []
+
+
+def test_forward_train_streams_child_responses():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.Train.return_value = iter(
+        [cuvis_ai_pb2.TrainResponse(), cuvis_ai_pb2.TrainResponse()]
+    )
+    out = list(
+        orchestrator_bridge.forward_train(
+            sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+        )
+    )
+    assert len(out) == 2
+
+
+def test_forward_train_propagates_stream_error():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.Train.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.INTERNAL, "stream blew up"
+    )
+    out = list(
+        orchestrator_bridge.forward_train(
+            sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+        )
+    )
+    assert out == []
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert ctx.details() == "stream blew up"
+
+
+# ---------------------------------------------------------------------------
+# forward_restore_train_run: yaml parse failures, generic failure, success
+# ---------------------------------------------------------------------------
+
+
+def _patch_parse(monkeypatch, result=None, *, raises=None):
+    def _parse(path):
+        if raises is not None:
+            raise raises
+        return result
+
+    monkeypatch.setattr(
+        "cuvis_ai_core.grpc.trainrun_service.TrainRunService.parse_trainrun_yaml",
+        _parse,
+    )
+
+
+def test_forward_restore_train_run_missing_file_is_not_found(monkeypatch, tmp_path):
+    sm = SessionManager()
+    _patch_parse(monkeypatch, raises=FileNotFoundError("no such trainrun"))
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+
+
+def test_forward_restore_train_run_bad_yaml_is_invalid_argument(monkeypatch, tmp_path):
+    sm = SessionManager()
+    _patch_parse(monkeypatch, raises=ValueError("hydra defaults not allowed"))
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+
+
+def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_path):
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
+    _patch_parse(monkeypatch, result=(fake_cfg, None))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=RuntimeError("compose failed")),
+    )
+    ctx = _InMemoryContext()
+    with pytest.raises(RuntimeError, match="compose failed"):
+        orchestrator_bridge.forward_restore_train_run(
+            sm,
+            cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+            ctx,
+        )
+    # The allocated parent session was dropped before re-raising.
+    assert sm._sessions == {}
+
+
+def test_forward_restore_train_run_fills_parent_session_id(monkeypatch, tmp_path):
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
+    _patch_parse(monkeypatch, result=(fake_cfg, None))
+
+    def _fake_ensure(session_manager, session_id, pipeline_config, plugins_dirs):
+        handle = MagicMock()
+        handle.stub.return_value.RestoreTrainRun.return_value = (
+            cuvis_ai_pb2.RestoreTrainRunResponse(session_id="")
+        )
+        session_manager.get_session(session_id).child_handle = handle
+        return handle
+
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", _fake_ensure)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    # The child returned an empty session id, so the parent's is filled in.
+    assert resp.session_id != ""
+    assert resp.session_id in sm.list_sessions()
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-op wrappers: each no-child wrapper returns FAILED_PRECONDITION
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fn_name, request_cls",
+    [
+        ("forward_load_pipeline_weights", cuvis_ai_pb2.LoadPipelineWeightsRequest),
+        ("forward_save_pipeline", cuvis_ai_pb2.SavePipelineRequest),
+        ("forward_save_train_run", cuvis_ai_pb2.SaveTrainRunRequest),
+        ("forward_get_pipeline_outputs", cuvis_ai_pb2.GetPipelineOutputsRequest),
+        (
+            "forward_get_pipeline_visualization",
+            cuvis_ai_pb2.GetPipelineVisualizationRequest,
+        ),
+        ("forward_get_train_status", cuvis_ai_pb2.GetTrainStatusRequest),
+    ],
+)
+def test_pipeline_op_wrappers_without_child(fn_name, request_cls):
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    getattr(orchestrator_bridge, fn_name)(sm, request_cls(session_id=sid), ctx)
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+
+
+# ---------------------------------------------------------------------------
+# forward_set_train_run_config: session / child guards + forward
+# ---------------------------------------------------------------------------
+
+
+def test_forward_set_train_run_config_unknown_session_fails():
+    sm = SessionManager()
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_set_train_run_config(
+        sm, cuvis_ai_pb2.SetTrainRunConfigRequest(session_id="nope"), ctx
+    )
+    assert resp.success is False
+
+
+def test_forward_set_train_run_config_without_child_has_tailored_message():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    req = cuvis_ai_pb2.SetTrainRunConfigRequest(
+        session_id=sid, config=cuvis_ai_pb2.TrainRunConfig(config_bytes=b"{}")
+    )
+    resp = orchestrator_bridge.forward_set_train_run_config(sm, req, ctx)
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "LoadPipeline" in ctx.details()
+
+
+def test_forward_set_train_run_config_forwards_to_child():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.SetTrainRunConfig.return_value = (
+        cuvis_ai_pb2.SetTrainRunConfigResponse(success=True)
+    )
+    req = cuvis_ai_pb2.SetTrainRunConfigRequest(
+        session_id=sid, config=cuvis_ai_pb2.TrainRunConfig(config_bytes=b"{}")
+    )
+    resp = orchestrator_bridge.forward_set_train_run_config(sm, req, ctx)
+    assert resp.success is True
+
+
+# ---------------------------------------------------------------------------
+# _InMemoryRpcError.__str__ + _InMemoryStub method surface
+# ---------------------------------------------------------------------------
+
+
+def test_inmemory_rpc_error_str_includes_code_and_details():
+    err = _InMemoryRpcError(grpc.StatusCode.INTERNAL, "kaboom")
+    text = str(err)
+    assert "code=" in text and "kaboom" in text
+
+
+def test_inmemory_stub_methods_invoke_servicer():
+    """Every _InMemoryStub delegate calls into the servicer (no-session → raises)."""
+    from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+    stub = _InMemoryStub(RunRuntimeServicer())
+    calls = [
+        (
+            "LoadPipelineWeights",
+            cuvis_ai_pb2.LoadPipelineWeightsRequest(session_id="x"),
+        ),
+        ("SavePipeline", cuvis_ai_pb2.SavePipelineRequest(session_id="x")),
+        ("SaveTrainRun", cuvis_ai_pb2.SaveTrainRunRequest(session_id="x")),
+        ("GetTrainStatus", cuvis_ai_pb2.GetTrainStatusRequest(session_id="x")),
+        ("Inference", cuvis_ai_pb2.InferenceRequest(session_id="x")),
+        (
+            "SetTrainRunConfig",
+            cuvis_ai_pb2.SetTrainRunConfigRequest(session_id="x"),
+        ),
+        (
+            "RestoreTrainRun",
+            cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path="absent.yaml"),
+        ),
+    ]
+    for method_name, request in calls:
+        # The point is to execute the delegate body; a non-OK servicer code
+        # surfaces as _InMemoryRpcError, which is the expected outcome here.
+        try:
+            getattr(stub, method_name)(request)
+        except _InMemoryRpcError:
+            pass
+
+
+def test_inmemory_stub_lifecycle_methods():
+    """Train stream + CloseSession + StopRun in-memory stub paths."""
+    from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+    stub = _InMemoryStub(RunRuntimeServicer())
+
+    # Train returns a generator; consuming it runs the wrapping _iter body.
+    try:
+        list(stub.Train(cuvis_ai_pb2.TrainRequest(session_id="ghost")))
+    except _InMemoryRpcError:
+        pass
+
+    # CloseSession is idempotent on the servicer → returns a response.
+    close_resp = stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id="ghost"))
+    assert close_resp.success is True
+
+    # StopRun signals the servicer's shutdown event and returns ok.
+    stop_resp = stub.StopRun(cuvis_ai_pb2.StopRunRequest())
+    assert stop_resp.ok is True

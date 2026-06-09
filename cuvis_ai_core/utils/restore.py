@@ -331,7 +331,9 @@ def restore_trainrun(
     with trainrun_path.open("r", encoding="utf-8") as f:
         raw_config = yaml.safe_load(f)
 
-    if isinstance(raw_config, dict) and "defaults" in raw_config:
+    if (  # pragma: no cover - needs a Hydra config tree; covered by data-backed runs
+        isinstance(raw_config, dict) and "defaults" in raw_config
+    ):
         # Config has Hydra defaults - resolve them
         configs_dir = trainrun_path.parent.parent
         relative_path = trainrun_path.relative_to(configs_dir)
