@@ -27,6 +27,11 @@ plugin; `dev-docs` = internal ticket docs. This package depends on `cuvis-ai-sch
 - Tests: `uv run pytest`; coverage `uv run pytest --cov=cuvis_ai_core --cov-report=term-missing`.
 - Markers: `unit`, `integration`, `grpc`, `pipeline`, `slow`, `gpu`, `stress`, `requires_data`.
 - CLI entry points: `restore-pipeline`, `restore-trainrun`, `dataset`, `suggest-plugins-fix`.
+- **Test data:** the data-backed tests (training round-trips, `test_config_preservation`)
+  expect the Lentils session at `data/Lentils/Lentils_000.cu3s`. Fetch it with
+  `uv run dataset download Lentils` (lands in `./data/Lentils/`); `uv run dataset list`
+  shows the full registry. Without it those tests fail/skip on the missing file — an env
+  gap, not a regression.
 
 ## Key abstractions
 
