@@ -775,7 +775,7 @@ requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "click", specifier = ">=8.3.1" },
     { name = "cuvis", specifier = ">=3.5.0" },
-    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.5.0" },
+    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.5.1" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "dataclass-wizard", specifier = ">=0.39.1" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
@@ -829,15 +829,15 @@ provides-extras = ["hf", "dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/bd/ad4c3e0ff6acf2c058dc0eed9147c3072f60ebdfb80870d8dae1d8cfa675/cuvis_ai_schemas-0.5.0.tar.gz", hash = "sha256:2425c8b4e96cdaafcf5f10761e18516bce2d52f2cf6ff6d2bb18a64b4259df94", size = 224978, upload-time = "2026-06-08T13:17:47.01Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/47/1ede9623c278c63901c0f50fae8d181163e19f02676d331792b3b8949c4a/cuvis_ai_schemas-0.5.1.tar.gz", hash = "sha256:a63aae2661126e36d4fee2e232f3e8cc1993c60aa58c91d405579a27821dd4ef", size = 225117, upload-time = "2026-06-09T11:28:57.94Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/45/d4325baba0a1ab8623a8308de6892919ee0098781c8ec5d87a8520e32f2c/cuvis_ai_schemas-0.5.0-py3-none-any.whl", hash = "sha256:647bf3d9ffb00c79b29433418423a805a2ee2d95a5f1b039ab1a1716045529ab", size = 66082, upload-time = "2026-06-08T13:17:45.614Z" },
+    { url = "https://files.pythonhosted.org/packages/87/96/04e574ee7b7eb62fcb58ca367ed45947f52b44d83c856d4964b013a9adf3/cuvis_ai_schemas-0.5.1-py3-none-any.whl", hash = "sha256:3df85fbff333a0d7f2f760df18f48b0958b344d40366b1d1250d3d802ff16171", size = 66089, upload-time = "2026-06-09T11:28:56.281Z" },
 ]
 
 [package.optional-dependencies]
