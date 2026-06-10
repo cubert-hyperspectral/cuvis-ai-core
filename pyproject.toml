@@ -49,7 +49,15 @@ dependencies = [
     "numpy>=2.4.1",
     "opencv-python-headless>=4.13.0.92",
     "pillow>=12.2.0",
-    "gitpython>=3.1.46",
+    # Security floors for transitively-pulled packages, raised here so downstream
+    # plugins inherit the fix instead of pinning each individually:
+    #   gitpython CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w
+    #   idna CVE-2026-45409 (via requests); urllib3 PYSEC-2026-141 / 142 (via requests)
+    #   aiohttp CVE-2026-34993 / 47265 (via the huggingface / fsspec stack)
+    "gitpython>=3.1.50",
+    "idna>=3.15",
+    "urllib3>=2.7.0",
+    "aiohttp>=3.14.0",
     # Type hints and validation
     "typing-extensions>=4.15.0",
     "pydantic>=2.12.5",

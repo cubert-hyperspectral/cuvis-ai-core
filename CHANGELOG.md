@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 - 2026-06-10
+
+- **Security:** raised dependency floors for transitively-pulled packages so downstream plugins inherit the fix instead of pinning each individually: `gitpython>=3.1.50` (CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w), plus new direct floors `idna>=3.15` (CVE-2026-45409), `urllib3>=2.7.0` (PYSEC-2026-141 / 142), and `aiohttp>=3.14.0` (CVE-2026-34993 / 47265). Re-locked `uv.lock`.
+
 ## 0.7.0 - 2026-06-09
 
 - Added the **child-env-per-run orchestrator** (new `cuvis_ai_core/orchestrator/` package): `cache_key` (a structured per-run venv key), `runtime_project` (generates the child `pyproject.toml`), `composer` (atomic build+publish via `filelock`, `uv lock` / `uv sync`, cache hits and broken-dir recovery), `spawner`, `venv_paths`, `uv_runner`, and `catalog`; plus `grpc/orchestrator_bridge.py`. The child runtime becomes the server's **sole** execution path — `LoadPipeline` / `Inference` / `Train` / `RestoreTrainRun` route through the orchestrator unconditionally.
