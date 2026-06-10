@@ -263,11 +263,10 @@ def test_create_session_with_id_rejects_empty():
 
 def test_create_session_with_id_is_idempotent():
     manager = SessionManager()
-    first = manager.create_session_with_id("shared-id")
+    manager.create_session_with_id("shared-id")
     state = manager.get_session("shared-id")
-    second = manager.create_session_with_id("shared-id")
-    assert first == second == "shared-id"
-    # Reuse returns the same state object, not a fresh one.
+    manager.create_session_with_id("shared-id")
+    # Reuse keeps the same state object, not a fresh one.
     assert manager.get_session("shared-id") is state
 
 

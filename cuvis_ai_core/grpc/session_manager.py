@@ -121,14 +121,16 @@ class SessionManager:
         logger.info(f"Created session: {session_id}")
         return session_id
 
-    def create_session_with_id(self, session_id: str) -> str:
-        """Create a session with a caller-supplied id.
+    def create_session_with_id(self, session_id: str) -> None:
+        """Create a session under a caller-supplied id.
 
         Used by the child runtime's ``InitializeSession`` so the
         parent and child share the same ``session_id`` across the
         gRPC boundary. The public ``CreateSession`` RPC stays empty
         and server-generated; this method is only reachable via the
-        internal ``RunRuntime`` service.
+        internal ``RunRuntime`` service. The id is supplied by the
+        caller, so nothing is returned; reach the session via
+        ``get_session(session_id)``.
         """
         if not session_id:
             raise ValueError("session_id must be non-empty")
@@ -136,13 +138,12 @@ class SessionManager:
             logger.debug(
                 f"Session {session_id} already exists; reusing without re-initialising."
             )
-            return session_id
+            return
         self._sessions[session_id] = SessionState(
             session_id=session_id,
             node_registry=NodeRegistry(),
         )
         logger.info(f"Created session with caller-supplied id: {session_id}")
-        return session_id
 
     def get_session(self, session_id: str) -> SessionState:
         """Return the session state, updating last_accessed."""
