@@ -2,7 +2,7 @@
 
 ## 0.7.1 - 2026-06-10
 
-- **Security:** raised dependency floors for transitively-pulled packages so downstream plugins inherit the fix instead of pinning each individually: `gitpython>=3.1.50` (CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w), plus new direct floors `idna>=3.15` (CVE-2026-45409), `urllib3>=2.7.0` (PYSEC-2026-141 / 142), and `aiohttp>=3.14.0` (CVE-2026-34993 / 47265). Re-locked `uv.lock`.
+- **Security:** raised dependency floors for transitively-pulled packages so downstream plugins inherit the fix instead of pinning each individually: `gitpython>=3.1.50` (CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w), plus new direct floors `idna>=3.18` (CVE-2026-45409), `urllib3>=2.7.0` (PYSEC-2026-141 / 142), and `aiohttp>=3.14.1` (CVE-2026-34993 / 47265). Re-locked `uv.lock`.
 
 ## 0.7.0 - 2026-06-09
 
