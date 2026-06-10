@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 - 2026-06-08
+## 0.7.0 - 2026-06-09
 
 - Added the **child-env-per-run orchestrator** (new `cuvis_ai_core/orchestrator/` package): `cache_key` (a structured per-run venv key), `runtime_project` (generates the child `pyproject.toml`), `composer` (atomic build+publish via `filelock`, `uv lock` / `uv sync`, cache hits and broken-dir recovery), `spawner`, `venv_paths`, `uv_runner`, and `catalog`; plus `grpc/orchestrator_bridge.py`. The child runtime becomes the server's **sole** execution path — `LoadPipeline` / `Inference` / `Train` / `RestoreTrainRun` route through the orchestrator unconditionally.
 - Added the **child runtime** (`cuvis_ai_core/run_runtime/`, run via `python -m cuvis_ai_core.run_runtime`); its `InitializeSession` registers the resolved plugin set via `NodeRegistry.register_preinstalled`, which imports already-installed plugin packages without re-installing, cloning, or mutating `sys.path`.
@@ -15,6 +15,10 @@
 - Reworked `node_registry` to two instance dicts: `plugin_catalog` (every known plugin's config, the single config source) and `loaded_plugin_nodes` (`{class_name -> node class}`, renamed from `plugin_registry`). Dropped the redundant `plugin_configs` dict, the unused `cache_dir` / `plugin_class_map` fields, and the standalone `pipeline/restore_preinstalled.py` module (folded into `NodeRegistry.register_preinstalled`). A plugin is "loaded" iff its classes are in `loaded_plugin_nodes`, so `clear_plugins` now clears both dicts and a loaded plugin's catalog config can't be silently replaced. The rename reaches `cuvis_ai_schemas.is_plugin`, so the `cuvis-ai-schemas[proto]` floor is bumped to `>=0.5.1`. Re-export the `cuvis_ai_core_pb2` type stub from cuvis-ai-schemas so the proto types have a single source of truth.
 - Orchestrator robustness: child-runtime spawn timeouts are env-configurable; child stdout/stderr is routed to files (not `subprocess.PIPE`); relative config paths resolve against the server cwd; local plugins are pinned by `[project]` name rather than manifest key; the child env keeps `LD_LIBRARY_PATH` (dropping it as a CUDA var made the child interpreter exit 127 before Python ran on runners that resolve libs via it).
 - Extended `scripts/audit_plugin_deps.py` for per-plugin CI and bumped stale dependency floors; added the `.github/workflows/dep_compat.yml` host-floor check and synced `uv.lock`. Added a `ruamel.yaml` dev dependency for the comment-preserving metadata emitter.
+- Pipeline serialization now carries the declared `plugins:` field, so a saved pipeline keeps the mandatory field and reloads under the new contract: the builder records the declared plugin names and `serialize()` re-emits them.
+- The per-run composer resolves for the composing host: the generated runtime `pyproject.toml` declares the host as a uv `required-environments`, so the child venv installs a wheel that exists for it. On Windows this backtracks `cuvis-il` to 3.5.0 (3.5.3.x ship manylinux-only wheels, no `win_amd64`); on Linux it keeps the latest.
+- Orchestrator lifecycle hardening: server shutdown closes every open session so its child runtime is terminated instead of leaking as an orphaned subprocess; each session's per-run scratch root is removed on close; the in-process composer lock map is a `WeakValueDictionary` (no per-build leak on a long-lived server); the child-env deny-list covers more credential carriers.
+- Re-registered the `Lentils` public dataset (`cubert-gmbh/XMR_Lentils`, `target_dir: Lentils`) so `uv run dataset download Lentils` lands the single-session test cube at `data/Lentils/Lentils_000.cu3s`, the path the training-backed tests read.
 
 ## 0.6.0 - 2026-05-11
 
