@@ -140,6 +140,12 @@ class PublicDatasets:
     # ------------------------------------------------------------------
 
     _datasets: dict[str, dict] = {
+        "Lentils": {
+            "repo_id": "cubert-gmbh/XMR_Lentils",
+            "target_dir": "Lentils",
+            "description": "Single lentil-conveyor CU3S session (Lentils_000) used by the cuvis-ai-core test suite",
+            "size": "~920MB",
+        },
         "Demo_Industrial_FOD_Lentils": {
             "repo_id": "cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils",
             "target_dir": "XMR_Demo_Industrial_Foreign_Object_Detection_Lentils",
@@ -161,6 +167,7 @@ class PublicDatasets:
     }
 
     # Convenience aliases
+    _datasets["lentils"] = _datasets["Lentils"]
     _datasets["demo_industrial_fod_lentils"] = _datasets["Demo_Industrial_FOD_Lentils"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
     _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]

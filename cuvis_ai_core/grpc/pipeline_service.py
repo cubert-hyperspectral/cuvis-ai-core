@@ -79,7 +79,14 @@ class PipelineService:
         request: cuvis_ai_pb2.SetTrainRunConfigRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SetTrainRunConfigResponse:
-        """Persist trainrun configuration and apply pipeline precedence logic."""
+        """Attach data/training/trainrun config to a session with an already-built pipeline.
+
+        Pipeline construction is an explicit step: callers must call
+        ``LoadPipeline`` (or ``RestoreTrainRun``) before
+        ``SetTrainRunConfig``. The trainrun config's optional embedded
+        ``pipeline:`` section is rejected — there is exactly one entry
+        point for pipeline creation, not two.
+        """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
         )
@@ -93,46 +100,29 @@ class PipelineService:
 
         trainrun_config = TrainRunConfig.from_proto(request.config)
 
-        if session.pipeline is not None:
-            # If a pipeline already exists, only error when the trainrun also supplies one.
-            if trainrun_config.pipeline is not None:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "Pipeline already exists. Either remove the pipeline from the session "
-                    "manually or don't pass a pipeline in the trainrun config."
-                )
-                return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
-        else:
-            # No pipeline in session; require trainrun to supply it and build.
-            if trainrun_config.pipeline is None:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "No pipeline exists and no pipeline configuration provided in trainrun "
-                    "config."
-                )
-                return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
-
-            from cuvis_ai_core.pipeline.factory import PipelineBuilder
-
-            pipeline = PipelineBuilder(
-                node_registry=session.node_registry
-            ).build_from_config(trainrun_config.pipeline.to_dict())
-            # Move pipeline to GPU if available
-            if torch.cuda.is_available():
-                pipeline = pipeline.to("cuda")
-            self.session_manager.set_pipeline(
-                request.session_id,
-                pipeline,
-                pipeline_config=trainrun_config.pipeline,
+        if session.pipeline is None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(
+                "No pipeline attached to the session. Call LoadPipeline "
+                "(or RestoreTrainRun) before SetTrainRunConfig."
             )
+            return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
 
-        # Set session configurations
+        if trainrun_config.pipeline is not None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(
+                "Trainrun config carries a 'pipeline:' section; "
+                "SetTrainRunConfig does not build pipelines. Remove the "
+                "pipeline section and call LoadPipeline explicitly first."
+            )
+            return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
+
         session.data_config = trainrun_config.data
         session.training_config = trainrun_config.training
         session.trainrun_config = trainrun_config
 
         return cuvis_ai_pb2.SetTrainRunConfigResponse(
-            success=True, pipeline_from_config=True
+            success=True, pipeline_from_config=False
         )
 
     @grpc_handler("Failed to save pipeline")
@@ -199,12 +189,16 @@ class PipelineService:
         request: cuvis_ai_pb2.LoadPipelineRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPipelineResponse:
-        """Load pipeline structure from resolved config bytes.
+        """Build a pipeline from resolved config bytes and attach it to the session.
 
-        Expected workflow:
-        1) ResolveConfig to produce JSON config bytes
-        2) LoadPipeline to build pipeline structure
-        3) LoadPipelineWeights to load weights (optional, explicit)
+        This method is the **in-process** body that runs inside the
+        child runtime. Plugins must already be registered on
+        ``session.node_registry`` (via
+        :meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`,
+        which the child invokes from ``InitializeSession``). Plugin
+        resolution and dependency installation happen at the
+        orchestrator level — see
+        :mod:`cuvis_ai_core.grpc.orchestrator_bridge`.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -228,7 +222,6 @@ class PipelineService:
         pipeline = PipelineBuilder(
             node_registry=session.node_registry
         ).build_from_config(pipeline_config.to_dict())
-        # Move pipeline to GPU if available
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
 
@@ -243,7 +236,6 @@ class PipelineService:
             if getattr(pipeline_config, "metadata", None)
             else cuvis_ai_pb2.PipelineMetadata()
         )
-
         return cuvis_ai_pb2.LoadPipelineResponse(success=True, metadata=metadata_proto)
 
 

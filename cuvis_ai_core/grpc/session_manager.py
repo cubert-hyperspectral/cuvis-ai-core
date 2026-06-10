@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -38,9 +39,24 @@ class SessionState:
     )
     is_training: bool = False
     trainer: Any | None = None
-    loaded_plugins: dict[str, dict] = field(
-        default_factory=dict
-    )  # NEW: Track loaded plugins
+    # Plugins registered into this session's catalog. This dict tracks what
+    # the session *knows about* (parsed manifest entries), NOT what has been
+    # installed/imported. The full config of every known plugin lives in
+    # ``node_registry.plugin_catalog``; the loaded class set is in
+    # ``node_registry.loaded_plugin_nodes``. On the wire this is the
+    # ``registered_plugins`` field of ``LoadPluginsResponse``.
+    registered_plugins: dict[str, dict] = field(default_factory=dict)
+    # Orchestrator state, populated once the parent has spawned a child
+    # runtime for this session. The handle keeps the child alive;
+    # ``resolved_plugins`` is the dict the parent computed via
+    # ``resolve_pipeline_plugins`` and forwarded to the child via
+    # ``InitializeSession``.
+    child_handle: Any | None = None
+    resolved_plugins: dict[str, Any] | None = None
+    # Per-session scratch root the orchestrator created for the child runtime
+    # (HOME / TEMP / output redirect). Removed on close so child logs and
+    # HF/torch caches don't accumulate under the system temp dir.
+    runtime_base_dir: Path | None = None
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -104,6 +120,30 @@ class SessionManager:
         self._sessions[session_id] = state
         logger.info(f"Created session: {session_id}")
         return session_id
+
+    def create_session_with_id(self, session_id: str) -> None:
+        """Create a session under a caller-supplied id.
+
+        Used by the child runtime's ``InitializeSession`` so the
+        parent and child share the same ``session_id`` across the
+        gRPC boundary. The public ``CreateSession`` RPC stays empty
+        and server-generated; this method is only reachable via the
+        internal ``RunRuntime`` service. The id is supplied by the
+        caller, so nothing is returned; reach the session via
+        ``get_session(session_id)``.
+        """
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        if session_id in self._sessions:
+            logger.debug(
+                f"Session {session_id} already exists; reusing without re-initialising."
+            )
+            return
+        self._sessions[session_id] = SessionState(
+            session_id=session_id,
+            node_registry=NodeRegistry(),
+        )
+        logger.info(f"Created session with caller-supplied id: {session_id}")
 
     def get_session(self, session_id: str) -> SessionState:
         """Return the session state, updating last_accessed."""
@@ -206,10 +246,35 @@ class SessionManager:
         self._cleanup_pipeline(pipeline)
 
         # Clear plugin tracking (GC will handle registry cleanup automatically)
-        state.loaded_plugins.clear()
+        state.registered_plugins.clear()
         state.data_config = None
         state.training_config = None
         state.trainrun_config = None
+
+        # Terminate any child runtime bound to this session (orchestrator path).
+        child = state.child_handle
+        state.child_handle = None
+        state.resolved_plugins = None
+        if child is not None:
+            try:
+                child.terminate(grace_s=5.0)
+            except Exception as exc:
+                logger.warning(
+                    f"Child runtime termination raised during close_session: {exc}"
+                )
+                try:
+                    child.kill()
+                except Exception as kill_exc:
+                    logger.warning(f"Child runtime kill also raised: {kill_exc}")
+
+        # Drop the child's scratch root now that it has exited (its file
+        # handles are released). Best-effort: a failure here must not block
+        # session teardown. Done after termination so the child isn't still
+        # writing into the tree.
+        runtime_base_dir = state.runtime_base_dir
+        state.runtime_base_dir = None
+        if runtime_base_dir is not None:
+            shutil.rmtree(runtime_base_dir, ignore_errors=True)
 
         logger.info(f"Closed session: {session_id}")
 

@@ -10,6 +10,9 @@ metadata:
   author: Cubert GmbH
   cuvis_ai_version: ''
 
+plugins:
+- cuvis_ai_test_nodes
+
 nodes:
 - name: LentilsAnomalyDataNode
   class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode

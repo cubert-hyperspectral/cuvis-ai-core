@@ -713,6 +713,7 @@ dependencies = [
     { name = "cuvis-ai-schemas", extra = ["proto"] },
     { name = "dataclass-wizard" },
     { name = "dotenv" },
+    { name = "filelock" },
     { name = "gitpython" },
     { name = "graphviz" },
     { name = "grpcio" },
@@ -722,6 +723,7 @@ dependencies = [
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "opencv-python-headless" },
+    { name = "packaging" },
     { name = "pillow" },
     { name = "protobuf" },
     { name = "pycocotools" },
@@ -731,6 +733,7 @@ dependencies = [
     { name = "ruff" },
     { name = "scikit-image" },
     { name = "scikit-learn" },
+    { name = "tomli-w" },
     { name = "torch" },
     { name = "torchvision" },
     { name = "typing-extensions" },
@@ -751,6 +754,7 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "ruamel-yaml" },
     { name = "ruff" },
     { name = "twine" },
     { name = "types-protobuf" },
@@ -769,13 +773,14 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "click", specifier = ">=8.0" },
+    { name = "click", specifier = ">=8.3.1" },
     { name = "cuvis", specifier = ">=3.5.0" },
-    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.4.0" },
+    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.5.1" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "dataclass-wizard" },
+    { name = "dataclass-wizard", specifier = ">=0.39.1" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
+    { name = "filelock", specifier = ">=3.20.3" },
     { name = "gitpython", specifier = ">=3.1.46" },
     { name = "graphviz", specifier = ">=0.21" },
     { name = "grpcio", specifier = ">=1.76.0" },
@@ -791,6 +796,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.1" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "opencv-python-headless", specifier = ">=4.13.0.92" },
+    { name = "packaging", specifier = ">=25.0" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0" },
     { name = "pip-licenses", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -806,12 +812,14 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "pytorch-lightning", specifier = ">=2.6.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ruamel-yaml", marker = "extra == 'dev'", specifier = ">=0.18" },
     { name = "ruff", specifier = ">=0.14.13" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scikit-image", specifier = ">=0.26.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
+    { name = "tomli-w", specifier = ">=1.2.0" },
     { name = "torch", specifier = ">=2.11.0", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "torchvision", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torchvision", specifier = ">=0.26.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=6.2.0" },
     { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=5.29.2" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -821,15 +829,15 @@ provides-extras = ["hf", "dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.4.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/16/0e5ce1a9e968cb0bf755b52af436b2fbd852b519918ac972fb225325456c/cuvis_ai_schemas-0.4.0.tar.gz", hash = "sha256:3b507eb22b520725fa03c1038e726c229f613184b3cf220d12b6d69adab9747a", size = 141470, upload-time = "2026-04-29T10:42:42.37Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/47/1ede9623c278c63901c0f50fae8d181163e19f02676d331792b3b8949c4a/cuvis_ai_schemas-0.5.1.tar.gz", hash = "sha256:a63aae2661126e36d4fee2e232f3e8cc1993c60aa58c91d405579a27821dd4ef", size = 225117, upload-time = "2026-06-09T11:28:57.94Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/7b/7d3811c009ce326959bb6a08579628d0a3fd6dd3557e96c873dc54cef8fd/cuvis_ai_schemas-0.4.0-py3-none-any.whl", hash = "sha256:4ee89ed8e253c1302e224da5edca28078bb8b5306ed1408ecfb2b75ad9072eba", size = 60150, upload-time = "2026-04-29T10:42:40.665Z" },
+    { url = "https://files.pythonhosted.org/packages/87/96/04e574ee7b7eb62fcb58ca367ed45947f52b44d83c856d4964b013a9adf3/cuvis_ai_schemas-0.5.1-py3-none-any.whl", hash = "sha256:3df85fbff333a0d7f2f760df18f48b0958b344d40366b1d1250d3d802ff16171", size = 66089, upload-time = "2026-06-09T11:28:56.281Z" },
 ]
 
 [package.optional-dependencies]
@@ -3689,6 +3697,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/13/64/b4d76f227d5c45a7e0b796c674fd81b0a6c4fbd48dc29271857d8219571c/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_aarch64.whl", hash = "sha256:dff13836529b921e22f15cb099751209a60009731a68519630a24d61f0b1b30a", size = 573981, upload-time = "2025-11-30T20:24:32.934Z" },
     { url = "https://files.pythonhosted.org/packages/20/91/092bacadeda3edf92bf743cc96a7be133e13a39cdbfd7b5082e7ab638406/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:1b151685b23929ab7beec71080a8889d4d6d9fa9a983d213f07121205d48e2c4", size = 599782, upload-time = "2025-11-30T20:24:35.169Z" },
     { url = "https://files.pythonhosted.org/packages/d1/b7/b95708304cd49b7b6f82fdd039f1748b66ec2b21d6a45180910802f1abf1/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:ac37f9f516c51e5753f27dfdef11a88330f04de2d564be3991384b2f3535d02e", size = 562191, upload-time = "2025-11-30T20:24:36.853Z" },
+]
+
+[[package]]
+name = "ruamel-yaml"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb7652cb1c7e4f91f48649fbcd8d2eb2fb6e77cd3329b/ruamel_yaml-0.19.1.tar.gz", hash = "sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993", size = 142709, upload-time = "2026-01-02T16:50:31.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
 ]
 
 [[package]]

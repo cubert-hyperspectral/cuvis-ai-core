@@ -198,12 +198,12 @@ def test_card_omits_plugin_pill_for_unknown_classes_by_default():
 
 
 def test_card_marks_plugins_when_registry_lists_them():
-    """Passing a NodeRegistry with the class in plugin_registry adds the pill."""
+    """Passing a NodeRegistry with the class in loaded_plugin_nodes adds the pill."""
     from cuvis_ai_core.utils.node_registry import NodeRegistry
 
     pipeline, *_ = _build_pipeline()
     registry = NodeRegistry()
-    registry.plugin_registry["ProducerNode"] = ProducerNode
+    registry.loaded_plugin_nodes["ProducerNode"] = ProducerNode
 
     dot = PipelineVisualizer(pipeline).to_graphviz(node_registry=registry)
 
@@ -289,7 +289,7 @@ def test_card_style_emits_one_wire_per_port_with_anchors():
 
 class VariadicSink(Node):
     INPUT_SPECS = {
-        "items": [PortSpec(dtype=list, shape=(), optional=True)],
+        "items": PortSpec(dtype=list, shape=(), optional=True, variadic=True),
     }
     OUTPUT_SPECS: dict[str, PortSpec] = {}
 
@@ -307,13 +307,10 @@ class ListProducer(Node):
         return {"out": []}
 
 
-def test_card_renders_variadic_list_port_specs_without_crashing():
-    """Regression: nodes whose INPUT_SPECS declare a variadic port as
-    `[PortSpec(...)]` (e.g. TensorBoardMonitorNode) used to crash the
-    card renderer with `AttributeError: 'list' object has no attribute
-    'dtype'` because the visualizer accessed `spec.dtype` on the raw
-    list. The renderer now unwraps the element spec the same way
-    pipeline.py does."""
+def test_card_renders_variadic_port_specs_without_crashing():
+    """A variadic input port (PortSpec(..., variadic=True), e.g.
+    TensorBoardMonitorNode) renders in both graphviz and mermaid without
+    crashing the card renderer."""
     pipeline = CuvisPipeline("variadic")
     producer = ListProducer(name="prod")
     sink = VariadicSink(name="sink")
@@ -330,16 +327,6 @@ def test_card_renders_variadic_list_port_specs_without_crashing():
 
     mermaid = visualizer.to_mermaid()
     assert mermaid.startswith("flowchart")
-
-
-def test_unwrap_spec_normalizes_list_and_passthrough():
-    """Direct test of the helper that mirrors pipeline.py's
-    `if isinstance(spec, list): spec = spec[0]` convention."""
-    inner = PortSpec(dtype=list, shape=())
-    assert PipelineVisualizer._unwrap_spec([inner]) is inner
-    assert PipelineVisualizer._unwrap_spec(inner) is inner
-    assert PipelineVisualizer._unwrap_spec(None) is None
-    assert PipelineVisualizer._unwrap_spec([]) is None
 
 
 def test_format_edge_label_returns_empty_in_card_mode():

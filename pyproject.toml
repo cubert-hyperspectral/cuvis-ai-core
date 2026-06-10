@@ -31,10 +31,10 @@ classifiers = [
 
 dependencies = [
     "cuvis>=3.5.0",
-    "cuvis-ai-schemas[proto]>=0.4.0",
+    "cuvis-ai-schemas[proto]>=0.5.1",
     # Core framework dependencies
     "torch>=2.11.0",
-    "torchvision",
+    "torchvision>=0.26.0",
     "pytorch-lightning>=2.6.0",
     # Configuration and orchestration
     "hydra-core>=1.3.2",
@@ -53,14 +53,18 @@ dependencies = [
     # Type hints and validation
     "typing-extensions>=4.15.0",
     "pydantic>=2.12.5",
-    "dataclass-wizard",
+    "dataclass-wizard>=0.39.1",
     "dotenv>=0.9.9",
     "ruff>=0.14.13",
     "scikit-image>=0.26.0",
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
-    "click>=8.0",
+    "click>=8.3.1",
+    "packaging>=25.0",
+    # Per-run child-env composer (orchestrator package)
+    "filelock>=3.20.3",
+    "tomli-w>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +81,8 @@ dev = [
     "types-PyYAML>=6.0.0",
     "pytest",
     "pytest-cov",
+    # Comment-preserving YAML round-trip for scripts/emit_metadata.py
+    "ruamel.yaml>=0.18",
     "ipympl>=0.9.8",
     "ipdb>=0.13.13",
     "psutil",
@@ -108,10 +114,13 @@ Changelog = "https://github.com/cubert-hyperspectral/cuvis-ai-core/blob/main/CHA
 restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
 restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
+suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
+audit-plugin-deps = "scripts.audit_plugin_deps:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cuvis_ai_core"]
+include = ["cuvis_ai_core", "scripts*"]
+namespaces = true
 
 [tool.black]
 line-length = 88
@@ -183,7 +192,4 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-icons", editable = true }
-# cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "nima/features/tracking" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/schemas-tracking", editable = true }
-
+# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }

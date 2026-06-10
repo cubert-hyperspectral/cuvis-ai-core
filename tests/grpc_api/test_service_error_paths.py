@@ -134,7 +134,7 @@ class TestPluginServiceErrors:
             session_id="nonexistent",
         )
         response = self.service.load_plugins(request, self.ctx)
-        assert len(response.loaded_plugins) == 0
+        assert len(response.registered_plugins) == 0
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
     def test_list_loaded_plugins_invalid_session(self):

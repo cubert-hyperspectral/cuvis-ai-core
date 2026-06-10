@@ -25,6 +25,20 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
 
+    # The session below replaces its search paths with config_dir, so the
+    # plugin manifest the pipeline references must live under config_dir/plugins.
+    plugins_dir = config_dir / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "cuvis_ai_test_nodes.yaml").write_text(
+        "plugins:\n"
+        "  cuvis_ai_test_nodes:\n"
+        "    path: '.'\n"
+        "    provides:\n"
+        "      - class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode\n"
+        "      - class_name: tests.fixtures.mock_nodes.SoftChannelSelector\n",
+        encoding="utf-8",
+    )
+
     pipeline_definition = copy.deepcopy(minimal_pipeline_dict)
     pipeline_definition.pop("version", None)
 

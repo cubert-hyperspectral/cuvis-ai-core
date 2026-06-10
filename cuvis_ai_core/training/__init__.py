@@ -38,7 +38,7 @@ __all__ = [
     "Context",
     # Inference
     "Predictor",
-    # External Trainers (Phase 4.7)
+    # Trainers
     "GradientTrainer",
     "StatisticalTrainer",
 ]

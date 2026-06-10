@@ -22,7 +22,7 @@ class SessionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.CreateSessionResponse:
         """Create a new session with pipeline configuration."""
-        # Phase 4: allow parameter-less creation (explicit pipeline setup via BuildPipeline)
+        # Parameter-less creation; explicit pipeline setup happens via BuildPipeline.
         session_id = self.session_manager.create_session()
         return cuvis_ai_pb2.CreateSessionResponse(session_id=session_id)
 

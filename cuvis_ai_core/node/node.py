@@ -58,8 +58,8 @@ class Node(nn.Module, ABC, Serializable):
         ...         super().load_state_dict(state_dict)
     """
 
-    INPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
-    OUTPUT_SPECS: dict[str, PortSpec | list[PortSpec]] = {}
+    INPUT_SPECS: dict[str, PortSpec] = {}
+    OUTPUT_SPECS: dict[str, PortSpec] = {}
     TRAINABLE_BUFFERS: tuple[str, ...] = ()
 
     # Node taxonomy metadata. Subclasses override on the class body; populated
@@ -329,7 +329,14 @@ class Node(nn.Module, ABC, Serializable):
 
     def _create_ports(self) -> None:
         """Create port proxy objects from class-level specifications."""
+        cls_name = type(self).__name__
         for port_name, port_spec in self.INPUT_SPECS.items():
+            if isinstance(port_spec, list):
+                raise TypeError(
+                    f"{cls_name}.INPUT_SPECS['{port_name}'] is a list. List-form specs "
+                    "are no longer supported — declare a single PortSpec and set "
+                    "PortSpec(..., variadic=True) for fan-in ports."
+                )
             if port_name in self._input_ports:
                 raise AttributeError(
                     f"Cannot create input port '{port_name}'; attribute already exists."
@@ -338,6 +345,16 @@ class Node(nn.Module, ABC, Serializable):
             self._input_ports[port_name] = input_port
 
         for port_name, port_spec in self.OUTPUT_SPECS.items():
+            if isinstance(port_spec, list):
+                raise TypeError(
+                    f"{cls_name}.OUTPUT_SPECS['{port_name}'] is a list. List-form specs "
+                    "are no longer supported — declare a single PortSpec."
+                )
+            if getattr(port_spec, "variadic", False):
+                raise TypeError(
+                    f"{cls_name}.OUTPUT_SPECS['{port_name}'] sets variadic=True. "
+                    "variadic applies to input ports only."
+                )
             if port_name in self._output_ports:
                 raise AttributeError(
                     f"Cannot create output port '{port_name}'; attribute already exists."

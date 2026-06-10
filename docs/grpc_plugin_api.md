@@ -1,552 +1,344 @@
 # gRPC Plugin Management API
 
-This document describes the plugin management capabilities exposed via the cuvis-ai-core gRPC API.
+This document describes the plugin-management RPCs exposed by the cuvis-ai-core gRPC server
+(`CuvisAIService`). It covers how a client registers plugins, inspects the available node
+catalog, and runs a pipeline that uses plugin nodes.
 
 ## Overview
 
-The plugin management API allows clients to:
-- Load custom nodes dynamically from Git repositories or local paths
-- Query loaded plugins and available nodes
-- Manage plugin cache
-- Isolate plugins per session for multi-tenant safety
+The plugin API lets a client:
 
-## Key Concepts
+- **Register** plugins (Git or local) into a session as catalog metadata.
+- **Inspect** the node palette — built-in nodes plus the static catalog of every registered plugin.
+- **Run** a pipeline that references those plugins; the server materialises (clones, installs,
+  imports) each plugin lazily, in an isolated per-pipeline environment.
 
-### Session-Scoped Plugins
+### Register, then materialise
 
-Plugins are loaded **per-session**, ensuring isolation between concurrent clients:
+This is the central concept and the biggest difference from older versions:
+
+1. `LoadPlugins` is **register-only**. It parses the manifest, validates each entry, and records
+   its catalog metadata in the session. It does **not** clone, install, or import anything. The
+   response field is `registered_plugins` (names registered as metadata), not "loaded".
+2. A plugin is **materialised lazily** when `LoadPipeline` loads a pipeline whose top-level
+   `plugins:` list references that plugin. At that point the server composes an isolated
+   environment containing exactly the plugins the pipeline declares, installs them, and runs the
+   pipeline there. **Install/import failures surface at `LoadPipeline`, not `LoadPlugins`.**
+
+This split keeps the server process clean: a plugin's dependencies are never installed into the
+server's own environment, so conflicting plugin dependencies cannot corrupt the server.
+
+### The inline node catalog
+
+A plugin manifest entry's `provides:` list **is** the plugin's node catalog. Each entry is one
+node — a fully-qualified `class_name` plus optional palette metadata (category, tags, icon,
+per-port specs, doc summary). `ListAvailableNodes` serves this catalog **without importing any
+plugin code**, so the palette is available before a plugin is ever installed.
+
+### Session isolation
+
+Plugins are registered **per session**. A plugin registered in session A is not visible in
+session B, and a session's registrations are dropped when it closes.
 
 ```
 Session A                    Session B
-  ├─ Plugin X                  ├─ Plugin Y
-  │   └─ NodeX                 │   └─ NodeY
-  └─ Builtin Nodes             └─ Builtin Nodes
+  ├─ registers plugin X        ├─ registers plugin Y
+  └─ builtin nodes             └─ builtin nodes
 ```
 
-- Session A can use NodeX (not visible to Session B)
-- Session B can use NodeY (not visible to Session A)
-- Both sessions can use builtin nodes
-- Plugins are auto-cleaned when session closes
+## Plugin configuration
 
-### Plugin Types
+Manifests are the Pydantic models in `cuvis_ai_schemas.plugin`. A manifest is a mapping of
+logical plugin name → plugin config.
 
-**Git Plugin**: Load from Git repository
+**Git plugin** — pinned to a Git **tag** (branches and commit hashes are intentionally not
+supported, for reproducibility):
+
 ```python
+from cuvis_ai_schemas.plugin import GitPluginConfig
+
 GitPluginConfig(
-    repo="git@gitlab.example.com:org/plugin.git",
-    ref="v1.2.3",  # Tag, branch, or commit
-    provides=["plugin.nodes.CustomNode"]
+    repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",  # git@ or https://
+    tag="v1.2.3",                                                      # tag only
+    provides=[{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}],
+    package_name="cuvis-ai-adaclip",  # optional: real [project].name if it differs from the key
 )
 ```
 
-**Local Plugin**: Load from filesystem
+**Local plugin** — a filesystem path (absolute, or relative to the manifest file):
+
 ```python
+from cuvis_ai_schemas.plugin import LocalPluginConfig
+
 LocalPluginConfig(
-    path="/path/to/plugin",
-    provides=["plugin.nodes.CustomNode"]
+    path="../my-plugin",
+    provides=[{"class_name": "my_plugin.node.MyNode"}],
 )
+```
+
+**`provides` entries** are `CatalogNodeEntry` objects, not bare strings. `class_name` (an FQCN)
+is required; the rest are optional palette metadata:
+
+```python
+{
+    "class_name": "my_plugin.node.MyNode",   # required, fully-qualified
+    "category": "model",                      # NodeCategory value
+    "tags": ["torch", "inference"],
+    "icon_svg": "<svg ...></svg>",
+    "input_specs":  {"data":   {"dtype": "float32", "shape": [-1, -1, -1, -1]}},
+    "output_specs": {"scores": {"dtype": "float32", "shape": [-1, -1, -1, 1]}},
+    "doc_summary": "One-line description for the palette.",
+}
 ```
 
 ## RPCs
 
+All plugin RPCs live on `CuvisAIService`.
+
 ### LoadPlugins
 
-Load plugins from a manifest into a session.
+Register the manifest's plugins as catalog metadata in a session. **No install, no import.**
 
-**Request**: `LoadPluginsRequest`
+**Request / Response**
+
 ```protobuf
 message LoadPluginsRequest {
   string session_id = 1;
-  PluginManifest manifest = 2;  // JSON-serialized Pydantic manifest
+  PluginManifest manifest = 2;     // PluginManifest{ bytes config_bytes }
 }
-```
 
-**Response**: `LoadPluginsResponse`
-```protobuf
 message LoadPluginsResponse {
-  repeated string loaded_plugins = 1;        // Successfully loaded
-  map<string, string> failed_plugins = 2;    // name → error message
+  repeated string registered_plugins = 1;   // registered as catalog metadata (NOT installed)
+  map<string, string> failed_plugins = 2;   // name → Pydantic validation error
 }
 ```
 
-**Python Example**:
+`PluginManifest.config_bytes` is the JSON of the Pydantic `PluginManifest`
+(`manifest.model_dump_json().encode()`).
+
+**Python example**
+
 ```python
-from cuvis_ai_core.utils.plugin_config import PluginManifest, GitPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest, GitPluginConfig
 
 manifest = PluginManifest(
     plugins={
-        "custom_detector": GitPluginConfig(
-            repo="git@example.com:org/detector-plugin.git",
-            ref="v2.0.0",
-            provides=["detector_plugin.CustomDetector"]
+        "adaclip": GitPluginConfig(
+            repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",
+            tag="v1.2.3",
+            provides=[{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}],
         )
     }
 )
 
 response = client.LoadPlugins(
-    cuvis_ai_core_pb2.LoadPluginsRequest(
+    cuvis_ai_pb2.LoadPluginsRequest(
         session_id=session_id,
-        manifest=cuvis_ai_core_pb2.PluginManifest(
+        manifest=cuvis_ai_pb2.PluginManifest(
             config_bytes=manifest.model_dump_json().encode()
-        )
+        ),
     )
 )
 
-print(f"Loaded: {response.loaded_plugins}")
-print(f"Failed: {dict(response.failed_plugins)}")
+print(f"Registered: {response.registered_plugins}")
+print(f"Failed:     {dict(response.failed_plugins)}")
 ```
 
-**Behavior**:
-- Loads each plugin in the manifest
-- Returns success/failure per plugin (partial failures allowed)
-- Plugins registered in session-scoped registry
-- Tracked in `SessionState.loaded_plugins`
+**Behaviour**
+
+- Validates each manifest entry (Pydantic). Per-entry validation errors go to `failed_plugins`;
+  the other entries still register (partial success).
+- Records each plugin's catalog metadata in the session; tracked in `SessionState.registered_plugins`.
+- Does **not** clone/install/import — that happens at `LoadPipeline` (see below).
 
 ---
 
 ### ListLoadedPlugins
 
-List all plugins loaded in a session.
+List the plugins registered in a session.
 
-**Request**: `ListLoadedPluginsRequest`
 ```protobuf
-message ListLoadedPluginsRequest {
-  string session_id = 1;
-}
-```
-
-**Response**: `ListLoadedPluginsResponse`
-```protobuf
-message ListLoadedPluginsResponse {
-  repeated PluginInfo plugins = 1;
-}
+message ListLoadedPluginsResponse { repeated PluginInfo plugins = 1; }
 
 message PluginInfo {
   string name = 1;
-  string type = 2;        // "git" or "local"
-  string source = 3;      // Repo URL or filesystem path
-  string ref = 4;         // Git ref (if applicable)
-  repeated string provides = 5;  // Class paths provided
+  string type = 2;               // "git" or "local"
+  string source = 3;             // repo URL or filesystem path
+  string tag = 4;                // Git tag (git plugins only)
+  repeated string provides = 5;  // fully-qualified class names
 }
 ```
 
-**Python Example**:
 ```python
-response = client.ListLoadedPlugins(
-    cuvis_ai_core_pb2.ListLoadedPluginsRequest(session_id=session_id)
+resp = client.ListLoadedPlugins(
+    cuvis_ai_pb2.ListLoadedPluginsRequest(session_id=session_id)
 )
-
-for plugin in response.plugins:
-    print(f"Plugin: {plugin.name}")
-    print(f"  Type: {plugin.type}")
-    print(f"  Source: {plugin.source}")
-    print(f"  Provides: {list(plugin.provides)}")
+for p in resp.plugins:
+    print(f"{p.name} [{p.type}] {p.source} {p.tag} → {list(p.provides)}")
 ```
 
 ---
 
 ### GetPluginInfo
 
-Get information about a specific loaded plugin.
+Get one registered plugin's info. Returns `NOT_FOUND` if it isn't registered in the session.
 
-**Request**: `GetPluginInfoRequest`
 ```protobuf
-message GetPluginInfoRequest {
-  string session_id = 1;
-  string plugin_name = 2;
-}
+message GetPluginInfoRequest { string session_id = 1; string plugin_name = 2; }
+message GetPluginInfoResponse { PluginInfo plugin = 1; }
 ```
-
-**Response**: `GetPluginInfoResponse`
-```protobuf
-message GetPluginInfoResponse {
-  PluginInfo plugin = 1;
-}
-```
-
-**Python Example**:
-```python
-response = client.GetPluginInfo(
-    cuvis_ai_core_pb2.GetPluginInfoRequest(
-        session_id=session_id,
-        plugin_name="custom_detector"
-    )
-)
-
-print(f"Type: {response.plugin.type}")
-print(f"Source: {response.plugin.source}")
-print(f"Provides: {list(response.plugin.provides)}")
-```
-
-**Error**: Raises error if plugin not found in session.
 
 ---
 
 ### ListAvailableNodes
 
-List all available nodes (builtin + session plugins).
+List every available node: built-in nodes plus each registered plugin's **inline catalog**. The
+server never imports plugin code to answer this — plugin nodes come purely from the manifest's
+`provides:` metadata. A plugin whose entry provides no nodes contributes nothing to the palette
+(and is logged).
 
-**Request**: `ListAvailableNodesRequest`
 ```protobuf
-message ListAvailableNodesRequest {
-  string session_id = 1;
-}
-```
-
-**Response**: `ListAvailableNodesResponse`
-```protobuf
-message ListAvailableNodesResponse {
-  repeated NodeInfo nodes = 1;
-}
+message ListAvailableNodesResponse { repeated NodeInfo nodes = 1; }
 
 message NodeInfo {
-  string class_name = 1;    // Short name (e.g., "CustomDetector")
-  string full_path = 2;     // Full import path
-  string source = 3;        // "builtin" or "plugin"
-  string plugin_name = 4;   // Plugin name (if source="plugin")
+  string class_name = 1;                    // short display name
+  string full_path  = 2;                    // fully-qualified class path
+  string source     = 3;                    // "builtin", "plugin", or "custom"
+  string plugin_name = 4;                   // set when source = "plugin"
+  map<string, PortSpec> input_specs  = 5;   // one spec per input port
+  map<string, PortSpec> output_specs = 6;   // one spec per output port
+  bytes        icon_svg = 7;                // SVG payload (empty when none)
+  NodeCategory category = 8;
+  repeated NodeTag tags = 9;
+}
+
+message PortSpec {
+  string name = 1;
+  DType  dtype = 2;             // D_TYPE_UNSPECIFIED for generic / non-tensor ports
+  repeated int64 shape = 3;     // -1 for dynamic dimensions
+  bool   optional = 4;
+  string description = 5;
+  bool   variadic = 6;          // inputs only: accepts fan-in from multiple connections
 }
 ```
 
-**Python Example**:
 ```python
-response = client.ListAvailableNodes(
-    cuvis_ai_core_pb2.ListAvailableNodesRequest(session_id=session_id)
+resp = client.ListAvailableNodes(
+    cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
 )
-
-print(f"Available nodes ({len(response.nodes)}):")
-for node in response.nodes:
-    if node.source == "builtin":
-        print(f"  • {node.class_name} (builtin)")
-    else:
-        print(f"  • {node.class_name} (plugin: {node.plugin_name})")
+for node in resp.nodes:
+    where = "builtin" if node.source == "builtin" else f"plugin: {node.plugin_name}"
+    print(f"  • {node.class_name} ({where})")
 ```
 
 ---
 
 ### ClearPluginCache
 
-Clear Git plugin cache (cloned repositories).
+Clear cloned Git plugin repositories from the `NodeRegistry` clone cache.
 
-**Request**: `ClearPluginCacheRequest`
 ```protobuf
-message ClearPluginCacheRequest {
-  string plugin_name = 1;  // Empty string = clear all
-}
+message ClearPluginCacheRequest  { string plugin_name = 1; }  // empty = clear all
+message ClearPluginCacheResponse { int32 cleared_count = 1; }
 ```
 
-**Response**: `ClearPluginCacheResponse`
-```protobuf
-message ClearPluginCacheResponse {
-  int32 cleared_count = 1;  // Number of repos cleared
-}
-```
-
-**Python Example**:
-```python
-# Clear specific plugin cache
-response = client.ClearPluginCache(
-    cuvis_ai_core_pb2.ClearPluginCacheRequest(plugin_name="custom_detector")
-)
-print(f"Cleared {response.cleared_count} repo(s)")
-
-# Clear all plugin caches
-response = client.ClearPluginCache(
-    cuvis_ai_core_pb2.ClearPluginCacheRequest(plugin_name="")
-)
-print(f"Cleared all caches: {response.cleared_count} repo(s)")
-```
-
-**Note**: Does not affect loaded plugins in active sessions.
+> Scope: this clears the Git **clone** cache only. The isolated per-pipeline environments that
+> the orchestrator composes for `LoadPipeline` are managed separately and are not affected by
+> this RPC.
 
 ---
 
-## Complete Workflow Example
+## Complete workflow
 
 ```python
 import grpc
-from cuvis_ai_core.grpc.v1 import cuvis_ai_core_pb2, cuvis_ai_core_pb2_grpc
-from cuvis_ai_core.utils.plugin_config import PluginManifest, GitPluginConfig
+from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
+from cuvis_ai_schemas.plugin import PluginManifest, GitPluginConfig
 
-# 1. Connect to server
+# 1. Connect
 channel = grpc.insecure_channel("localhost:50051")
-client = cuvis_ai_core_pb2_grpc.CuvisAIServiceStub(channel)
+client = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
 
-# 2. Create session
-session_resp = client.CreateSession(cuvis_ai_core_pb2.CreateSessionRequest())
-session_id = session_resp.session_id
-print(f"Session: {session_id}")
+# 2. Create a session
+session_id = client.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id
 
-# 3. Load plugins
+# 3. Register plugins (metadata only — nothing is installed yet)
 manifest = PluginManifest(
     plugins={
-        "detector": GitPluginConfig(
-            repo="git@example.com:ml/detector.git",
-            ref="v1.0.0",
-            provides=["detector.CustomDetector"]
+        "adaclip": GitPluginConfig(
+            repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",
+            tag="v1.2.3",
+            provides=[{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}],
         )
     }
 )
-
-plugin_resp = client.LoadPlugins(
-    cuvis_ai_core_pb2.LoadPluginsRequest(
+reg = client.LoadPlugins(
+    cuvis_ai_pb2.LoadPluginsRequest(
         session_id=session_id,
-        manifest=cuvis_ai_core_pb2.PluginManifest(
-            config_bytes=manifest.model_dump_json().encode()
-        )
+        manifest=cuvis_ai_pb2.PluginManifest(config_bytes=manifest.model_dump_json().encode()),
     )
 )
-print(f"Loaded: {plugin_resp.loaded_plugins}")
+print(f"Registered: {reg.registered_plugins}")
 
-# 4. List available nodes
-nodes_resp = client.ListAvailableNodes(
-    cuvis_ai_core_pb2.ListAvailableNodesRequest(session_id=session_id)
-)
-print(f"Available nodes: {len(nodes_resp.nodes)}")
+# 4. (Optional) inspect the palette — served from the inline catalog, no plugin import
+nodes = client.ListAvailableNodes(
+    cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
+).nodes
 
-# 5. Load pipeline using plugin node
+# 5. Load a pipeline that declares the plugin by bare name.
+#    The plugin is materialised HERE (compose env → install → import).
+#    Install/import errors surface as a LoadPipeline failure.
 pipeline_yaml = """
 metadata:
   name: Detection Pipeline
+plugins:
+  - adaclip          # bare name → resolves to the registered "adaclip" plugin
 nodes:
   - name: detector
-    class: CustomDetector
-    params:
-      threshold: 0.8
+    class_name: cuvis_ai_adaclip.node.AdaCLIPDetector
+    hparams: {}
 connections: []
 """
-
-pipeline_resp = client.LoadPipeline(
-    cuvis_ai_core_pb2.LoadPipelineRequest(
+loaded = client.LoadPipeline(
+    cuvis_ai_pb2.LoadPipelineRequest(
         session_id=session_id,
-        config=cuvis_ai_core_pb2.PipelineConfig(
-            config_bytes=pipeline_yaml.encode()
-        )
+        config=cuvis_ai_pb2.PipelineConfig(config_bytes=pipeline_yaml.encode()),
     )
 )
-print(f"Pipeline loaded: {pipeline_resp.pipeline_id}")
 
-# 6. Run inference
-# ... (existing inference API)
+# 6. Run inference … (see the inference API)
 
-# 7. Close session (auto-cleanup plugins)
-client.CloseSession(cuvis_ai_core_pb2.CloseSessionRequest(session_id=session_id))
-print("Session closed")
+# 7. Close the session (drops the session's plugin registrations)
+client.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 ```
 
----
+## Error handling
 
-## Session Isolation
+`LoadPlugins` reports only **manifest/validation** failures (per entry, in `failed_plugins`):
 
-Plugins loaded in one session **do not affect** other sessions:
+| Failure | Example |
+|---|---|
+| Bad repo URL | `Invalid repo URL '…'. Must start with 'git@', 'https://', or 'http://'` |
+| Branch/commit instead of tag | git plugins accept a **tag** only |
+| Non-FQCN class path | `Invalid class path 'MyNode'. Must be fully-qualified` |
+| Empty `provides` | a plugin must provide at least one node |
 
-```python
-# Session A loads plugin X
-session_a = client.CreateSession(...)
-manifest_a = PluginManifest(plugins={"plugin_x": ...})
-client.LoadPlugins(session_id=session_a.session_id, manifest=manifest_a)
+**Install/import failures happen later, at `LoadPipeline`** — when the declaring pipeline triggers
+materialisation. Examples: clone failure, dependency resolution failure, `ModuleNotFoundError`
+inside the composed environment. They surface as a `LoadPipeline` error, not in
+`LoadPlugins.failed_plugins`.
 
-# Session B loads plugin Y
-session_b = client.CreateSession(...)
-manifest_b = PluginManifest(plugins={"plugin_y": ...})
-client.LoadPlugins(session_id=session_b.session_id, manifest=manifest_b)
+## Best practices
 
-# Session A sees only plugin_x
-nodes_a = client.ListAvailableNodes(session_id=session_a.session_id)
-# → Contains plugin_x nodes, NOT plugin_y nodes
+- **Pin Git plugins by tag.** Branches/commits are not supported; a tag is reproducible.
+- **Keep the manifest `provides:` catalog accurate.** It drives both the palette
+  (`ListAvailableNodes`) and the install/import target — a stale catalog yields a wrong palette.
+- **Reference plugins by bare name** in the pipeline's top-level `plugins:` list; each name must
+  match a registered plugin (or a manifest in the server's plugins directory).
+- **Close sessions** to release their plugin registrations.
 
-# Session B sees only plugin_y
-nodes_b = client.ListAvailableNodes(session_id=session_b.session_id)
-# → Contains plugin_y nodes, NOT plugin_x nodes
-```
+## See also
 
----
-
-## Error Handling
-
-### Partial Failures
-
-`LoadPlugins` reports per-plugin success/failure:
-
-```python
-response = client.LoadPlugins(...)
-
-if response.failed_plugins:
-    for name, error in response.failed_plugins.items():
-        print(f"Failed to load {name}: {error}")
-        
-if response.loaded_plugins:
-    print(f"Successfully loaded: {response.loaded_plugins}")
-```
-
-### Common Errors
-
-**Invalid Repository**:
-```
-failed_plugins: {"bad_plugin": "Repository not found: git@invalid.git"}
-```
-
-**Missing Dependencies**:
-```
-failed_plugins: {"plugin_a": "ModuleNotFoundError: No module named 'torch'"}
-```
-
-**Invalid Provides Path**:
-```
-failed_plugins: {"plugin_b": "Cannot import 'plugin.nonexistent.Node'"}
-```
-
----
-
-## Best Practices
-
-### 1. Version Pin Git Plugins
-
-Use specific tags/commits instead of branch names:
-
-✅ **Good**:
-```python
-GitPluginConfig(repo="...", ref="v1.2.3")  # Reproducible
-```
-
-❌ **Avoid**:
-```python
-GitPluginConfig(repo="...", ref="main")  # Can change over time
-```
-
-### 2. Handle Partial Failures
-
-Check both success and failure lists:
-
-```python
-response = client.LoadPlugins(...)
-
-if response.failed_plugins:
-    # Log failures but continue with loaded plugins
-    logger.warning(f"Some plugins failed: {response.failed_plugins}")
-
-if not response.loaded_plugins:
-    # All plugins failed
-    raise RuntimeError("No plugins loaded successfully")
-```
-
-### 3. Query Available Nodes
-
-Verify plugin nodes are available before building pipeline:
-
-```python
-# Load plugins
-client.LoadPlugins(...)
-
-# Verify node available
-nodes = client.ListAvailableNodes(session_id=session_id)
-available_classes = {node.class_name for node in nodes.nodes}
-
-if "CustomDetector" not in available_classes:
-    raise RuntimeError("CustomDetector not available")
-
-# Now safe to use in pipeline
-client.LoadPipeline(...)
-```
-
-### 4. Close Sessions
-
-Always close sessions to cleanup plugins:
-
-```python
-try:
-    session_id = client.CreateSession(...).session_id
-    client.LoadPlugins(...)
-    # ... work ...
-finally:
-    client.CloseSession(session_id=session_id)
-```
-
-### 5. Cache Management
-
-Clear cache after plugin updates:
-
-```python
-# Clear specific plugin cache after update
-client.ClearPluginCache(plugin_name="my_plugin")
-
-# Reload with new version
-manifest = PluginManifest(
-    plugins={"my_plugin": GitPluginConfig(..., ref="v2.0.0")}
-)
-client.LoadPlugins(...)
-```
-
----
-
-## Advanced Topics
-
-### Custom Plugin Development
-
-See `docs/plugins.md` for creating custom node plugins.
-
-### Local Development
-
-Use `LocalPluginConfig` during development:
-
-```python
-manifest = PluginManifest(
-    plugins={
-        "dev_plugin": LocalPluginConfig(
-            path="/workspace/my-plugin",
-            provides=["dev_plugin.ExperimentalNode"]
-        )
-    }
-)
-```
-
-### Multi-Plugin Pipelines
-
-Load multiple plugins and combine their nodes:
-
-```python
-manifest = PluginManifest(
-    plugins={
-        "detector": GitPluginConfig(...),
-        "classifier": GitPluginConfig(...),
-        "visualizer": LocalPluginConfig(...)
-    }
-)
-
-client.LoadPlugins(...)
-
-# Pipeline using nodes from all plugins
-pipeline_yaml = """
-nodes:
-  - name: detect
-    class: Detector  # from detector plugin
-  - name: classify
-    class: Classifier  # from classifier plugin
-  - name: viz
-    class: Visualizer  # from visualizer plugin
-connections:
-  - from: detect.outputs.detections
-    to: classify.inputs.objects
-  - from: classify.outputs.classes
-    to: viz.inputs.labels
-"""
-```
-
----
-
-## API Reference Summary
-
-| RPC | Purpose | Session-Scoped |
-|-----|---------|----------------|
-| `LoadPlugins` | Load plugins from manifest | ✓ |
-| `ListLoadedPlugins` | List plugins in session | ✓ |
-| `GetPluginInfo` | Get specific plugin details | ✓ |
-| `ListAvailableNodes` | List all available nodes | ✓ |
-| `ClearPluginCache` | Clear Git repo cache | ✗ (global) |
-
----
-
-## See Also
-
-- [Plugin Development Guide](plugins.md)
 - [gRPC API Overview](../README.md#grpc-api)
-- [Example Client](../examples/grpc_plugin_management_client.py)
+- Manifest/config schemas: `cuvis_ai_schemas.plugin` (`GitPluginConfig`, `LocalPluginConfig`,
+  `PluginManifest`) and `cuvis_ai_schemas.catalog` (`CatalogNodeEntry`).

@@ -137,7 +137,9 @@ class TrainingService:
         if session.trainer is None:
             status = cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
         else:
-            status = cuvis_ai_pb2.TRAIN_STATUS_COMPLETE  # Simplified for Phase 5
+            status = (
+                cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+            )  # simplified: no async progress yet
 
         # Create a TrainResponse with the status
         latest_progress = cuvis_ai_pb2.TrainResponse(

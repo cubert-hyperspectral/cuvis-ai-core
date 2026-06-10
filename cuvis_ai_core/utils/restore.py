@@ -19,8 +19,36 @@ from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import GradientTrainer, StatisticalTrainer
 from cuvis_ai_core.training.config import TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
+from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.pipeline import PipelineConfig
+
+
+def _discover_plugins_dirs(
+    pipeline_path: Path,
+    explicit_dirs: list[str | Path] | None,
+) -> list[Path]:
+    """Build the list of candidate plugins directories for the resolver.
+
+    Resolution order (later entries win on plugin-name collisions):
+
+    1. Any ``configs/plugins/`` discovered by walking upward from
+       ``pipeline_path``'s parent.
+    2. Any ``--plugins-dir`` values from the CLI.
+    """
+    candidates: list[Path] = []
+    for ancestor in pipeline_path.resolve().parents:
+        candidate = ancestor / "configs" / "plugins"
+        if candidate.is_dir():
+            candidates.append(candidate)
+            break
+
+    if explicit_dirs:
+        candidates.extend(Path(p) for p in explicit_dirs)
+
+    return candidates
 
 
 class PipelineVisFormat(str, Enum):
@@ -47,7 +75,7 @@ def restore_pipeline(
     annotation_json_path: str | Path | None = None,
     measurement_indices: list[int] | None = None,
     config_overrides: list[str] | None = None,
-    plugins_path: str | Path | None = None,
+    plugins_dirs: list[str | Path] | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
 ) -> CuvisPipeline:
     """Restore pipeline from configuration and weights for inference.
@@ -66,8 +94,12 @@ def restore_pipeline(
         Cuvis processing mode string ("Raw", "Reflectance")
     config_overrides : list[str] | None
         Optional list of config overrides in dot notation (e.g., ["nodes.10.hparams.output_dir=outputs/my_tb"])
-    plugins_path : str | Path | None
-        Optional path to plugins manifest YAML file for loading external plugin nodes
+    plugins_dirs : list[str | Path] | None
+        Optional list of plugins directories to scan for per-plugin
+        manifests. Used by the pipeline-driven plugin resolver
+        When omitted, the resolver still discovers
+        ``configs/plugins/`` siblings by walking up from the pipeline
+        YAML.
     pipeline_vis_ext : PipelineVisFormat | None
         Optional pipeline visualization export format.
         If provided, saves visualization next to the pipeline YAML file.
@@ -87,17 +119,26 @@ def restore_pipeline(
 
     logger.info(f"Loading pipeline from {pipeline_path}")
 
-    # Load plugins if specified
-    registry = None
-    if plugins_path:
-        from cuvis_ai_core.utils.node_registry import NodeRegistry
+    registry: NodeRegistry | None = None
 
-        registry = NodeRegistry()
-        plugins_path = Path(plugins_path)
-        if not plugins_path.exists():
-            raise FileNotFoundError(f"Plugins manifest not found: {plugins_path}")
-        registry.load_plugins(plugins_path)
-        logger.info(f"Loaded plugins from: {plugins_path}")
+    if pipeline_path.is_file():
+        # Pipeline-driven plugin resolution: materialise only what the pipeline declares.
+        # Skip when the file doesn't exist on disk — mocked/programmatic
+        # callers handle pipeline loading downstream without our pre-read.
+        pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
+        candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs)
+        # Only engage the resolver when the user has declared plugins OR a
+        # catalog dir is discoverable. A pipeline that uses only built-in
+        # core nodes needs no resolver pass and loads with no plugin registry.
+        if pipeline_cfg.plugins or candidate_dirs:
+            resolved_plugins = resolve_pipeline_plugins(pipeline_cfg, candidate_dirs)
+            if resolved_plugins:
+                registry = NodeRegistry()
+                for name, cfg in resolved_plugins.items():
+                    registry.load_plugin(name, cfg.model_dump())
+                logger.info(
+                    f"Materialised plugins from pipeline declaration: {sorted(resolved_plugins)}"
+                )
 
     load_device = device if device != "auto" else None
     pipeline = CuvisPipeline.load_pipeline(
@@ -290,7 +331,9 @@ def restore_trainrun(
     with trainrun_path.open("r", encoding="utf-8") as f:
         raw_config = yaml.safe_load(f)
 
-    if isinstance(raw_config, dict) and "defaults" in raw_config:
+    if (  # pragma: no cover - needs a Hydra config tree; covered by data-backed runs
+        isinstance(raw_config, dict) and "defaults" in raw_config
+    ):
         # Config has Hydra defaults - resolve them
         configs_dir = trainrun_path.parent.parent
         relative_path = trainrun_path.relative_to(configs_dir)
@@ -547,10 +590,12 @@ Examples:
         help="Override config values in dot notation. Can be specified multiple times.",
     )
     parser.add_argument(
-        "--plugins-path",
-        type=str,
+        "--plugins-dir",
+        action="append",
         default=None,
-        help="Path to plugins manifest YAML file for loading external plugin nodes",
+        help="Plugins directory containing per-plugin manifest YAML files. "
+        "Can be specified multiple times. The pipeline's `plugins:` field "
+        "(or auto-resolution) looks up entries against the merged catalog.",
     )
     parser.add_argument(
         "--pipeline-vis-ext",
@@ -581,7 +626,7 @@ Examples:
         annotation_json_path=args.annotation_json_path,
         measurement_indices=meas_indices,
         config_overrides=args.override,
-        plugins_path=args.plugins_path,
+        plugins_dirs=args.plugins_dir,
         pipeline_vis_ext=vis_ext,
     )
 

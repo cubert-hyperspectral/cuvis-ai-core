@@ -141,8 +141,13 @@ def test_lookup_accepts_hyphen_form(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    assert PublicDatasets.get_target_dir("Demo-Object-Tracking") == "XMR_Demo_Object_Tracking"
-    assert PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Demo_Blood_Perfusion"
+    assert (
+        PublicDatasets.get_target_dir("Demo-Object-Tracking")
+        == "XMR_Demo_Object_Tracking"
+    )
+    assert (
+        PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Demo_Blood_Perfusion"
+    )
 
     calls: list[dict[str, str]] = []
 
@@ -173,10 +178,12 @@ def test_list_datasets_verbose_and_canonical_names(
 
     out = capsys.readouterr().out
     assert canonical == [
+        "Lentils",
         "Demo_Industrial_FOD_Lentils",
         "Blood_Perfusion",
         "Demo_Object_Tracking",
     ]
+    assert "(alias: lentils)" in out
     assert "(alias: demo_industrial_fod_lentils)" in out
     assert "(alias: blood_perfusion)" in out
     assert "alias: demo_object_tracking" in out

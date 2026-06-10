@@ -42,6 +42,11 @@ class CuvisPipeline:
 
         self._graph = nx.MultiDiGraph()
         self._metadata = PipelineMetadata(name=name, cuvis_ai_version=__version__)
+        # Bare plugin names this pipeline was built from. Carried through
+        # serialize() so a saved pipeline keeps its mandatory ``plugins:``
+        # field and can be reloaded. Populated by the builder from config;
+        # empty for pipelines assembled programmatically.
+        self._plugins: list[str] = []
         self.strict_runtime_io_validation = strict_runtime_io_validation
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
 
@@ -347,6 +352,7 @@ class CuvisPipeline:
 
         return PipelineConfig(
             metadata=metadata,
+            plugins=list(self._plugins) or None,
             nodes=node_configs,
             connections=connection_configs,
         )
@@ -976,10 +982,6 @@ class CuvisPipeline:
             # Check which required inputs are missing
             missing_inputs = []
             for port_name, spec in getattr(node, "INPUT_SPECS", {}).items():
-                # Handle list-based specs (variadic ports)
-                if isinstance(spec, list):
-                    spec = spec[0]
-
                 # Skip optional ports
                 if getattr(spec, "optional", False):
                     continue
@@ -1049,9 +1051,8 @@ class CuvisPipeline:
                     source_data = port_data[(predecessor_node.name, from_port)]
 
                     port_spec = getattr(node, "INPUT_SPECS", {}).get(to_port)
-                    is_variadic = isinstance(port_spec, list)
-                    if is_variadic:
-                        # Variadic port - collect into list
+                    if getattr(port_spec, "variadic", False):
+                        # Variadic port - collect fan-in into a list
                         if to_port not in node_inputs:
                             node_inputs[to_port] = []
                         node_inputs[to_port].append(source_data)
@@ -1076,10 +1077,6 @@ class CuvisPipeline:
             True if all required inputs are present
         """
         for port_name, spec in getattr(node, "INPUT_SPECS", {}).items():
-            # Handle list-based specs (variadic ports)
-            if isinstance(spec, list):
-                spec = spec[0]
-
             if not getattr(spec, "optional", False) and port_name not in node_inputs:
                 return False
         return True
@@ -1100,8 +1097,6 @@ class CuvisPipeline:
             True if port is optional
         """
         spec = getattr(node, "INPUT_SPECS", {}).get(port_name)
-        if isinstance(spec, list):
-            spec = spec[0]
         return getattr(spec, "optional", False)
 
     def _validate_runtime_inputs(self, node: Node, inputs: dict[str, Any]) -> None:
@@ -1123,10 +1118,7 @@ class CuvisPipeline:
         """
 
         for port_name, spec in getattr(node, "INPUT_SPECS", {}).items():
-            # Check if variadic port
-            is_variadic = isinstance(spec, list)
-            if is_variadic:
-                spec = spec[0]  # Get element spec
+            is_variadic = getattr(spec, "variadic", False)
 
             if port_name not in inputs:
                 if not getattr(spec, "optional", False):
@@ -1169,13 +1161,9 @@ class CuvisPipeline:
             If an output dtype or shape doesn't match the spec and fails downstream connections
         """
 
-        # Check all required outputs are present and validate them
+        # Check all required outputs are present and validate them (outputs are
+        # never variadic — fan-in is an input-side concept).
         for port_name, spec in getattr(node, "OUTPUT_SPECS", {}).items():
-            # Check if variadic port (though outputs are typically not variadic)
-            is_variadic = isinstance(spec, list)
-            if is_variadic:
-                spec = spec[0]  # Get element spec
-
             if port_name not in outputs:
                 # Skip optional outputs if not present
                 if getattr(spec, "optional", False):
@@ -1185,22 +1173,7 @@ class CuvisPipeline:
                 )
 
             value = outputs[port_name]
-
-            # Handle variadic ports: validate each element
-            if is_variadic:
-                if not isinstance(value, list):
-                    raise TypeError(
-                        f"Node '{node.name}' variadic output '{port_name}' must be a "
-                        f"list, got {type(value)}"
-                    )
-                for i, item in enumerate(value):
-                    self._validate_value_against_spec(
-                        item, spec, node, f"{port_name}[{i}]", "output"
-                    )
-            else:
-                self._validate_value_against_spec(
-                    value, spec, node, port_name, "output"
-                )
+            self._validate_value_against_spec(value, spec, node, port_name, "output")
 
     def _validate_value_against_spec(
         self, value: Any, spec: Any, node: Node, port_name: str, port_type: str
@@ -1414,10 +1387,6 @@ class CuvisPipeline:
         input_specs = {}
         for node in self._graph.nodes():
             for port_name, port_spec in getattr(node, "INPUT_SPECS", {}).items():
-                # Handle variadic ports
-                if isinstance(port_spec, list):
-                    port_spec = port_spec[0]
-
                 # O(1) lookup in set
                 if (node, port_name) not in connected_inputs:
                     spec_dict = {
@@ -1475,10 +1444,6 @@ class CuvisPipeline:
         output_specs = {}
         for node in self._graph.nodes():
             for port_name, port_spec in getattr(node, "OUTPUT_SPECS", {}).items():
-                # Handle variadic ports
-                if isinstance(port_spec, list):
-                    port_spec = port_spec[0]
-
                 # O(1) lookup in set
                 if (node, port_name) not in connected_outputs:
                     output_key = f"{node.name}.{port_name}"
