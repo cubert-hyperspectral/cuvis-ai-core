@@ -1,5 +1,7 @@
 import json
 
+from cuvis_ai_schemas.training import DataSplitConfig
+
 from cuvis_ai_core.training.config import (
     DataConfig,
     PipelineConfig,
@@ -20,9 +22,11 @@ def test_complete_trainrun_serialization():
             ],
         ),
         data=DataConfig(
-            cu3s_file_path="/path/to/data.cu3s",
-            train_ids=[1, 2, 3],
-            val_ids=[4, 5],
+            splits=DataSplitConfig(
+                train_ids=[1, 2, 3],
+                val_ids=[4, 5],
+            ),
+            params={"cu3s_file_path": "/path/to/data.cu3s"},
         ),
         training=TrainingConfig(max_epochs=10),
     )
@@ -36,7 +40,9 @@ def test_complete_trainrun_serialization():
     assert restored.pipeline.metadata is not None
     assert trainrun.pipeline.metadata is not None
     assert restored.pipeline.metadata.name == trainrun.pipeline.metadata.name
-    assert restored.data.train_ids == trainrun.data.train_ids
+    assert restored.data.splits is not None
+    assert trainrun.data.splits is not None
+    assert restored.data.splits.train_ids == trainrun.data.splits.train_ids
     assert json_dict["training"]["max_epochs"] == 10
 
 

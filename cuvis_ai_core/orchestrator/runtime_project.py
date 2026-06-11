@@ -95,17 +95,40 @@ def git_source_url(repo: str, sha: str) -> str:
     return f"git+{_ssh_to_url(repo)}@{sha}"
 
 
+def _active_extras(
+    cfg: PluginConfig, active_data_module: str | None
+) -> tuple[str, ...]:
+    """pip extras to install for this plugin: the activated data module's extras.
+
+    Node entries carry no extras (schema invariant); a data-module entry's extras
+    apply only when that module is the one a run selected, so a tiff_paired run
+    never pulls a cu3s module's ``cuvis`` extra.
+    """
+    if not active_data_module:
+        return ()
+    for entry in cfg.provides:
+        if (
+            getattr(entry, "kind", "node") == "data_module"
+            and getattr(entry, "data_module_name", "") == active_data_module
+        ):
+            return tuple(sorted(getattr(entry, "extras", []) or []))
+    return ()
+
+
 def resolve_plugin_sources(
     plugin_configs: Mapping[str, PluginConfig],
+    active_data_module: str | None = None,
 ) -> tuple[ResolvedPlugin, ...]:
     """Resolve git tags to SHAs and stamp local plugins with content provenance.
 
     Returns plugins sorted by name so the resulting tuple is
-    canonical (cache-key inputs must be order-stable).
+    canonical (cache-key inputs must be order-stable). ``active_data_module``
+    scopes which (if any) plugin gets its data-module extras installed.
     """
     resolved: list[ResolvedPlugin] = []
     for name in sorted(plugin_configs):
         cfg = plugin_configs[name]
+        extras = _active_extras(cfg, active_data_module)
         if isinstance(cfg, GitPluginConfig):
             sha = resolve_git_tag(cfg.repo, cfg.tag)
             # Prefer the explicit override; otherwise trust the
@@ -119,6 +142,7 @@ def resolve_plugin_sources(
                     sha=sha,
                     tag=cfg.tag,
                     package_name=package_name,
+                    extras=extras,
                 )
             )
             logger.debug(
@@ -140,6 +164,7 @@ def resolve_plugin_sources(
                     pyproject_sha256=pyproject_sha,
                     git_head=head,
                     dirty=dirty,
+                    extras=extras,
                 )
             )
         else:  # pragma: no cover - exhaustive
@@ -169,9 +194,9 @@ def build_runtime_pyproject(
         sources[CORE_PACKAGE_NAME] = core_entry
 
     for p in plugins:
-        dep_name, source_entry = _plugin_source_entry(p)
-        dependencies.append(dep_name)
-        sources[dep_name] = source_entry
+        dependency_string, source_key, source_entry = _plugin_source_entry(p)
+        dependencies.append(dependency_string)
+        sources[source_key] = source_entry
 
     uv_table: dict = {}
     if sources:
@@ -214,19 +239,23 @@ def _core_source_entry(core_source: CoreSource) -> dict | None:
     return None
 
 
-def _plugin_source_entry(p: ResolvedPlugin) -> tuple[str, dict]:
-    """Return (dependency name, uv source entry) for one resolved plugin.
+def _plugin_source_entry(p: ResolvedPlugin) -> tuple[str, str, dict]:
+    """Return (dependency_string, source_key, uv source entry) for one plugin.
 
-    Uses the resolved ``package_name`` (the ``[project].name`` from the
-    plugin's pyproject) rather than the manifest key — uv refuses to
-    install a dep whose declared name doesn't match the package metadata.
-    For git plugins the value defaults to the manifest key (convention)
-    but is overridable; for local plugins it is read from the pyproject.
+    ``source_key`` is the bare ``package_name`` (the ``[project].name`` from the
+    plugin's pyproject) and keys ``[tool.uv.sources]`` — uv refuses to install a
+    dep whose declared name doesn't match the package metadata. The
+    ``dependency_string`` is that same name plus any pip ``extras`` it activates
+    (``pkg[extra1,extra2]``), and goes into ``[project].dependencies``; uv composes
+    extras with a ``tool.uv.sources`` git/path override keyed by the bare name.
     """
-    dep_name = p.package_name or p.name
+    source_key = p.package_name or p.name
+    dependency_string = (
+        f"{source_key}[{','.join(p.extras)}]" if p.extras else source_key
+    )
     if isinstance(p, ResolvedGitPlugin):
-        return dep_name, {"git": _ssh_to_url(p.repo), "rev": p.sha}
-    return dep_name, {"path": str(p.path), "editable": True}
+        return dependency_string, source_key, {"git": _ssh_to_url(p.repo), "rev": p.sha}
+    return dependency_string, source_key, {"path": str(p.path), "editable": True}
 
 
 def _core_dependency(core_source: CoreSource) -> str:

@@ -40,12 +40,35 @@ class NodeRegistry:
         # Loaded node classes, keyed by class name. Membership here *is* the
         # loaded state: a plugin is loaded iff its provided classes are present.
         self.loaded_plugin_nodes: Dict[str, type] = {}
+        # Loaded DataModule classes, keyed by DATA_MODULE_NAME (globally unique).
+        # A `kind: data_module` provides entry registers here instead of into
+        # loaded_plugin_nodes, and never appears in the node palette.
+        self.data_modules: Dict[str, type] = {}
+
+    @staticmethod
+    def _entry_kind(node) -> str:
+        """The static kind of a provides entry; defaults to ``node``."""
+        return getattr(node, "kind", "node") or "node"
 
     def _provided_class_names(
         self, cfg: Union[GitPluginConfig, LocalPluginConfig]
     ) -> list[str]:
-        """Return the simple (unqualified) class names a plugin config provides."""
-        return [node.class_name.rsplit(".", 1)[-1] for node in cfg.provides]
+        """Simple (unqualified) class names of the ``kind=='node'`` entries."""
+        return [
+            node.class_name.rsplit(".", 1)[-1]
+            for node in cfg.provides
+            if self._entry_kind(node) == "node"
+        ]
+
+    def _provided_data_module_names(
+        self, cfg: Union[GitPluginConfig, LocalPluginConfig]
+    ) -> list[str]:
+        """DATA_MODULE_NAMEs of the ``kind=='data_module'`` entries."""
+        return [
+            node.data_module_name
+            for node in cfg.provides
+            if self._entry_kind(node) == "data_module"
+        ]
 
     def _is_loaded(self, name: str) -> bool:
         """Whether ALL of a catalog plugin's node classes are currently loaded.
@@ -56,8 +79,13 @@ class NodeRegistry:
         cfg = self.plugin_catalog.get(name)
         if cfg is None:
             return False
-        names = self._provided_class_names(cfg)
-        return bool(names) and all(n in self.loaded_plugin_nodes for n in names)
+        node_names = self._provided_class_names(cfg)
+        dm_names = self._provided_data_module_names(cfg)
+        if not node_names and not dm_names:
+            return False
+        return all(n in self.loaded_plugin_nodes for n in node_names) and all(
+            d in self.data_modules for d in dm_names
+        )
 
     def _has_loaded_node(self, name: str) -> bool:
         """Whether ANY of a catalog plugin's node classes are currently loaded.
@@ -70,7 +98,7 @@ class NodeRegistry:
             return False
         return any(
             n in self.loaded_plugin_nodes for n in self._provided_class_names(cfg)
-        )
+        ) or any(d in self.data_modules for d in self._provided_data_module_names(cfg))
 
     @classmethod
     def register(cls, node_class: type) -> type:
@@ -560,9 +588,40 @@ class NodeRegistry:
         imported_nodes = git_os.import_plugin_nodes(
             class_paths, clear_cache=clear_cache
         )
+        by_simple_name = {
+            node.class_name.rsplit(".", 1)[-1]: node for node in config.provides
+        }
         for class_name, node_class in imported_nodes.items():
-            self.loaded_plugin_nodes[class_name] = node_class
-            logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
+            entry = by_simple_name.get(class_name)
+            if entry is not None and self._entry_kind(entry) == "data_module":
+                self._register_data_module(name, class_name, node_class, entry)
+            else:
+                self.loaded_plugin_nodes[class_name] = node_class
+                logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
+
+    def _register_data_module(self, name, class_name, cls, entry) -> None:
+        """File a ``kind: data_module`` entry under ``data_modules[DATA_MODULE_NAME]``."""
+        from cuvis_ai_core.data.datamodule import BaseHyperspectralDataModule
+
+        if not (isinstance(cls, type) and issubclass(cls, BaseHyperspectralDataModule)):
+            raise TypeError(
+                f"{class_name}: manifest declares kind='data_module' but the class "
+                f"is not a BaseHyperspectralDataModule subclass."
+            )
+        dm_name = entry.data_module_name
+        if cls.DATA_MODULE_NAME != dm_name:
+            raise ValueError(
+                f"{class_name}: manifest data_module_name={dm_name!r} != "
+                f"class DATA_MODULE_NAME={cls.DATA_MODULE_NAME!r}."
+            )
+        existing = self.data_modules.get(dm_name)
+        if existing is not None and existing is not cls:
+            raise ValueError(
+                f"data module {dm_name!r} is already registered by "
+                f"{existing.__module__}.{existing.__name__}; names must be unique."
+            )
+        self.data_modules[dm_name] = cls
+        logger.debug(f"Registered data module '{dm_name}' ({class_name}) from '{name}'")
 
     def register_preinstalled(
         self,
@@ -617,8 +676,11 @@ class NodeRegistry:
         # Pop the plugin's classes from loaded_plugin_nodes. The catalog entry
         # stays: the plugin is still *known*, just no longer loaded. pop(...,
         # None) is defensive so a partially-loaded plugin still cleans up.
-        for class_name in self._provided_class_names(self.plugin_catalog[name]):
+        cfg = self.plugin_catalog[name]
+        for class_name in self._provided_class_names(cfg):
             self.loaded_plugin_nodes.pop(class_name, None)
+        for dm_name in self._provided_data_module_names(cfg):
+            self.data_modules.pop(dm_name, None)
 
         logger.info(f"Unloaded plugin '{name}'")
 
@@ -648,6 +710,7 @@ class NodeRegistry:
             )
 
         self.loaded_plugin_nodes.clear()
+        self.data_modules.clear()
         self.plugin_catalog.clear()
         logger.info("Cleared all plugins")
 

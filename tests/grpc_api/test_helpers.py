@@ -240,27 +240,34 @@ class TestConfigRegistry:
         assert "type" in schema
         assert schema["type"] == "object"
         assert "properties" in schema
-        assert "required" in schema
 
-    def test_generate_json_schema_has_required_fields(self):
-        """Test that schema includes required fields."""
+    def test_generate_json_schema_has_module_agnostic_fields(self):
+        """Test that schema exposes the module-agnostic DataConfig fields."""
         schema = generate_json_schema("data")
 
-        required = set(schema.get("required", []))
-        assert "cu3s_file_path" in required
-        # batch_size has a default value, so it's not actually required
-        # Only cu3s_file_path should be required
+        properties = set(schema.get("properties", {}))
+        assert "data_module" in properties
+        assert "splits" in properties
+        assert "batch_size" in properties
+        assert "params" in properties
+        # All DataConfig fields now have defaults, so nothing is required.
+        assert "cu3s_file_path" not in properties
 
     def test_validate_config_dict_valid(self):
         """Test validation with valid config dictionary."""
         config_dict = {
-            "cu3s_file_path": "/tmp/data.cu3s",
-            "annotation_json_path": "/tmp/annotations.json",
-            "train_ids": [1, 2, 3],
-            "val_ids": [4],
-            "test_ids": [5],
+            "data_module": "cu3s",
+            "splits": {
+                "train_ids": [1, 2, 3],
+                "val_ids": [4],
+                "test_ids": [5],
+            },
             "batch_size": 4,
-            "processing_mode": "Reflectance",
+            "params": {
+                "cu3s_file_path": "/tmp/data.cu3s",
+                "annotation_json_path": "/tmp/annotations.json",
+                "processing_mode": "Reflectance",
+            },
         }
 
         valid, errors = validate_config_dict("data", config_dict)
@@ -270,8 +277,9 @@ class TestConfigRegistry:
     def test_validate_config_dict_invalid(self):
         """Test validation with invalid config dictionary."""
         config_dict = {
-            "cu3s_file_path": "/tmp/data.cu3s",
+            "data_module": "cu3s",
             "batch_size": 0,  # Invalid: must be > 0
+            "params": {"cu3s_file_path": "/tmp/data.cu3s"},
         }
 
         valid, errors = validate_config_dict("data", config_dict)
@@ -343,8 +351,10 @@ pipeline:
   nodes: []
   connections: []
 data:
-  cu3s_file_path: /tmp/data.cu3s
+  data_module: cu3s
   batch_size: 2
+  params:
+    cu3s_file_path: /tmp/data.cu3s
 training:
   optimizer:
     name: adamw

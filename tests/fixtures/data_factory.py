@@ -20,6 +20,7 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
 )
 from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_schemas.training import DataSplitConfig
 
 # Session-scoped cache for test data files to avoid repeated file system operations
 _test_data_cache = {}
@@ -69,13 +70,18 @@ def _create_cached_data_config(
 ) -> cuvis_ai_pb2.DataConfig:
     """Cached version of DataConfig creation."""
     return DataConfig(
-        cu3s_file_path=cu3s_file_path,
-        annotation_json_path=json_file_path,
-        train_ids=list(train_ids),
-        val_ids=list(val_ids),
-        test_ids=list(test_ids),
+        data_module="cu3s",
+        splits=DataSplitConfig(
+            train_ids=list(train_ids),
+            val_ids=list(val_ids),
+            test_ids=list(test_ids),
+        ),
         batch_size=batch_size,
-        processing_mode=processing_mode,
+        params={
+            "cu3s_file_path": cu3s_file_path,
+            "annotation_json_path": json_file_path,
+            "processing_mode": processing_mode,
+        },
     ).to_proto()
 
 

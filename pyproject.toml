@@ -30,7 +30,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "cuvis>=3.5.0",
     "cuvis-ai-schemas[proto]>=0.5.1",
     # Core framework dependencies
     "torch>=2.11.0",
@@ -61,10 +60,8 @@ dependencies = [
     # Type hints and validation
     "typing-extensions>=4.15.0",
     "pydantic>=2.12.5",
-    "dataclass-wizard>=0.39.1",
     "dotenv>=0.9.9",
     "ruff>=0.14.13",
-    "scikit-image>=0.26.0",
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
@@ -200,4 +197,4 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }
+cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }

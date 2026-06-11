@@ -209,12 +209,10 @@ def mock_experiment_dict(mock_pipeline_dict):
         "name": "test_experiment",
         "pipeline": mock_pipeline_dict,
         "data": {
-            "cu3s_file_path": "/data/test.cu3s",
+            "data_module": "cu3s",
             "batch_size": 4,
-            "processing_mode": "Reflectance",
-            "train_ids": [0, 1, 2],
-            "val_ids": [3, 4],
-            "test_ids": [5, 6],
+            "splits": {"train_ids": [0, 1, 2], "val_ids": [3, 4], "test_ids": [5, 6]},
+            "params": {"cu3s_file_path": "/data/test.cu3s", "processing_mode": "Reflectance"},
         },
         "training": {
             "seed": 42,

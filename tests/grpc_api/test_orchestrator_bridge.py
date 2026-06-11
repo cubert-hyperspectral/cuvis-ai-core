@@ -587,7 +587,9 @@ def test_forward_restore_train_run_fills_parent_session_id(monkeypatch, tmp_path
     fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
     _patch_parse(monkeypatch, result=(fake_cfg, None))
 
-    def _fake_ensure(session_manager, session_id, pipeline_config, plugins_dirs):
+    def _fake_ensure(
+        session_manager, session_id, pipeline_config, plugins_dirs, data_module=None
+    ):
         handle = MagicMock()
         handle.stub.return_value.RestoreTrainRun.return_value = (
             cuvis_ai_pb2.RestoreTrainRunResponse(session_id="")

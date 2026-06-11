@@ -94,8 +94,10 @@ pipeline:
   nodes: []
   connections: []
 data:
-  cu3s_file_path: /tmp/data.cu3s
+  data_module: cu3s
   batch_size: 2
+  params:
+    cu3s_file_path: /tmp/data.cu3s
 training:
   optimizer:
     name: adamw
@@ -157,8 +159,10 @@ pipeline:
   nodes: []
   connections: []
 data:
-  cu3s_file_path: /tmp/data.cu3s
+  data_module: cu3s
   batch_size: 1
+  params:
+    cu3s_file_path: /tmp/data.cu3s
 training:
   optimizer:
     name: adamw
@@ -182,8 +186,10 @@ pipeline:
   nodes: []
   connections: []
 data:
-  cu3s_file_path: /tmp/data.cu3s
+  data_module: cu3s
   batch_size: 1
+  params:
+    cu3s_file_path: /tmp/data.cu3s
 training:
   optimizer:
     name: adamw
@@ -274,8 +280,10 @@ pipeline:
   nodes: []
   connections: []
 data:
-  cu3s_file_path: /tmp/data.cu3s
+  data_module: cu3s
   batch_size: 1
+  params:
+    cu3s_file_path: /tmp/data.cu3s
 training:
   optimizer:
     name: adamw
