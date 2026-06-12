@@ -19,6 +19,11 @@
   `*_dataloader()` methods + `validate_params`) and `create_data_module(registry, data_config)`. A
   concrete DataModule now ships from a plugin (see `cuvis-ai-dataloader`), registered as a
   `kind: data_module` manifest entry; core ships no concrete DataModules.
+- **Range selectors in split id-lists.** `BaseHyperspectralDataModule._setup_from_splits` expands
+  inclusive `"start-stop[:step]"` range strings (`"0-100"`, `"0-10:2"`) in any `DataSplitConfig` id
+  list to integer selectors before `build_dataset`, via the new
+  `cuvis_ai_core.utils.general.expand_range_selectors` (ints and non-range string keys pass through
+  untouched). Every id-list DataModule gets range support with no per-module parsing.
 - **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` (the
   shared core) routes each provides entry by its static `kind`: `data_module` entries register into
   `data_modules[DATA_MODULE_NAME]` (globally unique, asserts the class `DATA_MODULE_NAME` matches the

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Sequence
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 
+from cuvis_ai_core.utils.general import expand_range_selectors
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
 
@@ -97,17 +99,28 @@ class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
             self._setup_module_owned(stage)
 
     def _setup_from_splits(self, stage: str | None) -> None:
+        # Range strings ("0-100", "0-10:2") in any id list expand to ints here, so
+        # every id-list module gets range selectors without its own parsing.
         splits = self.splits
         assert splits is not None
         if stage in ("fit", None):
             if splits.train_ids:
-                self._train_ds = self.build_dataset(splits.train_ids)
+                self._train_ds = self.build_dataset(
+                    expand_range_selectors(splits.train_ids)
+                )
             if splits.val_ids:
-                self._val_ds = self.build_dataset(splits.val_ids)
+                self._val_ds = self.build_dataset(
+                    expand_range_selectors(splits.val_ids)
+                )
         if stage in ("test", None) and splits.test_ids:
-            self._test_ds = self.build_dataset(splits.test_ids)
+            self._test_ds = self.build_dataset(expand_range_selectors(splits.test_ids))
         if stage in ("predict", None):
-            self._predict_ds = self.build_dataset(splits.predict_ids or None)
+            predict_ids = (
+                expand_range_selectors(splits.predict_ids)
+                if splits.predict_ids
+                else None
+            )
+            self._predict_ds = self.build_dataset(predict_ids)
 
     def _setup_module_owned(self, stage: str | None) -> None:
         if stage in ("fit", None):

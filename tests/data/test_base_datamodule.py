@@ -29,6 +29,22 @@ def test_predict_empty_ids_iterates_all():
     assert len(dm._predict_ds) == 4  # build_dataset(None) -> all
 
 
+def test_setup_from_splits_expands_range_strings():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(train_ids=["0-2"], val_ids=[0, "4-5"]),
+        batch_size=1,
+    )
+    dm.setup(stage="fit")
+    assert len(dm._train_ds) == 3  # "0-2" -> [0, 1, 2]
+    assert len(dm._val_ds) == 3  # [0] + "4-5" -> [0, 4, 5]
+
+
+def test_setup_predict_expands_range_strings():
+    dm = FakeDataModule(splits=DataSplitConfig(predict_ids=["0-3"]), batch_size=1)
+    dm.setup(stage="predict")
+    assert len(dm._predict_ds) == 4  # "0-3" -> [0, 1, 2, 3]
+
+
 def test_module_owned_splits():
     dm = FakeDataModule(splits=None)
     dm.setup(stage="fit")
@@ -52,7 +68,9 @@ def test_create_data_module_dispatch():
     class _Reg:
         data_modules = {"fake": FakeDataModule}
 
-    dc = DataConfig(data_module="fake", splits=DataSplitConfig(train_ids=[0, 1]), batch_size=2)
+    dc = DataConfig(
+        data_module="fake", splits=DataSplitConfig(train_ids=[0, 1]), batch_size=2
+    )
     dm = create_data_module(_Reg(), dc)
     assert isinstance(dm, FakeDataModule)
     assert dm.batch_size == 2
