@@ -128,6 +128,7 @@ def ensure_child_for_session(
     session_id: str,
     pipeline_config: Any,
     plugins_dirs: list[Path],
+    data_module: str | None = None,
 ) -> ChildHandle:
     """Return a child runtime handle bound to ``session_id``.
 
@@ -151,13 +152,14 @@ def ensure_child_for_session(
         )
         session.child_handle = None
 
-    resolved = _resolve_plugins(pipeline_config, plugins_dirs)
+    resolved = _resolve_plugins(pipeline_config, plugins_dirs, data_module)
     core_source = detect_core_source()
     logger.info(
         f"Composing child env for session {session_id} "
-        f"({len(resolved)} plugins, core source: {core_source.kind})"
+        f"({len(resolved)} plugins, core source: {core_source.kind}, "
+        f"data_module: {data_module or '-'})"
     )
-    venv = _composer(resolved, core_source=core_source)
+    venv = _composer(resolved, core_source=core_source, active_data_module=data_module)
 
     declared = _default_declared_paths(session_id)
     handle = get_spawner().spawn(
@@ -268,6 +270,18 @@ def forward_load_pipeline(
         )
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
+    # Optional data selection: lets the composer resolve the data-module
+    # plugin's pip extras at compose time (the child env is frozen here, before
+    # DataConfig would otherwise arrive at Train).
+    data_module = None
+    if request.HasField("data") and request.data.config_bytes:
+        from cuvis_ai_core.training.config import DataConfig
+
+        try:
+            data_module = DataConfig.from_proto(request.data).data_module
+        except Exception:  # noqa: BLE001 - data selection is best-effort here
+            data_module = None
+
     plugins_dirs = _plugins_dirs_for_session(session)
     try:
         child = ensure_child_for_session(
@@ -275,6 +289,7 @@ def forward_load_pipeline(
             request.session_id,
             pipeline_config,
             plugins_dirs,
+            data_module=data_module,
         )
     except ValueError as exc:
         # resolve_pipeline_plugins's contract: missing plugins block,
@@ -380,12 +395,16 @@ def forward_restore_train_run(
     parent_session = session_manager.get_session(parent_session_id)
     plugins_dirs = _plugins_dirs_for_session(parent_session)
 
+    trainrun_data_module = getattr(
+        getattr(trainrun_config, "data", None), "data_module", None
+    )
     try:
         ensure_child_for_session(
             session_manager,
             parent_session_id,
             pipeline_config,
             plugins_dirs,
+            data_module=trainrun_data_module,
         )
     except ValueError as exc:
         # Drop the empty session; surface resolver errors as INVALID_ARGUMENT
@@ -791,15 +810,19 @@ def reset_orchestrator() -> None:
 
 
 def _resolve_plugins(
-    pipeline_config: Any, plugins_dirs: list[Path]
+    pipeline_config: Any, plugins_dirs: list[Path], data_module: str | None = None
 ) -> Mapping[str, PluginConfig]:
     """Resolve the pipeline's declared plugins against the catalog.
 
     Always runs the resolver: ``plugins:`` is mandatory, so a pipeline
     that omits it (or names a plugin with no manifest) hard-fails with a
     ``ValueError`` instead of silently loading with an empty plugin set.
+    ``data_module`` (from the run's DataConfig) unions the providing data
+    plugin into the set, since it ships no node classes to resolve by coverage.
     """
-    return resolve_pipeline_plugins(pipeline_config, plugins_dirs)
+    return resolve_pipeline_plugins(
+        pipeline_config, plugins_dirs, data_module=data_module
+    )
 
 
 def _default_declared_paths(session_id: str) -> DeclaredPaths:

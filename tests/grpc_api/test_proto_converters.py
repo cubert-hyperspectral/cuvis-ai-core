@@ -192,18 +192,13 @@ class TestTorchConversion:
 class TestProcessingModeMapping:
     """Test ProcessingMode enum mapping"""
 
-    def test_processing_mode_to_cuvis(self):
-        """Test proto ProcessingMode → cuvis ProcessingMode"""
-        import cuvis
-
+    def test_processing_mode_to_string(self):
+        """Test proto ProcessingMode → mode-name string"""
         proto_raw = cuvis_ai_pb2.PROCESSING_MODE_RAW
         proto_refl = cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE
 
-        assert helpers.proto_to_processing_mode(proto_raw) == cuvis.ProcessingMode.Raw
-        assert (
-            helpers.proto_to_processing_mode(proto_refl)
-            == cuvis.ProcessingMode.Reflectance
-        )
+        assert helpers.proto_to_processing_mode(proto_raw) == "Raw"
+        assert helpers.proto_to_processing_mode(proto_refl) == "Reflectance"
 
     def test_processing_mode_invalid(self):
         """Test error handling for invalid processing mode"""
@@ -212,20 +207,17 @@ class TestProcessingModeMapping:
 
     def test_processing_mode_new_values(self):
         """Test new ProcessingMode enum values (DarkSubtract, SpectralRadiance)"""
-        import cuvis
-
         # Test DarkSubtract mapping
         proto_darksubtract = cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT
         assert (
-            helpers.proto_to_processing_mode(proto_darksubtract)
-            == cuvis.ProcessingMode.DarkSubtract
+            helpers.proto_to_processing_mode(proto_darksubtract) == "DarkSubtract"
         )
 
         # Test SpectralRadiance mapping
         proto_spectral_radiance = cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE
         assert (
             helpers.proto_to_processing_mode(proto_spectral_radiance)
-            == cuvis.ProcessingMode.SpectralRadiance
+            == "SpectralRadiance"
         )
 
     def test_processing_mode_enum_values(self):

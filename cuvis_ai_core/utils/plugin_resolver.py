@@ -102,6 +102,8 @@ def _compute_auto_resolution(
     provides_to_plugins: dict[str, list[str]] = defaultdict(list)
     for plugin_name, cfg in catalog.items():
         for node in cfg.provides:
+            if getattr(node, "kind", "node") != "node":
+                continue  # data_module entries are selected by name, not node coverage
             provides_to_plugins[node.class_name].append(plugin_name)
 
     resolved: dict[str, PluginConfig] = {}
@@ -154,7 +156,12 @@ def _validate_coverage(
     resolved: dict[str, PluginConfig],
 ) -> None:
     """Ensure every class_name is provided by some plugin in the resolved set."""
-    provided = {node.class_name for cfg in resolved.values() for node in cfg.provides}
+    provided = {
+        node.class_name
+        for cfg in resolved.values()
+        for node in cfg.provides
+        if getattr(node, "kind", "node") == "node"
+    }
     missing = [c for c in class_names if c not in provided]
     if missing:
         msg = (
@@ -165,9 +172,32 @@ def _validate_coverage(
         raise ValueError(msg)
 
 
+def _union_data_module_plugin(
+    resolved: dict[str, PluginConfig],
+    catalog: dict[str, PluginConfig],
+    data_module: str,
+) -> None:
+    """Add the plugin providing ``data_module`` to ``resolved`` (in place).
+
+    A dataloader plugin ships no node classes, so the node-coverage resolver
+    never pulls it in; a run selects its data module explicitly (DataConfig /
+    --data-module), so we look it up by ``data_module_name`` in the catalog and
+    union its plugin into the compose set. No-op if already present or unfound.
+    """
+    for plugin_name, cfg in catalog.items():
+        for entry in cfg.provides:
+            if (
+                getattr(entry, "kind", "node") == "data_module"
+                and getattr(entry, "data_module_name", "") == data_module
+            ):
+                resolved.setdefault(plugin_name, cfg)
+                return
+
+
 def resolve_pipeline_plugins(
     pipeline_config: PipelineConfig,
     plugins_dirs: list[Path],
+    data_module: str | None = None,
 ) -> dict[str, PluginConfig]:
     """Resolve the plugin set a pipeline depends on.
 
@@ -200,6 +230,10 @@ def resolve_pipeline_plugins(
             resolved[name] = cfg  # duplicate names collapse to one entry
 
     _validate_coverage(class_names, resolved)
+    # Union the data-module plugin (selected by DataConfig.data_module): it ships
+    # no node classes, so coverage never pulls it in on its own.
+    if data_module:
+        _union_data_module_plugin(resolved, catalog, data_module)
     return resolved
 
 

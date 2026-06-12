@@ -1,5 +1,56 @@
 # Changelog
 
+## [Unreleased]
+
+- **Single import-only plugin-registration path + provisioning helpers.** Dropped the in-process
+  clone / `uv pip install` / `sys.path` plugin loader: `load_plugin` / `load_plugins` and the
+  clone/install internals are gone. In-process registration is now `register_plugins(manifest)` /
+  `register_plugin(name, config)`, which resolve a manifest and delegate to the same import-only
+  `register_preinstalled` the orchestrator child already uses, so in-process and the child register
+  through identical code. A plugin that isn't installed raises a guided `ModuleNotFoundError` pointing
+  at the `provision` command. New `provision` CLI + `cuvis_ai_core.utils.provision`
+  (`resolve_install_specs` / `format_install_command` / `provision_environment`) turn a pipeline's
+  `plugins:` + `--data-module` into `uv pip install` specs (git plugins pinned to their manifest tag,
+  `--pin` for a commit sha), an env file (`--requirements <file>`: `.toml` pyproject-shaped or `.txt`),
+  or an in-kernel `%pip install` for notebooks. `_plugin_source_entry` gained a `ref="tag"|"sha"`
+  argument (default `sha`, so the composer's child pyproject is unchanged).
+- **Pluggable DataModules; the cuvis SDK leaves core.** Added the SDK-free
+  `cuvis_ai_core.data.datamodule.BaseHyperspectralDataModule` (split-to-stage mapping + the four
+  `*_dataloader()` methods + `validate_params`) and `create_data_module(registry, data_config)`. A
+  concrete DataModule now ships from a plugin (see `cuvis-ai-dataloader`), registered as a
+  `kind: data_module` manifest entry; core ships no concrete DataModules.
+- **Range selectors in split id-lists.** `BaseHyperspectralDataModule._setup_from_splits` expands
+  inclusive `"start-stop[:step]"` range strings (`"0-100"`, `"0-10:2"`) in any `DataSplitConfig` id
+  list to integer selectors before `build_dataset`, via the new
+  `cuvis_ai_core.utils.general.expand_range_selectors` (ints and non-range string keys pass through
+  untouched). Every id-list DataModule gets range support with no per-module parsing.
+- **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` (the
+  shared core) routes each provides entry by its static `kind`: `data_module` entries register into
+  `data_modules[DATA_MODULE_NAME]` (globally unique, asserts the class `DATA_MODULE_NAME` matches the
+  manifest), `node` entries into `loaded_plugin_nodes` as before. The node palette
+  (`ListAvailableNodes`) and the pipeline-plugin resolver coverage now filter to `kind == "node"`, so
+  a loader-only plugin emits no palette nodes and does not trip the "provides no nodes" warning.
+- **Registry dispatch at the two construction sites.** `training_service` and `restore.py` no longer
+  hardcode `SingleCu3sDataModule`; both dispatch via `registry.data_modules[data_config.data_module]`.
+  `restore-pipeline` inference is now generic over any DataModule (`--data-module` + repeatable
+  `--data-arg key=value`; the legacy `--cu3s-file-path` / `--processing-mode` /
+  `--annotation-json-path` / `--measurement-indices` flags are removed). Deleted
+  `data/datasets.py` + `data/coco_labels.py` (moved to the `cuvis-ai-dataloader` plugin, refactored
+  onto the base); `data/rle.py` stays (sibling consumers).
+- **`grpc/helpers.py` drops `import cuvis`.** `PROCESSING_MODE_MAP` values are plain strings and
+  `proto_to_processing_mode` returns a `str`; the cu3s reader coerces to the SDK enum at its own
+  boundary. Core now imports no `cuvis` SDK (`pyproject` drops `cuvis`, `scikit-image`,
+  `dataclass-wizard`; `pycocotools` stays for `rle.py`).
+- **Orchestrator dep-isolation for data plugins.** The child-env composer emits `pkg[extras]` in
+  `[project].dependencies` (keyed off the activated data module's extras) while keeping the bare
+  package name for `[tool.uv.sources]`; the resolver unions the data-module plugin into the compose
+  set, and `LoadPipeline` / `RestoreTrainRun` carry the selected `data_module` so extras resolve at
+  compose time. A `tiff_paired` run never pulls a cu3s module's `cuvis`. `COMPOSER_SCHEMA_VERSION`
+  bumped to invalidate stale caches.
+- Consumes `cuvis-ai-schemas`' new `DataConfig {data_module, splits, batch_size, num_workers, params}`
+  + `DataSplitConfig` + `CatalogNodeEntry.kind/data_module_name/extras` + additive
+  `LoadPipelineRequest.data` field.
+
 ## 0.7.1 - 2026-06-10
 
 - **Security:** raised dependency floors for transitively-pulled packages so downstream plugins inherit the fix instead of pinning each individually: `gitpython>=3.1.50` (CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w), plus new direct floors `idna>=3.18` (CVE-2026-45409), `urllib3>=2.7.0` (PYSEC-2026-141 / 142), and `aiohttp>=3.14.1` (CVE-2026-34993 / 47265). Re-locked `uv.lock`.

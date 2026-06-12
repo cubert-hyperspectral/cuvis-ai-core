@@ -37,7 +37,7 @@ from typing import Literal
 # Bump when the composer's logic changes shape (key fields, hashing
 # convention, atomic-publish protocol, etc.) so existing cache entries
 # are naturally invalidated.
-COMPOSER_SCHEMA_VERSION = 2
+COMPOSER_SCHEMA_VERSION = 3
 
 # The directory name is the digest alone, so it is the sole on-disk
 # identity. 12 hex chars (48 bits) sizes it to make collisions negligible.
@@ -75,6 +75,10 @@ class ResolvedGitPlugin:
     sha: str  # 40-char hex, resolved via ``git ls-remote --tags``
     tag: str  # the original user-facing tag, kept for the human prefix
     package_name: str = ""  # populated by resolve_plugin_sources
+    # pip extras to install for this plugin (e.g. the activated data module's
+    # extras). Lands in the runtime pyproject's dependency string, so spec_hash
+    # covers it; intentionally omitted from _plugin_to_dict to avoid double-count.
+    extras: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,8 @@ class ResolvedLocalPlugin:
     pyproject_sha256: str
     git_head: str | None
     dirty: bool
+    # pip extras to install for this plugin (the activated data module's extras).
+    extras: tuple[str, ...] = ()
 
 
 ResolvedPlugin = ResolvedGitPlugin | ResolvedLocalPlugin

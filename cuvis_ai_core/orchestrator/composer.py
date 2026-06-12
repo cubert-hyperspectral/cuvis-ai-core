@@ -119,14 +119,19 @@ def compose_env(
     core_source: CoreSource,
     cache_root: Path | None = None,
     python_requires: str = ">=3.11,<3.14",
+    active_data_module: str | None = None,
 ) -> Path:
     """Materialise (or reuse) a cached venv for ``plugin_configs``.
 
     Returns the path to the ``.venv`` directory inside the published
     cache entry. The caller spawns ``venv_python(...)`` against this
-    path.
+    path. ``active_data_module`` scopes which plugin's data-module pip
+    extras are installed (a tiff_paired run never pulls a cu3s module's
+    ``cuvis`` extra).
     """
-    resolved = resolve_plugin_sources(plugin_configs)
+    resolved = resolve_plugin_sources(
+        plugin_configs, active_data_module=active_data_module
+    )
     pyproject_content = build_runtime_pyproject(
         core_source=core_source,
         plugins=resolved,

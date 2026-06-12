@@ -13,6 +13,7 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import DataConfig, TrainRunConfig
+from cuvis_ai_schemas.training import DataSplitConfig
 
 # Configure logging for session management
 logger = logging.getLogger(__name__)
@@ -179,13 +180,14 @@ def trained_pipeline_session(
 
         # Create data config for statistical training
         data_config = DataConfig(
-            cu3s_file_path=str(cu3s_file),
-            annotation_json_path=str(json_file),
-            train_ids=[0, 1, 2],
-            val_ids=[3, 4],
-            test_ids=[5, 6],
+            data_module="cu3s",
+            splits=DataSplitConfig(train_ids=[0, 1, 2], val_ids=[3, 4], test_ids=[5, 6]),
             batch_size=2,
-            processing_mode="Reflectance",
+            params={
+                "cu3s_file_path": str(cu3s_file),
+                "annotation_json_path": str(json_file),
+                "processing_mode": "Reflectance",
+            },
         ).to_proto()
 
         # Run statistical training

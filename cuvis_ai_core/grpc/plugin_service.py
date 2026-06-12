@@ -444,6 +444,8 @@ class PluginService:
                 plugins_missing_metadata.append(plugin_name)
                 continue
             for node_entry in entry.nodes:
+                if getattr(node_entry, "kind", "node") != "node":
+                    continue  # data_module entries never appear in the node palette
                 try:
                     nodes.append(_catalog_entry_to_node_info(node_entry, plugin_name))
                 except Exception as exc:

@@ -347,7 +347,7 @@ class TestPipelineServiceValidation:
         trainrun = TrainRunConfig(
             name="test",
             pipeline=None,
-            data=DataConfig(cu3s_file_path=""),
+            data=DataConfig(),
             training=TrainingConfig(),
             loss_nodes=[],
             metric_nodes=[],
@@ -409,7 +409,7 @@ class TestTrainRunServiceValidation:
         session.trainrun_config = TrainRunConfig(
             name="test",
             pipeline=None,
-            data=DataConfig(cu3s_file_path=""),
+            data=DataConfig(),
             training=TrainingConfig(),
             loss_nodes=[],
             metric_nodes=[],
@@ -458,7 +458,7 @@ class TestTrainRunServiceValidation:
                 {
                     "name": "test",
                     "pipeline": {"config_path": str(pipeline_file)},
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
@@ -496,7 +496,7 @@ class TestTrainRunServiceValidation:
                         "config_path": str(pipeline_file),
                         "weights_path": str(tmp_path / "nonexistent.pt"),
                     },
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
@@ -519,7 +519,7 @@ class TestTrainRunServiceValidation:
             yaml.dump(
                 {
                     "name": "test",
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
@@ -556,7 +556,7 @@ class TestTrainRunServiceValidation:
                         "nodes": [],
                         "connections": [],
                     },
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                     "loss_nodes": [],
                     "metric_nodes": [],

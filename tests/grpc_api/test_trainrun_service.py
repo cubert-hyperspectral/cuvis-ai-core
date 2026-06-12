@@ -114,7 +114,8 @@ def test_parse_trainrun_yaml_rejects_hydra_defaults(tmp_path):
 def test_parse_trainrun_yaml_missing_pipeline_section_raises(tmp_path):
     p = tmp_path / "tr.yaml"
     p.write_text(
-        "name: x\ndata:\n  cu3s_file_path: ''\ntraining:\n  seed: 1\n",
+        "name: x\ndata:\n  data_module: cu3s\n  params:\n    cu3s_file_path: ''\n"
+        "training:\n  seed: 1\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="pipeline"):

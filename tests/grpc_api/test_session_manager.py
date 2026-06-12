@@ -196,6 +196,7 @@ class TestSessionManager:
             TrainingConfig,
             TrainRunConfig,
         )
+        from cuvis_ai_schemas.training import DataSplitConfig
 
         # Load pipeline from YAML
         pipeline_path = resolve_pipeline_path("gradient_based")
@@ -206,12 +207,16 @@ class TestSessionManager:
             name="test_trainrun",
             pipeline=pipeline.serialize(),
             data=DataConfig(
-                cu3s_file_path="/tmp/data.cu3s",
-                annotation_json_path="/tmp/annotations.json",
-                train_ids=[1, 2],
-                val_ids=[3],
-                test_ids=[4],
+                splits=DataSplitConfig(
+                    train_ids=[1, 2],
+                    val_ids=[3],
+                    test_ids=[4],
+                ),
                 batch_size=4,
+                params={
+                    "cu3s_file_path": "/tmp/data.cu3s",
+                    "annotation_json_path": "/tmp/annotations.json",
+                },
             ),
             training=TrainingConfig(),
         )

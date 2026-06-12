@@ -43,7 +43,6 @@ pytest_plugins = [
     "tests.fixtures.grpc",
     "tests.fixtures.config_factory",
     "tests.fixtures.sessions",
-    "tests.fixtures.mock_sdk",
     "tests.fixtures.workflow_fixtures",
 ]
 

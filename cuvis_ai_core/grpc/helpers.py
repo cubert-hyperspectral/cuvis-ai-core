@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import cuvis
 import numpy as np
 import torch
 import yaml
@@ -47,11 +46,14 @@ DTYPE_TORCH_TO_PROTO = {
     torch.uint16: cuvis_ai_pb2.D_TYPE_UINT16,
 }
 
+# Processing-mode names as plain strings, so core imports no cuvis SDK. The cu3s
+# reader (in the cuvis-ai-dataloader plugin) coerces the string to the SDK enum
+# at its own boundary.
 PROCESSING_MODE_MAP = {
-    cuvis_ai_pb2.PROCESSING_MODE_RAW: cuvis.ProcessingMode.Raw,
-    cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE: cuvis.ProcessingMode.Reflectance,
-    cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT: cuvis.ProcessingMode.DarkSubtract,
-    cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE: cuvis.ProcessingMode.SpectralRadiance,
+    cuvis_ai_pb2.PROCESSING_MODE_RAW: "Raw",
+    cuvis_ai_pb2.PROCESSING_MODE_REFLECTANCE: "Reflectance",
+    cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT: "DarkSubtract",
+    cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE: "SpectralRadiance",
 }
 
 TRAIN_STATUS_TO_STRING = {
@@ -243,14 +245,15 @@ def tensor_to_proto(tensor: torch.Tensor) -> cuvis_ai_pb2.Tensor:
     )
 
 
-def proto_to_processing_mode(mode: int) -> cuvis.ProcessingMode:
-    """Convert proto ProcessingMode to cuvis ProcessingMode.
+def proto_to_processing_mode(mode: int) -> str:
+    """Convert a proto ProcessingMode enum to its mode-name string.
 
     Args:
         mode: Proto ProcessingMode enum value
 
     Returns:
-        cuvis.ProcessingMode enum
+        Processing-mode name (e.g. "Reflectance"). The cu3s reader coerces this
+        string to the SDK enum at its own boundary, so core stays SDK-free.
 
     Raises:
         ValueError: If mode is not supported

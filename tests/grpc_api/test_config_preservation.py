@@ -13,8 +13,14 @@ from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import TrainingConfig, TrainRunConfig
 from tests.fixtures.sessions import materialize_trainrun_config
 
+_CU3S_PLUGIN_SKIP = (
+    "cu3s DataModule moved to the cuvis-ai-dataloader plugin; "
+    "not available in core's test env"
+)
+
 
 @pytest.mark.slow
+@pytest.mark.skip(reason=_CU3S_PLUGIN_SKIP)
 class TestConfigPreservationThroughTraining:
     """Test that configs loaded from train run files are preserved through training."""
 
@@ -283,6 +289,7 @@ class TestTrainingConfigFromDictConfig:
         assert restored.optimizer.weight_decay == original.optimizer.weight_decay
 
 
+@pytest.mark.skip(reason=_CU3S_PLUGIN_SKIP)
 class TestSessionStateManagement:
     """Test session state management edge cases."""
 
@@ -350,9 +357,7 @@ class TestSessionStateManagement:
             )
 
     @pytest.mark.requires_data
-    def test_multiple_sessions_have_independent_configs(
-        self, grpc_stub, mock_cuvis_sdk
-    ):
+    def test_multiple_sessions_have_independent_configs(self, grpc_stub):
         """
         Test that multiple sessions maintain independent training configs.
 

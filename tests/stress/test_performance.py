@@ -91,7 +91,7 @@ def test_config_resolution_complex_performance(benchmark, grpc_service):
                 "training.optimizer.weight_decay=0.05",
                 "training.trainer.max_epochs=20",
                 "data.batch_size=16",
-                "data.processing_mode=Reflectance",
+                "data.params.processing_mode=Reflectance",
             ],
         )
 
