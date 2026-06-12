@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import shutil
+import sys
 import threading
 import time
 import weakref
@@ -38,6 +39,15 @@ from cuvis_ai_core.orchestrator.uv_runner import uv_lock, uv_sync
 _DEFAULT_CACHE_ROOT_ENV = "CUVIS_RUN_CACHE_DIR"
 _DEFAULT_CACHE_ROOT = Path.home() / ".cuvis_runs"
 _LOCK_TIMEOUT_SECONDS = 1800  # cold-start install can take a long time
+
+# Pin composed child envs to the composing interpreter's minor version. Leaving
+# the range open (e.g. ">=3.11,<3.14") let uv pick a newer Python (3.13) whose
+# matplotlib wheel ships a broken ft2font on Windows, crashing the child runtime.
+# The child must track the parent stack's Python, so derive it from sys.
+_PARENT_PYTHON_REQUIRES = (
+    f">={sys.version_info.major}.{sys.version_info.minor},"
+    f"<{sys.version_info.major}.{sys.version_info.minor + 1}"
+)
 _STALE_PARTIAL_AGE_SECONDS = 6 * 60 * 60  # sweep half-built dirs older than 6h
 
 # Cache-protocol filenames/markers. The writer constructs them and the
@@ -118,7 +128,7 @@ def compose_env(
     *,
     core_source: CoreSource,
     cache_root: Path | None = None,
-    python_requires: str = ">=3.11,<3.14",
+    python_requires: str = _PARENT_PYTHON_REQUIRES,
     active_data_module: str | None = None,
 ) -> Path:
     """Materialise (or reuse) a cached venv for ``plugin_configs``.
