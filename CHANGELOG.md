@@ -2,13 +2,25 @@
 
 ## [Unreleased]
 
+- **Single import-only plugin-registration path + provisioning helpers.** Dropped the in-process
+  clone / `uv pip install` / `sys.path` plugin loader: `load_plugin` / `load_plugins` and the
+  clone/install internals are gone. In-process registration is now `register_plugins(manifest)` /
+  `register_plugin(name, config)`, which resolve a manifest and delegate to the same import-only
+  `register_preinstalled` the orchestrator child already uses, so in-process and the child register
+  through identical code. A plugin that isn't installed raises a guided `ModuleNotFoundError` pointing
+  at the `provision` command. New `provision` CLI + `cuvis_ai_core.utils.provision`
+  (`resolve_install_specs` / `format_install_command` / `provision_environment`) turn a pipeline's
+  `plugins:` + `--data-module` into `uv pip install` specs (git plugins pinned to their manifest tag,
+  `--pin` for a commit sha), an env file (`--requirements <file>`: `.toml` pyproject-shaped or `.txt`),
+  or an in-kernel `%pip install` for notebooks. `_plugin_source_entry` gained a `ref="tag"|"sha"`
+  argument (default `sha`, so the composer's child pyproject is unchanged).
 - **Pluggable DataModules; the cuvis SDK leaves core.** Added the SDK-free
   `cuvis_ai_core.data.datamodule.BaseHyperspectralDataModule` (split-to-stage mapping + the four
   `*_dataloader()` methods + `validate_params`) and `create_data_module(registry, data_config)`. A
   concrete DataModule now ships from a plugin (see `cuvis-ai-dataloader`), registered as a
   `kind: data_module` manifest entry; core ships no concrete DataModules.
-- **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` /
-  `load_plugin` route each provides entry by its static `kind`: `data_module` entries register into
+- **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` (the
+  shared core) routes each provides entry by its static `kind`: `data_module` entries register into
   `data_modules[DATA_MODULE_NAME]` (globally unique, asserts the class `DATA_MODULE_NAME` matches the
   manifest), `node` entries into `loaded_plugin_nodes` as before. The node palette
   (`ListAvailableNodes`) and the pipeline-plugin resolver coverage now filter to `kind == "node"`, so

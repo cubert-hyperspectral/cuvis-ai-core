@@ -1,23 +1,17 @@
-"""Git and OS helper utilities.
+"""OS / import helper utilities for plugin registration.
 
-These helpers are the **CLI / dev-mode plugin loader** primitives. They
-clone Git repos, install plugin deps with ``uv pip install``, add plugin
-roots to ``sys.path``, and import plugin modules into the running
-interpreter — i.e. they mutate the current process.
+These helpers back the import-only plugin registration path. Plugins are
+expected to be installed in the active environment already (an editable
+``[tool.uv.sources]`` entry in dev, ``uv pip install`` / the ``provision``
+helper, or the orchestrator's composed child venv). Registration is a plain
+``importlib.import_module`` of each provided class; nothing here clones a
+repo, installs dependencies, or mutates ``sys.path``.
 
-The production server NEVER calls these. Production plugin loading goes
-through :mod:`cuvis_ai_core.orchestrator`, which composes a child venv
-per pipeline plugin set and spawns a :class:`RunRuntimeServicer` inside
-it; the parent server is never mutated. Only the
-``restore-pipeline`` / ``restore-trainrun`` CLI entry points and the
-in-process :class:`NodeRegistry.load_plugin` flow still reach the
-helpers here.
-
-The one exception is :func:`import_plugin_nodes`: the orchestrator's
-child runtime reuses it (without install / clone / sys.path mutation)
-because by the time the child boots, every plugin is already a real
-installed package in its venv — only the class-collection step
-applies.
+Both the in-process front doors
+(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_plugins` /
+``register_plugin``) and the orchestrator's child runtime
+(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`)
+funnel through :func:`import_plugin_nodes`.
 """
 
 from __future__ import annotations
@@ -31,17 +25,17 @@ import stat
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
 
-if TYPE_CHECKING:
-    from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
-
-import git
 from loguru import logger
 
 
 def safe_rmtree(path: Path) -> None:
-    """Remove a directory tree with Windows-friendly permission handling."""
+    """Remove a directory tree with Windows-friendly permission handling.
+
+    Retained for the plugin-cache-clearing gRPC RPC
+    (``PluginService.clear_plugin_cache``), which sweeps any leftover plugin
+    cache directories.
+    """
 
     def _handle_remove_readonly(func, target_path, exc_info):
         exc = exc_info[1]
@@ -74,38 +68,11 @@ def safe_rmtree(path: Path) -> None:
         raise last_error
 
 
-def resolve_tag_commit(repo: "git.Repo", tag: str) -> Optional[str]:
-    """Resolve a Git tag to its commit hash.
-
-    Args:
-        repo: GitPython Repo object
-        tag: Tag name (e.g., v1.2.3)
-
-    Returns:
-        Commit hash if tag exists, None otherwise
-    """
-    tag = tag.strip()
-
-    # Try with refs/tags/ prefix
-    try:
-        return repo.commit(f"refs/tags/{tag}").hexsha
-    except Exception:
-        pass
-
-    # Try without prefix
-    try:
-        return repo.commit(tag).hexsha
-    except Exception:
-        pass
-
-    return None
-
-
 def _import_from_path(import_path: str, clear_cache: bool = False) -> type:
     """Import a class from a full module path.
 
-    CLI / dev-mode plugin loader only — the orchestrated server path
-    never calls this. See module docstring.
+    The plugin package must already be importable in the active environment;
+    this does not install or clone anything.
     """
     try:
         parts = import_path.rsplit(".", 1)
@@ -145,246 +112,6 @@ def _import_from_path(import_path: str, clear_cache: bool = False) -> type:
         raise AttributeError(f"Failed to load class '{import_path}': {exc}") from exc
 
 
-def _verify_tag_matches(repo_path: Path, expected_tag: str) -> bool:
-    """Verify that cached repository is at the expected tag.
-
-    Args:
-        repo_path: Path to cached repository
-        expected_tag: Expected tag name
-
-    Returns:
-        True if cache is at expected tag, False otherwise
-    """
-    try:
-        repo = git.Repo(repo_path)
-        current_commit = repo.head.commit.hexsha
-        expected_tag = expected_tag.strip()
-
-        resolved_commit = resolve_tag_commit(repo, expected_tag)
-
-        # If tag not found in cache, try fetching it
-        if resolved_commit is None:
-            if repo.remotes:
-                try:
-                    repo.git.fetch(
-                        "origin",
-                        f"refs/tags/{expected_tag}:refs/tags/{expected_tag}",
-                        depth=1,
-                    )
-                    resolved_commit = resolve_tag_commit(repo, expected_tag)
-                except git.GitCommandError as exc:
-                    logger.debug(
-                        f"Failed to fetch tag '{expected_tag}' for cache verification: {exc}"
-                    )
-
-        if resolved_commit is None:
-            logger.warning(f"Tag '{expected_tag}' not found in cached repo {repo_path}")
-            return False
-
-        return current_commit.startswith(resolved_commit)
-    except Exception as exc:
-        logger.warning(f"Cache verification failed for {repo_path}: {exc}")
-        return False
-
-
-def _clone_repository(repo_url: str, dest_path: Path, tag: str) -> Path:
-    """Clone Git repository and checkout specific tag.
-
-    Args:
-        repo_url: Git repository URL
-        dest_path: Destination path for clone
-        tag: Git tag name (e.g., v1.2.3)
-
-    Returns:
-        Path to cloned repository
-
-    Raises:
-        RuntimeError: If tag not found or clone fails
-    """
-    logger.info(f"Cloning {repo_url} (tag: {tag}) to {dest_path}")
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        # Shallow clone without specific branch
-        repo = git.Repo.clone_from(repo_url, dest_path, branch=None, depth=1)
-
-        # Fetch and checkout the specific tag
-        try:
-            repo.git.fetch("origin", f"refs/tags/{tag}:refs/tags/{tag}", depth=1)
-            repo.git.checkout(tag)
-            logger.info(f"Successfully checked out tag '{tag}'")
-            return dest_path
-        except git.GitCommandError as tag_error:
-            # Tag not found - clean up and raise clear error
-            if dest_path.exists():
-                safe_rmtree(dest_path)
-            raise RuntimeError(
-                f"Tag '{tag}' not found in repository '{repo_url}'.\n"
-                f"Only Git tags are supported (e.g., v1.2.3, v0.1.0-alpha).\n"
-                f"Branches and commit hashes are NOT supported.\n"
-                f"Error: {tag_error}"
-            )
-    except RuntimeError:
-        # Re-raise our custom errors
-        raise
-    except Exception as exc:
-        # Unexpected error - clean up
-        if dest_path.exists():
-            safe_rmtree(dest_path)
-        raise RuntimeError(
-            f"Failed to clone repository '{repo_url}' at tag '{tag}': {exc}"
-        ) from exc
-
-
-def _add_to_sys_path(path: Path) -> None:
-    """Add path to sys.path if not already present.
-
-    CLI / dev-mode plugin loader only — the orchestrated server path
-    never calls this. See module docstring.
-    """
-    path_str = str(path)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-        logger.debug(f"Added to sys.path: {path_str}")
-
-
-def _install_plugin_dependencies(plugin_path: Path, plugin_name: str) -> None:
-    """
-    Detect and install plugin dependencies from pyproject.toml.
-
-    This method enforces PEP 621 compliance by requiring plugins to have
-    a pyproject.toml file with proper dependency specifications.
-    """
-    pyproject_file = plugin_path / "pyproject.toml"
-
-    if not pyproject_file.exists():
-        raise FileNotFoundError(
-            f"Plugin '{plugin_name}' must have a pyproject.toml file.\n"
-            f"PEP 621 (https://peps.python.org/pep-0621/) specifies pyproject.toml "
-            f"as the standard for Python project metadata and dependencies.\n"
-            f"Expected location: {pyproject_file}"
-        )
-
-    deps = _extract_deps_from_pyproject(pyproject_file)
-
-    if not deps:
-        logger.debug(f"No dependencies found for plugin '{plugin_name}'")
-        return
-
-    logger.info(f"Installing {len(deps)} dependencies for plugin '{plugin_name}'...")
-    _install_dependencies_with_uv(deps, plugin_name)
-
-
-def _extract_deps_from_pyproject(pyproject_path: Path) -> list[str]:
-    """Extract dependencies from pyproject.toml using tomllib (Python 3.11+)."""
-    import tomllib  # stdlib in Python 3.11+
-
-    with pyproject_path.open("rb") as f:
-        data = tomllib.load(f)
-
-    deps = data.get("project", {}).get("dependencies", [])
-
-    filtered_deps = [
-        dep.strip()
-        for dep in deps
-        if dep and dep.strip() and not dep.strip().startswith("#")
-    ]
-
-    logger.debug(f"Extracted {len(filtered_deps)} dependencies from {pyproject_path}")
-    return filtered_deps
-
-
-def _install_dependencies_with_uv(deps: list[str], plugin_name: str) -> None:
-    """Install dependencies using 'uv pip install'.
-
-    CLI / dev-mode plugin loader only — the orchestrated server path
-    composes a child venv per plugin set via
-    :mod:`cuvis_ai_core.orchestrator.composer` and never mutates the
-    parent process's environment. See module docstring.
-    """
-    import subprocess
-
-    logger.info(f"Dependencies to install: {', '.join(deps)}")
-
-    cmd = ["uv", "pip", "install"] + deps
-
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        logger.info(f"✓ Plugin '{plugin_name}' dependencies installed successfully")
-
-        if result.stdout:
-            logger.debug(f"uv output: {result.stdout}")
-
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(
-            f"Plugin '{plugin_name}' dependency installation timed out (>5 min). "
-            f"This may indicate a network issue or very large dependencies."
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"Failed to install dependencies for plugin '{plugin_name}'.\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"Error: {exc.stderr}\n\n"
-            f"This may indicate version conflicts or missing packages. "
-            f"uv could not resolve the dependency tree."
-        ) from exc
-
-
-def parse_plugin_config(
-    name: str, config: dict, manifest_dir: Optional[Path] = None
-) -> tuple[GitPluginConfig | LocalPluginConfig, Path]:
-    """Parse and validate plugin config, resolving paths and ensuring plugin exists.
-
-    Args:
-        name: Plugin identifier
-        config: Plugin configuration dict with repo+tag or path+provides
-        manifest_dir: Optional base directory for resolving local plugin paths
-
-    Returns:
-        Tuple of (plugin_config, plugin_path) where:
-        - plugin_config: Validated GitPluginConfig or LocalPluginConfig
-        - plugin_path: Path to the plugin directory
-
-    Raises:
-        ValueError: If config missing repo/path or plugin validation fails
-        FileNotFoundError: If local plugin path doesn't exist
-    """
-    from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
-
-    plugin_config: GitPluginConfig | LocalPluginConfig
-    plugin_path: Path
-
-    # Validate and parse config
-    if "repo" in config:
-        plugin_config = GitPluginConfig.model_validate(config)
-        # For Git plugins, we need to ensure it's cloned/cached
-        from cuvis_ai_core.utils.node_registry import NodeRegistry
-
-        plugin_path = NodeRegistry._ensure_git_plugin(name, plugin_config)
-    elif "path" in config:
-        if manifest_dir is not None:
-            # Resolve local paths relative to manifest directory
-            config = dict(config)
-            config["path"] = str(LocalPluginConfig(**config).resolve_path(manifest_dir))
-        plugin_config = LocalPluginConfig.model_validate(config)
-        # For local plugins, validate the path exists
-        from cuvis_ai_core.utils.node_registry import NodeRegistry
-
-        plugin_path = NodeRegistry._ensure_local_plugin(name, plugin_config)
-    else:
-        raise ValueError(
-            f"Plugin '{name}' must have either 'repo' (Git) or 'path' (local)"
-        )
-
-    return plugin_config, plugin_path
-
-
 def extract_package_prefixes(class_paths: list[str]) -> set[str]:
     """Extract top-level package prefixes from class paths.
 
@@ -401,7 +128,6 @@ def extract_package_prefixes(class_paths: list[str]) -> set[str]:
     """
     package_prefixes = set()
     for class_path in class_paths:
-        # Extract top-level package name
         top_package = class_path.split(".")[0]
         package_prefixes.add(top_package)
     return package_prefixes
@@ -409,11 +135,6 @@ def extract_package_prefixes(class_paths: list[str]) -> set[str]:
 
 def clear_package_modules(prefixes: set[str]) -> None:
     """Clear all modules with given package prefixes from sys.modules.
-
-    This is critical when loading plugins that may conflict with already-imported
-    packages. For example, if cuvis_ai is installed in the environment and we're
-    loading it as a plugin from a different path, we need to clear ALL cuvis_ai.*
-    modules to ensure Python reimports from the plugin path.
 
     Args:
         prefixes: Set of top-level package names to clear (e.g., {"cuvis_ai"})
@@ -444,11 +165,9 @@ def import_plugin_nodes(
 ) -> dict[str, type]:
     """Import node classes from fully qualified paths.
 
-    Shared between the CLI plugin loader and the orchestrator's child
-    runtime (:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`).
-    In the orchestrated path the child is already inside a venv where
-    every plugin is installed, so this call only iterates the FQCN
-    list and collects classes — no install, no clone, no sys.path
+    Shared by the in-process front doors and the orchestrator's child runtime.
+    Every plugin is already an installed package, so this only iterates the
+    FQCN list and collects classes; no install, no clone, no ``sys.path``
     mutation.
 
     Args:
@@ -471,7 +190,6 @@ def import_plugin_nodes(
     """
     imported_nodes = {}
     for class_path in class_paths:
-        # Import the class with cache clearing if requested
         node_class = _import_from_path(class_path, clear_cache=clear_cache)
         class_name = node_class.__name__
         imported_nodes[class_name] = node_class
@@ -482,15 +200,7 @@ def import_plugin_nodes(
 
 __all__ = [
     "safe_rmtree",
-    "resolve_tag_commit",
     "_import_from_path",
-    "_verify_tag_matches",
-    "_clone_repository",
-    "_add_to_sys_path",
-    "_install_plugin_dependencies",
-    "_extract_deps_from_pyproject",
-    "_install_dependencies_with_uv",
-    "parse_plugin_config",
     "extract_package_prefixes",
     "clear_package_modules",
     "import_plugin_nodes",

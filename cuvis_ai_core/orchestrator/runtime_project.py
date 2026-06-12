@@ -239,7 +239,7 @@ def _core_source_entry(core_source: CoreSource) -> dict | None:
     return None
 
 
-def _plugin_source_entry(p: ResolvedPlugin) -> tuple[str, str, dict]:
+def _plugin_source_entry(p: ResolvedPlugin, ref: str = "sha") -> tuple[str, str, dict]:
     """Return (dependency_string, source_key, uv source entry) for one plugin.
 
     ``source_key`` is the bare ``package_name`` (the ``[project].name`` from the
@@ -248,13 +248,22 @@ def _plugin_source_entry(p: ResolvedPlugin) -> tuple[str, str, dict]:
     ``dependency_string`` is that same name plus any pip ``extras`` it activates
     (``pkg[extra1,extra2]``), and goes into ``[project].dependencies``; uv composes
     extras with a ``tool.uv.sources`` git/path override keyed by the bare name.
+
+    ``ref`` selects how a git plugin is pinned: ``"sha"`` (default) emits the
+    resolved commit ``rev`` for a cache-stable, reproducible env (the
+    orchestrator composer always uses this); ``"tag"`` emits the manifest tag,
+    which the ``provision`` helper uses for a human-readable env file unless the
+    caller asks to pin.
     """
     source_key = p.package_name or p.name
     dependency_string = (
         f"{source_key}[{','.join(p.extras)}]" if p.extras else source_key
     )
     if isinstance(p, ResolvedGitPlugin):
-        return dependency_string, source_key, {"git": _ssh_to_url(p.repo), "rev": p.sha}
+        url = _ssh_to_url(p.repo)
+        if ref == "tag":
+            return dependency_string, source_key, {"git": url, "tag": p.tag}
+        return dependency_string, source_key, {"git": url, "rev": p.sha}
     return dependency_string, source_key, {"path": str(p.path), "editable": True}
 
 

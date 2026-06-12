@@ -121,6 +121,7 @@ restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
 suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
 audit-plugin-deps = "scripts.audit_plugin_deps:main"
+provision = "scripts.provision:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

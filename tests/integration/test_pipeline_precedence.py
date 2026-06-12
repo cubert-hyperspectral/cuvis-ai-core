@@ -52,7 +52,7 @@ def test_set_train_run_config_rejects_embedded_pipeline(
     trainrun = TrainRunConfig(
         name="with-pipeline",
         pipeline=PipelineConfig.from_dict(embedded),
-        data=DataConfig(cu3s_file_path="/tmp/dummy.cu3s"),
+        data=DataConfig(params={"cu3s_file_path": "/tmp/dummy.cu3s"}),
         training=TrainingConfig(),
     )
 
@@ -86,7 +86,7 @@ def test_set_train_run_config_requires_existing_pipeline(
     trainrun = TrainRunConfig(
         name="no-prior-pipeline",
         pipeline=PipelineConfig.from_dict(clean_pipeline),
-        data=DataConfig(cu3s_file_path="/tmp/dummy.cu3s"),
+        data=DataConfig(params={"cu3s_file_path": "/tmp/dummy.cu3s"}),
         training=TrainingConfig(),
     )
 

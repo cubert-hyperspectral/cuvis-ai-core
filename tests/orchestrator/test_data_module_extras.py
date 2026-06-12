@@ -7,7 +7,11 @@ from pathlib import Path
 from cuvis_ai_schemas.catalog import CatalogNodeEntry
 from cuvis_ai_schemas.plugin import LocalPluginConfig
 
-from cuvis_ai_core.orchestrator.cache_key import CoreSource, ResolvedLocalPlugin
+from cuvis_ai_core.orchestrator.cache_key import (
+    CoreSource,
+    ResolvedGitPlugin,
+    ResolvedLocalPlugin,
+)
 from cuvis_ai_core.orchestrator.runtime_project import (
     _active_extras,
     _plugin_source_entry,
@@ -85,6 +89,27 @@ def test_build_runtime_pyproject_includes_extras():
     assert "cuvis-ai-dataloader[coco,cu3s]" in doc["project"]["dependencies"]
     assert "cuvis-ai-dataloader" in doc["tool"]["uv"]["sources"]
     assert "cuvis-ai-dataloader[coco,cu3s]" not in doc["tool"]["uv"]["sources"]
+
+
+def test_plugin_source_entry_ref_default_sha_vs_tag():
+    """Regression: the composer default pins git plugins to the resolved sha;
+    the provision helper's ref='tag' emits the manifest tag instead. The default
+    must stay 'sha' so composed child envs remain cache-stable and reproducible."""
+    repo = "https://github.com/cubert-hyperspectral/cuvis-ai-sam3.git"
+    sha = "9f3c1a2b" * 5  # 40 hex chars
+    p = ResolvedGitPlugin(
+        name="sam3",
+        repo=repo,
+        sha=sha,
+        tag="v0.1.6",
+        package_name="cuvis-ai-sam3",
+        extras=(),
+    )
+    _dep, _key, entry_default = _plugin_source_entry(p)
+    assert entry_default == {"git": repo, "rev": sha}  # composer default unchanged
+    assert _plugin_source_entry(p, ref="sha")[2] == entry_default
+    _d, _k, entry_tag = _plugin_source_entry(p, ref="tag")
+    assert entry_tag == {"git": repo, "tag": "v0.1.6"}  # provision env file
 
 
 def test_union_data_module_plugin():

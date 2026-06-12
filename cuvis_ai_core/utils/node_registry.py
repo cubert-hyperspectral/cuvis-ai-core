@@ -20,7 +20,7 @@ class NodeRegistry:
 
     INSTANCE MODE (built-ins + plugins):
         registry = NodeRegistry()
-        registry.load_plugin("adaclip", config)
+        registry.register_plugin("adaclip", config)
         registry.get("AdaCLIPDetector")  # Access both built-ins and plugins
 
     Built-in nodes are registered via @register decorator for O(1) lookup.
@@ -35,7 +35,7 @@ class NodeRegistry:
         """Create instance for plugin support."""
         # Every known plugin's config (registered or loaded) — the single
         # source of plugin config. Anything that needs a config reads it here;
-        # `load_plugin(name)` with no explicit config materialises this entry.
+        # `register_plugin(name)` with no explicit config materialises this entry.
         self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
         # Loaded node classes, keyed by class name. Membership here *is* the
         # loaded state: a plugin is loaded iff its provided classes are present.
@@ -163,7 +163,7 @@ class NodeRegistry:
 
             # Plugin node (instance call)
             registry = NodeRegistry()
-            registry.load_plugin("adaclip", config)
+            registry.register_plugin("adaclip", config)
             cls = registry.get("AdaCLIPDetector")
 
             # Custom node with full path
@@ -208,7 +208,7 @@ class NodeRegistry:
                 "     uv run restore-pipeline --pipeline-path <path> --plugins-dir configs/plugins\n\n"
                 "   For Python usage:\n"
                 "     registry = NodeRegistry()\n"
-                "     registry.load_plugins('path/to/plugins.yaml')\n"
+                "     registry.register_plugins('path/to/plugins.yaml')\n"
                 "     pipeline = CuvisPipeline.load_pipeline(..., node_registry=registry)\n\n"
             )
         elif (
@@ -219,7 +219,7 @@ class NodeRegistry:
             error_msg += (
                 "\n⚠️  This appears to be an external plugin node, but no plugins are loaded!\n"
                 "   Load plugins before building pipeline:\n"
-                "     registry.load_plugins('path/to/plugins.yaml')\n\n"
+                "     registry.register_plugins('path/to/plugins.yaml')\n\n"
             )
         else:
             error_msg += "For custom nodes, provide full import path (e.g., 'my_package.MyNode').\n"
@@ -349,24 +349,29 @@ class NodeRegistry:
 
         return registered_count
 
-    def load_plugins(self, manifest_path: Union[str, Path]) -> int:
-        """
-        Load multiple plugins from a YAML manifest file.
+    def register_plugins(self, manifest_path: Union[str, Path]) -> int:
+        """Register every plugin declared in a YAML manifest into THIS INSTANCE.
+
+        Import-only front door for in-process use (CLI, notebooks, cookbook).
+        It parses the manifest, resolves local-plugin paths, and hands the
+        resolved configs to :meth:`register_preinstalled`. Every plugin must
+        already be importable in the active environment (an editable
+        ``[tool.uv.sources]`` entry in dev, or ``uv pip install`` / the
+        ``provision`` helper otherwise); this never clones or installs.
 
         Args:
-            manifest_path: Path to plugins.yaml file
+            manifest_path: Path to a plugins.yaml manifest.
 
         Returns:
-            Number of plugins loaded
+            Number of plugins registered.
 
         Example:
             registry = NodeRegistry()
-            count = registry.load_plugins("plugins.yaml")
-            print(f"Loaded {count} plugins")
+            count = registry.register_plugins("plugins.yaml")
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
-                "load_plugins() requires an instance. "
+                "register_plugins() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
             )
 
@@ -376,15 +381,77 @@ class NodeRegistry:
         manifest = PluginManifest.from_yaml(manifest_path)
         manifest_dir = manifest_path.resolve().parent
 
-        loaded = 0
-        for plugin_name, config in manifest.plugins.items():
-            self.load_plugin(
-                plugin_name, config.model_dump(), manifest_dir=manifest_dir
-            )
-            loaded += 1
+        resolved: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
+        for plugin_name, cfg in manifest.plugins.items():
+            if isinstance(cfg, LocalPluginConfig):
+                cfg = cfg.model_copy(
+                    update={"path": str(cfg.resolve_path(manifest_dir))}
+                )
+            resolved[plugin_name] = cfg
 
-        logger.info(f"Loaded {loaded} plugins from {manifest_path}")
-        return loaded
+        self.register_preinstalled(resolved)
+        logger.info(f"Registered {len(resolved)} plugins from {manifest_path}")
+        return len(resolved)
+
+    def register_plugin(
+        self,
+        name: str,
+        config: Optional[dict] = None,
+        manifest_dir: Optional[Path] = None,
+    ) -> None:
+        """Register a single already-installed plugin into THIS INSTANCE.
+
+        Import-only single-plugin front door (the singular of
+        :meth:`register_plugins`). Resolves ``config`` (an explicit
+        ``repo``+``tag`` or ``path`` dict) or, when ``config is None``, the
+        registered ``self.plugin_catalog[name]`` entry, then delegates to
+        :meth:`register_preinstalled`. The plugin package must already be
+        importable in the active environment; this never clones or installs.
+
+        Args:
+            name: Plugin identifier (e.g., "adaclip").
+            config: Optional plugin-config dict (repo+tag+provides for Git,
+                path+provides for local). When ``None``, the catalog entry for
+                ``name`` is used.
+            manifest_dir: Optional base directory for resolving a local
+                plugin's relative path.
+        """
+        if not hasattr(self, "loaded_plugin_nodes"):
+            raise RuntimeError(
+                "register_plugin() requires an instance. "
+                "Create instance first: registry = NodeRegistry()"
+            )
+
+        if config is None:
+            if name not in self.plugin_catalog:
+                raise KeyError(
+                    f"Plugin '{name}' is neither registered in the catalog "
+                    f"nor passed as an explicit config. Call "
+                    f"register_catalog_entries() first, or pass config=..."
+                )
+            cfg = self.plugin_catalog[name]
+        else:
+            cfg = self._parse_config_dict(name, config, manifest_dir)
+
+        self.register_preinstalled({name: cfg})
+
+    @staticmethod
+    def _parse_config_dict(
+        name: str, config: dict, manifest_dir: Optional[Path]
+    ) -> Union[GitPluginConfig, LocalPluginConfig]:
+        """Validate a plugin-config dict into a typed config (no clone/install)."""
+        if "repo" in config:
+            return GitPluginConfig.model_validate(config)
+        if "path" in config:
+            cfg = LocalPluginConfig.model_validate(config)
+            if manifest_dir is not None:
+                cfg = cfg.model_copy(
+                    update={"path": str(cfg.resolve_path(manifest_dir))}
+                )
+            return cfg
+        raise ValueError(
+            f"Plugin '{name}' config must have either 'repo' (Git) or 'path' (local)."
+        )
 
     def register_catalog_entries(
         self,
@@ -396,7 +463,7 @@ class NodeRegistry:
         A catalog entry is "this plugin is known and the session can
         materialise it on demand". Calling this does NOT clone, install
         dependencies, mutate sys.path, or import any modules — those side
-        effects are deferred to ``load_plugin(name)`` (called by the
+        effects are deferred to ``register_plugin(name)`` (called by the
         ``LoadPipeline`` resolver path when a pipeline actually references
         the plugin).
 
@@ -418,7 +485,7 @@ class NodeRegistry:
             registry = NodeRegistry()
             registry.register_catalog_entries(resolved)
             # registry.plugin_catalog["adaclip"] now holds the metadata.
-            # Nothing is imported until registry.load_plugin("adaclip") is called.
+            # Nothing is imported until registry.register_plugin("adaclip") is called.
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
@@ -444,150 +511,40 @@ class NodeRegistry:
                 )
             self.plugin_catalog[name] = cfg
 
-    def load_plugin(
-        self,
-        name: str,
-        config: Optional[dict] = None,
-        manifest_dir: Optional[Path] = None,
-    ) -> None:
-        """
-        Load a single plugin into THIS INSTANCE.
-
-        CLI / dev-mode plugin loader only. The orchestrated server
-        path never calls this — production plugin loading composes a
-        child venv via :mod:`cuvis_ai_core.orchestrator.composer` and
-        the child runtime registers preinstalled classes through
-        :meth:`register_preinstalled`. This method survives so the
-        ``restore-pipeline`` / ``restore-trainrun`` CLI entry points
-        continue to work against a curated venv.
-
-        IMPORTANT: This is an INSTANCE METHOD - you must create a NodeRegistry instance first!
-
-        Unlike get() which works as both class and instance method, load_plugin() requires
-        an instance for plugin isolation. This is by design of the hybrid class/instance design:
-        - Built-in nodes: accessed via class (NodeRegistry.get("MinMaxNormalizer"))
-        - Plugin nodes: require instance (registry = NodeRegistry(); registry.load_plugin(...))
-
-        Order (loaded-state is checked BEFORE parsing — see below):
-        1. If the plugin is already loaded → ignore any explicit config and
-           return. Loaded-state is checked first because parsing an explicit
-           config clones / resolves the source, which is wasted work (and wrong)
-           for an already-live plugin.
-        2. Else resolve the config: the explicit ``config`` (parsed, then stored
-           in the catalog) or, when ``config is None``, the registered
-           ``self.plugin_catalog[name]`` entry.
-        3. Install deps, add to ``sys.path``, then import the provided classes
-           into ``loaded_plugin_nodes``.
-
-        Args:
-            name: Plugin identifier (e.g., "adaclip")
-            config: Optional plugin configuration dict. When ``None``, the
-                method materialises ``self.plugin_catalog[name]``. When given,
-                the dict has either:
-                - repo + tag (for Git plugins) + provides
-                - path (for local plugins) + provides
-            manifest_dir: Optional base directory for resolving local plugin
-                paths (ignored when ``config is None`` since catalog entries
-                already hold absolute paths).
-
-        Examples:
-            # ✅ CORRECT: Explicit config
-            registry = NodeRegistry()
-            registry.load_plugin("adaclip", {
-                "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
-                "tag": "v1.2.3",
-                "provides": [{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}]
-            })
-
-            # ✅ CORRECT: Catalog fast path (register-then-materialise)
-            registry = NodeRegistry()
-            registry.register_catalog_entries({"adaclip": adaclip_config})
-            registry.load_plugin("adaclip")  # materialises from catalog
-
-            # ✅ CORRECT: Local plugin
-            registry = NodeRegistry()
-            registry.load_plugin("local_dev", {
-                "path": "../my-plugin",
-                "provides": [{"class_name": "my_plugin.MyNode"}]
-            })
-
-            # ❌ WRONG: Don't call as class method
-            # NodeRegistry.load_plugin(...)  # TypeError: missing 'self'
-        """
-        # Check instance mode
-        if not hasattr(self, "loaded_plugin_nodes"):
-            raise RuntimeError(
-                "load_plugin() requires an instance. "
-                "Create instance first: registry = NodeRegistry()"
-            )
-
-        # Already loaded → no-op. Checked BEFORE parsing: parse_plugin_config /
-        # _ensure_git_plugin / _ensure_local_plugin clone/resolve/stat the
-        # source, so parsing an explicit config for a live plugin would do real
-        # I/O only to discard it. To change a loaded plugin, unload it first.
-        if self._has_loaded_node(name):
-            if config is not None:
-                logger.warning(
-                    f"Plugin '{name}' is already loaded; ignoring the explicit "
-                    f"config. Call unload_plugin('{name}') first to change it."
-                )
-            else:
-                logger.debug(f"Plugin '{name}' already loaded, skipping")
-            return
-
-        # Resolve the config (the catalog is the single source). An explicit
-        # config is parsed/validated and stored; otherwise read the registered
-        # catalog entry, which already holds parsed config objects.
-        if config is None:
-            if name not in self.plugin_catalog:
-                raise KeyError(
-                    f"Plugin '{name}' is neither registered in the catalog "
-                    f"nor passed as an explicit config. Call "
-                    f"register_catalog_entries() first, or pass config=..."
-                )
-            plugin_config = self.plugin_catalog[name]
-            if isinstance(plugin_config, GitPluginConfig):
-                plugin_path = NodeRegistry._ensure_git_plugin(name, plugin_config)
-            else:
-                plugin_path = NodeRegistry._ensure_local_plugin(name, plugin_config)
-        else:
-            plugin_config, plugin_path = git_os.parse_plugin_config(
-                name, config, manifest_dir
-            )
-            self.plugin_catalog[name] = plugin_config
-
-        # Install plugin dependencies and make the package importable.
-        self._install_plugin_dependencies(plugin_path, name)
-        self._add_to_sys_path(plugin_path)
-
-        # Import the provided classes into loaded_plugin_nodes (clearing any
-        # stale module cache first, since this path may shadow a curated venv).
-        self._register_node_classes(name, plugin_config, clear_cache=True)
-
-        logger.info(f"Loaded plugin '{name}' with {len(plugin_config.provides)} nodes")
-
     def _register_node_classes(
         self,
         name: str,
         config: Union[GitPluginConfig, LocalPluginConfig],
         *,
-        clear_cache: bool,
+        clear_cache: bool = False,
     ) -> None:
         """Import a plugin's provided classes into ``loaded_plugin_nodes``.
 
-        The shared registration tail of :meth:`load_plugin` (``clear_cache=True``,
-        run after the install / ``sys.path`` steps) and
-        :meth:`register_preinstalled` (``clear_cache=False``, no install — the
-        child venv already has the package). It does not install dependencies or
-        mutate ``sys.path``; callers do that when the source is not preinstalled.
+        The shared registration core: both the in-process front doors
+        (:meth:`register_plugins` / :meth:`register_plugin`) and the orchestrator
+        child runtime (:meth:`register_preinstalled`) funnel through here. It
+        imports the FQCNs via ``importlib`` only; it never clones, installs, or
+        mutates ``sys.path``. The plugin package must already be importable, so a
+        missing one is re-raised with a hint pointing at the ``provision`` helper.
         """
         class_paths = [node.class_name for node in config.provides]
         if clear_cache:
             package_prefixes = git_os.extract_package_prefixes(class_paths)
             git_os.clear_package_modules(package_prefixes)
-        imported_nodes = git_os.import_plugin_nodes(
-            class_paths, clear_cache=clear_cache
-        )
+        try:
+            imported_nodes = git_os.import_plugin_nodes(
+                class_paths, clear_cache=clear_cache
+            )
+        except ImportError as exc:
+            raise ModuleNotFoundError(
+                f"Plugin '{name}' could not be imported: {exc}\n"
+                f"Its package is not installed in this environment. Provision it "
+                f"first, for example:\n"
+                f"  uv run provision --pipeline-path <pipeline.yaml> "
+                f"--plugins-dir <dir> --apply\n"
+                f"or install the plugin directly, e.g. "
+                f"uv pip install '<pkg>[extras] @ git+<url>@<tag>'."
+            ) from exc
         by_simple_name = {
             node.class_name.rsplit(".", 1)[-1]: node for node in config.provides
         }
@@ -631,13 +588,12 @@ class NodeRegistry:
 
         When the orchestrator runs a pipeline inside a child runtime, every
         plugin in the child's venv is already a real installed package (uv put
-        it there during ``compose_env``). The traditional :meth:`load_plugin`
-        flow — clone, install, prepend to ``sys.path``, then import — is wrong
-        here: the work is done, and re-running it would shadow the installed
-        package. This registers each plugin's classes via a plain
-        ``importlib.import_module`` (no clone / install / ``sys.path`` step) and
-        records the config in the catalog so the rest of the registry behaves
-        identically to the ``load_plugin`` path.
+        it there during ``compose_env``). This registers each plugin's classes
+        via a plain ``importlib.import_module`` (no clone / install / ``sys.path``
+        step) and records the config in the catalog. It is the shared
+        registration core: the in-process front doors
+        (:meth:`register_plugins` / :meth:`register_plugin`) and this child path
+        all funnel through :meth:`_register_node_classes`.
         """
         for name, config in resolved_plugins.items():
             self.plugin_catalog[name] = config
@@ -650,7 +606,7 @@ class NodeRegistry:
         """
         Unload a plugin and remove its nodes from THIS INSTANCE.
 
-        CLI / dev-mode counterpart to :meth:`load_plugin`; the
+        CLI / dev-mode counterpart to :meth:`register_plugin`; the
         orchestrated server path never calls this. The child runtime
         is torn down on ``CloseSession`` and its venv is reused by
         the composer's cache, so no explicit unload step is needed
@@ -698,7 +654,7 @@ class NodeRegistry:
     def clear_plugins(self) -> None:
         """Unload all plugins and clear plugin registries in THIS INSTANCE.
 
-        CLI / dev-mode only — see :meth:`load_plugin` /
+        CLI / dev-mode only — see :meth:`register_plugin` /
         :meth:`unload_plugin` for the rationale. The orchestrated
         server path drops the entire child runtime on
         ``CloseSession`` instead.
@@ -742,76 +698,6 @@ class NodeRegistry:
         """
         cls._cache_dir = Path(path)
         logger.debug(f"Plugin cache directory set to: {cls._cache_dir}")
-
-    # === Internal Plugin Helpers ===
-
-    @classmethod
-    def _ensure_git_plugin(cls, plugin_name: str, config: "GitPluginConfig") -> Path:
-        """Clone or reuse cached Git repository."""
-        cache_dir = cls._cache_dir / f"{plugin_name}@{config.tag}"
-
-        if cache_dir.exists():
-            if cls._verify_tag_matches(cache_dir, config.tag):
-                logger.info(f"Using cached plugin '{plugin_name}' at {cache_dir}")
-                return cache_dir
-            else:
-                logger.warning(f"Cache mismatch for '{plugin_name}', re-cloning...")
-                try:
-                    git_os.safe_rmtree(cache_dir)
-                except PermissionError as exc:
-                    raise PermissionError(
-                        f"Failed to remove cached plugin '{plugin_name}' at {cache_dir}. "
-                        "A file is likely locked or marked read-only. Close any process "
-                        "using the cache or delete it manually, then retry."
-                    ) from exc
-
-        return cls._clone_repository(config.repo, cache_dir, config.tag)
-
-    @classmethod
-    def _ensure_local_plugin(cls, plugin_name: str, config: LocalPluginConfig) -> Path:
-        """Resolve and validate local plugin path."""
-        plugin_path = Path(config.path)
-        if not plugin_path.is_absolute():
-            plugin_path = plugin_path.resolve()
-
-        if not plugin_path.exists():
-            raise FileNotFoundError(f"Local plugin path not found: {plugin_path}")
-
-        if not plugin_path.is_dir():
-            raise ValueError(f"Plugin path must be a directory: {plugin_path}")
-
-        logger.info(f"Using local plugin '{plugin_name}' at {plugin_path}")
-        return plugin_path
-
-    @classmethod
-    def _verify_tag_matches(cls, repo_path: Path, expected_tag: str) -> bool:
-        """Verify that cached repository is at the expected tag."""
-        return git_os._verify_tag_matches(repo_path, expected_tag)
-
-    @classmethod
-    def _clone_repository(cls, repo_url: str, dest_path: Path, tag: str) -> Path:
-        """Clone Git repository and checkout specific tag."""
-        return git_os._clone_repository(repo_url, dest_path, tag)
-
-    @classmethod
-    def _add_to_sys_path(cls, path: Path) -> None:
-        """Add path to sys.path if not already present."""
-        git_os._add_to_sys_path(path)
-
-    @classmethod
-    def _install_plugin_dependencies(cls, plugin_path: Path, plugin_name: str) -> None:
-        """Detect and install plugin dependencies from pyproject.toml."""
-        git_os._install_plugin_dependencies(plugin_path, plugin_name)
-
-    @classmethod
-    def _extract_deps_from_pyproject(cls, pyproject_path: Path) -> list[str]:
-        """Extract dependencies from pyproject.toml using tomllib (Python 3.11+)."""
-        return git_os._extract_deps_from_pyproject(pyproject_path)
-
-    @classmethod
-    def _install_dependencies_with_uv(cls, deps: list[str], plugin_name: str) -> None:
-        """Install dependencies using 'uv pip install'."""
-        git_os._install_dependencies_with_uv(deps, plugin_name)
 
     @classmethod
     def clear(cls):
