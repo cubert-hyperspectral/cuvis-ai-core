@@ -45,6 +45,19 @@ def test_setup_predict_expands_range_strings():
     assert len(dm._predict_ds) == 4  # "0-3" -> [0, 1, 2, 3]
 
 
+def test_public_dataset_properties_get_and_set():
+    # The former SingleCu3sDataModule exposed train/val/test/predict_ds publicly;
+    # consumers read them and sometimes reassign (e.g. predict_ds = Subset(...)).
+    dm = FakeDataModule(splits=DataSplitConfig(train_ids=[0, 1], predict_ids=[]))
+    assert dm.train_ds is None and dm.predict_ds is None  # before setup
+    dm.setup(stage="fit")
+    assert dm.train_ds is dm._train_ds
+    assert len(dm.train_ds) == 2
+    sentinel = object()
+    dm.predict_ds = sentinel  # settable
+    assert dm._predict_ds is sentinel
+
+
 def test_module_owned_splits():
     dm = FakeDataModule(splits=None)
     dm.setup(stage="fit")

@@ -60,6 +60,46 @@ class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
         self._test_ds: Dataset | None = None
         self._predict_ds: Dataset | None = None
 
+    # -- public per-stage dataset accessors ------------------------------------
+    # The former SingleCu3sDataModule exposed these directly; consumers read
+    # ``len(dm.predict_ds)`` / ``dm.train_ds.wavelengths_nm`` and sometimes
+    # reassign (e.g. ``dm.predict_ds = Subset(...)``), so they are settable.
+    @property
+    def train_ds(self) -> Dataset | None:
+        """The training dataset built by ``setup`` (``None`` until then)."""
+        return self._train_ds
+
+    @train_ds.setter
+    def train_ds(self, value: Dataset | None) -> None:
+        self._train_ds = value
+
+    @property
+    def val_ds(self) -> Dataset | None:
+        """The validation dataset built by ``setup`` (``None`` until then)."""
+        return self._val_ds
+
+    @val_ds.setter
+    def val_ds(self, value: Dataset | None) -> None:
+        self._val_ds = value
+
+    @property
+    def test_ds(self) -> Dataset | None:
+        """The test dataset built by ``setup`` (``None`` until then)."""
+        return self._test_ds
+
+    @test_ds.setter
+    def test_ds(self, value: Dataset | None) -> None:
+        self._test_ds = value
+
+    @property
+    def predict_ds(self) -> Dataset | None:
+        """The predict dataset built by ``setup`` (``None`` until then)."""
+        return self._predict_ds
+
+    @predict_ds.setter
+    def predict_ds(self, value: Dataset | None) -> None:
+        self._predict_ds = value
+
     # -- subclass contract -----------------------------------------------------
     @staticmethod
     def validate_params(params: dict[str, Any]) -> None:
