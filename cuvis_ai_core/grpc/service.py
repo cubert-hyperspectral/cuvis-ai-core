@@ -13,6 +13,7 @@ from .profiling_service import ProfilingService
 from .plugin_service import PluginService
 from .session_manager import SessionManager
 from .session_service import SessionService
+from .splits_service import SplitsService
 from .training_service import TrainingService
 from .trainrun_service import TrainRunService
 from .v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
@@ -30,6 +31,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
         self.pipeline_service = PipelineService(self.session_manager)
         self.inference_service = InferenceService(self.session_manager)
         self.training_service = TrainingService(self.session_manager)
+        self.splits_service = SplitsService(self.session_manager)
         self.trainrun_service = TrainRunService(self.session_manager)
         self.discovery_service = DiscoveryService()
         self.introspection_service = IntrospectionService(self.session_manager)
@@ -63,6 +65,12 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
 
     def ValidateConfig(self, request, context) -> cuvis_ai_pb2.ValidateConfigResponse:
         return self.config_service.validate_config(request, context)
+
+    # ------------------------------------------------------------------
+    # Workspace split resolution
+    # ------------------------------------------------------------------
+    def ResolveSplits(self, request, context) -> cuvis_ai_pb2.ResolveSplitsResponse:
+        return self.splits_service.resolve_splits(request, context)
 
     # ------------------------------------------------------------------
     # Pipeline construction and training configuration
