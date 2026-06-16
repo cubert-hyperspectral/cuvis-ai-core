@@ -47,10 +47,10 @@ from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 # overridable via env so a slow cold start — e.g. the first CUDA-torch import in
 # a freshly composed venv on Windows — does not trip them before the child's gRPC
 # server comes up. Env unset / non-positive / invalid falls back to the default.
-_ENDPOINT_POLL_TIMEOUT_SECONDS = 30.0
+_ENDPOINT_POLL_TIMEOUT_SECONDS = 120.0
 _ENDPOINT_POLL_TIMEOUT_ENV = "CUVIS_RUNTIME_ENDPOINT_TIMEOUT_SECONDS"
 _ENDPOINT_POLL_INTERVAL_SECONDS = 0.05
-_HEALTH_POLL_TIMEOUT_SECONDS = 30.0
+_HEALTH_POLL_TIMEOUT_SECONDS = 120.0
 _HEALTH_POLL_TIMEOUT_ENV = "CUVIS_RUNTIME_HEALTH_TIMEOUT_SECONDS"
 _HEALTH_POLL_INTERVAL_SECONDS = 0.2
 _HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
@@ -185,12 +185,11 @@ class ChildHandle:
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
         if self._channel is None:
-            # The parent<->child runtime bridge carries full tensor batches
-            # (cubes, masks) that dwarf gRPC's 4 MB default. It is a trusted
-            # loopback channel and the child server already binds unlimited
-            # (run_runtime/__main__.py), so leave both directions uncapped here
-            # too; the public production_server keeps the only enforced size
-            # limit, at the real trust boundary.
+            # No message-size cap: the parent fully trusts its own child on
+            # loopback, and inference responses (full RGB + score tensors) can
+            # be hundreds of MB. The child server already sends with -1; without
+            # matching it here the parent rejects the response at gRPC's 4 MB
+            # default receive limit.
             self._channel = grpc.insecure_channel(
                 self.endpoint,
                 options=[
