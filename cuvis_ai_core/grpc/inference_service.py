@@ -9,6 +9,7 @@ from typing import Any
 import grpc
 import numpy as np
 import torch
+from loguru import logger
 
 from cuvis_ai_schemas.enums import ExecutionStage
 
@@ -41,6 +42,8 @@ class InferenceService:
             return cuvis_ai_pb2.InferenceResponse()
 
         with ExitStack() as stack:
+            # With copy_tensors=False the parse only builds views into the input
+            # buffers; the real read cost lands in the device move below.
             batch = self._parse_input_batch(
                 request.inputs,
                 copy_tensors=False,
@@ -58,31 +61,78 @@ class InferenceService:
             )
 
             output_specs = set(request.output_specs)
-            tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
-            metrics: dict[str, float] = {}
+            available = [self._format_output_key(k) for k in outputs]
+            logger.info(
+                f"Inference produced {len(available)} pipeline outputs "
+                f"{sorted(available)}; requested output_specs="
+                f"{sorted(output_specs) or '[] (all)'}"
+            )
 
-            for raw_key, value in outputs.items():
-                output_name = self._format_output_key(raw_key)
-                if not self._should_return(output_name, output_specs):
-                    continue
+            tensor_outputs, metrics = self._build_outputs(outputs, output_specs)
 
-                # Metrics: plain scalars
-                if isinstance(value, (int, float, np.number)) and not isinstance(
-                    value, bool
-                ):
-                    metrics[output_name] = float(value)
-                    continue
+            # If the requested specs matched only non-serializable outputs
+            # (e.g. dict metadata like 'band_info'), don't hand back an empty
+            # response — fall back to every serializable output the pipeline
+            # produced so the client reliably gets the rest.
+            if output_specs and available and not tensor_outputs and not metrics:
+                logger.warning(
+                    f"output_specs={sorted(output_specs)} produced no serializable "
+                    f"output; returning all serializable outputs instead."
+                )
+                tensor_outputs, metrics = self._build_outputs(outputs, set())
 
-                try:
-                    tensor = self._to_tensor(value)
-                except Exception:
-                    # Skip non-tensorizable outputs (e.g., artifacts or custom objects)
-                    continue
-                tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
+            if available and not tensor_outputs and not metrics:
+                logger.warning(
+                    f"No serializable outputs for session {request.session_id}; "
+                    f"returning an empty response. Available: {sorted(available)}"
+                )
 
             return cuvis_ai_pb2.InferenceResponse(
                 outputs=tensor_outputs, metrics=metrics
             )
+
+    def _build_outputs(
+        self,
+        outputs: dict[Any, Any],
+        specs: set[str],
+    ) -> tuple[dict[str, cuvis_ai_pb2.Tensor], dict[str, float]]:
+        """Filter and serialize pipeline outputs into the response maps.
+
+        Applies ``output_specs`` filtering, routes scalars to ``metrics``, and
+        serializes the rest to tensors. Outputs that cannot be serialized
+        (non-tensor metadata, artifacts, unsupported dtypes) are skipped with a
+        warning rather than failing the whole response. An empty ``specs`` set
+        means "return everything serializable".
+        """
+        tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
+        metrics: dict[str, float] = {}
+
+        for raw_key, value in outputs.items():
+            output_name = self._format_output_key(raw_key)
+            if not self._should_return(output_name, specs):
+                logger.debug(f"Skipping output {output_name!r}: not in output_specs")
+                continue
+
+            # Metrics: plain scalars
+            if isinstance(value, (int, float, np.number)) and not isinstance(
+                value, bool
+            ):
+                metrics[output_name] = float(value)
+                continue
+
+            try:
+                tensor = self._to_tensor(value)
+                tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
+            except Exception as exc:
+                # Non-serializable outputs (artifacts/custom objects/metadata)
+                # are dropped — but loudly, so an empty response is never a
+                # silent mystery.
+                logger.warning(
+                    f"Dropping output {output_name!r} "
+                    f"(type={type(value).__name__}): {exc}"
+                )
+
+        return tensor_outputs, metrics
 
     def _parse_input_batch(
         self,
