@@ -281,6 +281,45 @@ def test_forward_load_pipeline_malformed_config_bytes_is_invalid_argument(bad_by
     assert "pipeline config" in ctx.details()
 
 
+def test_forward_load_pipeline_forwards_data_module(monkeypatch):
+    """The ``data_module`` name on the request reaches the env composer."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ensure = MagicMock()
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", ensure)
+
+    orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=b"{}"),
+            data_module="cu3s",
+        ),
+        _InMemoryContext(),
+    )
+
+    assert ensure.call_args.kwargs["data_module"] == "cu3s"
+
+
+def test_forward_load_pipeline_without_data_module_passes_none(monkeypatch):
+    """An unset ``data_module`` (empty proto string) forwards as None, not ''."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ensure = MagicMock()
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", ensure)
+
+    orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=b"{}"),
+        ),
+        _InMemoryContext(),
+    )
+
+    assert ensure.call_args.kwargs["data_module"] is None
+
+
 def test_forward_inference_without_child_is_failed_precondition():
     sm = SessionManager()
     sid = sm.create_session()

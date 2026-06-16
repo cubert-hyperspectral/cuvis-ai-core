@@ -60,8 +60,10 @@
   compose time. A `tiff_paired` run never pulls a cu3s module's `cuvis`. `COMPOSER_SCHEMA_VERSION`
   bumped to invalidate stale caches.
 - Consumes `cuvis-ai-schemas`' new `DataConfig {data_module, splits, batch_size, num_workers, params}`
-  + `DataSplitConfig` + `CatalogNodeEntry.kind/data_module_name/extras` + additive
-  `LoadPipelineRequest.data` field.
+  + `DataSplitConfig` + `CatalogNodeEntry.kind/data_module_name/extras` + the additive
+  `LoadPipelineRequest.data_module` field. `forward_load_pipeline` reads that bare name (not a full
+  `DataConfig`) and forwards it to the composer; the child's `load_pipeline` ignores it (the pipeline
+  graph never needs a data module, only a run does).
 
 ## 0.7.1 - 2026-06-10
 

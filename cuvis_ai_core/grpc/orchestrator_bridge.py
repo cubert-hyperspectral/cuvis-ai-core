@@ -270,17 +270,11 @@ def forward_load_pipeline(
         )
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
 
-    # Optional data selection: lets the composer resolve the data-module
+    # Optional data-module name: lets the composer resolve the data-module
     # plugin's pip extras at compose time (the child env is frozen here, before
-    # DataConfig would otherwise arrive at Train).
-    data_module = None
-    if request.HasField("data") and request.data.config_bytes:
-        from cuvis_ai_core.training.config import DataConfig
-
-        try:
-            data_module = DataConfig.from_proto(request.data).data_module
-        except Exception:  # noqa: BLE001 - data selection is best-effort here
-            data_module = None
+    # the data module would otherwise be needed at Train). It is not part of the
+    # pipeline; only a pipeline run needs a data module.
+    data_module = request.data_module or None
 
     plugins_dirs = _plugins_dirs_for_session(session)
     try:
