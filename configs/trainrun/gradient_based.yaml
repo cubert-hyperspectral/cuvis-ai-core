@@ -4,12 +4,14 @@
 # Uses only basic mock nodes (no cuvis-ai dependencies)
 
 defaults:
-  - /pipeline@pipeline: gradient_based
   - /data@data: lentils
   - /training@training: default
   - _self_
 
 name: gradient_based
+
+# Pipeline reference, resolved relative to this trainrun's directory.
+pipeline: ../pipeline/gradient_based.yaml
 
 # Optional fields for compatibility (empty since we don't have these nodes in basic mock setup)
 unfreeze_nodes:

@@ -376,9 +376,13 @@ def forward_restore_train_run(
     """
     from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 
+    from cuvis_ai_schemas.pipeline import PipelineConfig
+
     trainrun_path = Path(request.trainrun_path)
     try:
-        trainrun_config, _ = TrainRunService.parse_trainrun_yaml(trainrun_path)
+        trainrun_config, pipeline_config_path = TrainRunService.parse_trainrun_yaml(
+            trainrun_path
+        )
     except FileNotFoundError as exc:
         context.set_code(grpc.StatusCode.NOT_FOUND)
         context.set_details(str(exc))
@@ -387,7 +391,9 @@ def forward_restore_train_run(
         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
         context.set_details(str(exc))
         return cuvis_ai_pb2.RestoreTrainRunResponse()
-    pipeline_config = trainrun_config.pipeline
+    # The trainrun references its pipeline by path; load it so the composer can
+    # learn the plugin set the child env needs.
+    pipeline_config = PipelineConfig.load_from_file(pipeline_config_path)
 
     # Allocate the parent's public session first so InitializeSession can
     # pin the child to that id.

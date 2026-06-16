@@ -88,11 +88,7 @@ class TestSearchPaths:
         custom_trainrun.write_text(
             """
 name: custom-trainrun
-pipeline:
-  metadata:
-    name: custom-pipeline
-  nodes: []
-  connections: []
+pipeline: pipeline.yaml
 data:
   data_module: cu3s
   batch_size: 2
@@ -153,11 +149,7 @@ loss_nodes: []
         config1.write_text(
             """
 name: from-dir1
-pipeline:
-  metadata:
-    name: pipeline1
-  nodes: []
-  connections: []
+pipeline: pipeline.yaml
 data:
   data_module: cu3s
   batch_size: 1
@@ -180,11 +172,7 @@ loss_nodes: []
         config2.write_text(
             """
 name: from-dir2
-pipeline:
-  metadata:
-    name: pipeline2
-  nodes: []
-  connections: []
+pipeline: pipeline.yaml
 data:
   data_module: cu3s
   batch_size: 1
@@ -274,11 +262,7 @@ loss_nodes: []
         config_file.write_text(
             """
 name: persistent-config
-pipeline:
-  metadata:
-    name: persistent-pipeline
-  nodes: []
-  connections: []
+pipeline: pipeline.yaml
 data:
   data_module: cu3s
   batch_size: 1

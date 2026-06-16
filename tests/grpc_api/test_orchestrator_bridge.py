@@ -390,10 +390,14 @@ def test_forward_restore_train_run_cleans_up_session_on_resolver_error(
     monkeypatch, tmp_path
 ):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["needs_this"]))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text(
+        "plugins: [needs_this]\nnodes: []\nconnections: []\n", encoding="utf-8"
+    )
     monkeypatch.setattr(
         "cuvis_ai_core.grpc.trainrun_service.TrainRunService.parse_trainrun_yaml",
-        lambda path: (fake_cfg, None),
+        lambda path: (fake_cfg, pl),
     )
     monkeypatch.setattr(
         orchestrator_bridge,
@@ -564,8 +568,10 @@ def test_forward_restore_train_run_bad_yaml_is_invalid_argument(monkeypatch, tmp
 
 def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_path):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
-    _patch_parse(monkeypatch, result=(fake_cfg, None))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
     monkeypatch.setattr(
         orchestrator_bridge,
         "ensure_child_for_session",
@@ -584,8 +590,10 @@ def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_pat
 
 def test_forward_restore_train_run_fills_parent_session_id(monkeypatch, tmp_path):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
-    _patch_parse(monkeypatch, result=(fake_cfg, None))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
 
     def _fake_ensure(
         session_manager, session_id, pipeline_config, plugins_dirs, data_module=None

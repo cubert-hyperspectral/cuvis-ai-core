@@ -6,7 +6,6 @@ import pytest
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import (
     DataConfig,
-    PipelineConfig,
     TrainingConfig,
     TrainRunConfig,
 )
@@ -51,7 +50,7 @@ def test_set_train_run_config_rejects_embedded_pipeline(
 
     trainrun = TrainRunConfig(
         name="with-pipeline",
-        pipeline=PipelineConfig.from_dict(embedded),
+        pipeline="embedded_pipeline.yaml",
         data=DataConfig(params={"cu3s_file_path": "/tmp/dummy.cu3s"}),
         training=TrainingConfig(),
     )
@@ -85,7 +84,7 @@ def test_set_train_run_config_requires_existing_pipeline(
 
     trainrun = TrainRunConfig(
         name="no-prior-pipeline",
-        pipeline=PipelineConfig.from_dict(clean_pipeline),
+        pipeline="clean_pipeline.yaml",
         data=DataConfig(params={"cu3s_file_path": "/tmp/dummy.cu3s"}),
         training=TrainingConfig(),
     )

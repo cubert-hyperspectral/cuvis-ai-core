@@ -83,9 +83,9 @@ class PipelineService:
 
         Pipeline construction is an explicit step: callers must call
         ``LoadPipeline`` (or ``RestoreTrainRun``) before
-        ``SetTrainRunConfig``. The trainrun config's optional embedded
-        ``pipeline:`` section is rejected — there is exactly one entry
-        point for pipeline creation, not two.
+        ``SetTrainRunConfig``. A trainrun config carrying a ``pipeline:``
+        reference is rejected — there is exactly one entry point for
+        pipeline creation, not two.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -111,9 +111,9 @@ class PipelineService:
         if trainrun_config.pipeline is not None:
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(
-                "Trainrun config carries a 'pipeline:' section; "
+                "Trainrun config carries a 'pipeline:' reference; "
                 "SetTrainRunConfig does not build pipelines. Remove the "
-                "pipeline section and call LoadPipeline explicitly first."
+                "pipeline reference and call LoadPipeline explicitly first."
             )
             return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
 

@@ -9,7 +9,6 @@ from cuvis_ai_core.training.config import (
     EarlyStoppingConfig,
     ModelCheckpointConfig,
     OptimizerConfig,
-    PipelineConfig,
     SchedulerConfig,
     TrainingConfig,
     TrainRunConfig,
@@ -103,7 +102,7 @@ class TestProtoSerialization:
     def test_trainrun_proto_roundtrip(self):
         trainrun = TrainRunConfig(
             name="test_run",
-            pipeline=PipelineConfig(nodes=[], connections=[]),
+            pipeline="pipeline.yaml",
             data=DataConfig(params={"cu3s_file_path": "/tmp/file.cu3s"}),
             training=TrainingConfig(),
             loss_nodes=["loss1"],
@@ -119,7 +118,7 @@ class TestProtoSerialization:
 def test_trainrun_json_roundtrip():
     trainrun = TrainRunConfig(
         name="json_run",
-        pipeline=PipelineConfig(nodes=[], connections=[]),
+        pipeline="pipeline.yaml",
         data=DataConfig(params={"cu3s_file_path": "/path/to/data.cu3s"}),
         training=TrainingConfig(max_epochs=10),
         tags={"env": "dev"},

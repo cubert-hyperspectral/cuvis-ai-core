@@ -340,9 +340,13 @@ class TrainingService:
             unfreeze_nodes = session.trainrun_config.unfreeze_nodes
             freeze_nodes = session.trainrun_config.freeze_nodes
 
+        # The live pipeline is held on the session (``session.pipeline`` /
+        # ``_pipeline_config``); the trainrun's ``pipeline`` field is a disk
+        # reference, materialised by SaveTrainRun (which writes the pipeline to a
+        # sibling YAML), so it stays unset for the in-memory experiment context.
         session.trainrun_config = TrainRunConfig(
             name=str(pipeline_name),
-            pipeline=pipeline_config,
+            pipeline=None,
             data=data_config,
             training=training_config,
             loss_nodes=loss_nodes,

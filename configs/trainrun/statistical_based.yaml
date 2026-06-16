@@ -1,11 +1,13 @@
 # @package _global_
 defaults:
-  - /pipeline@pipeline: statistical_based
   - /data@data: lentils
   - _self_
 
 
 name: statistical_based
+
+# Pipeline reference, resolved relative to this trainrun's directory.
+pipeline: ../pipeline/statistical_based.yaml
 
 
 output_dir: outputs/statistical_based

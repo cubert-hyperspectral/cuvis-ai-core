@@ -336,13 +336,19 @@ def test_restore_pipeline_exports_visualization(
 # ---------------------------------------------------------------------------
 
 
-def _write_trainrun(tmp_path: Path, mock_experiment_dict: dict) -> Path:
+def _write_trainrun(
+    tmp_path: Path, mock_experiment_dict: dict, mock_pipeline_dict: dict
+) -> Path:
     import yaml
 
     cfg = dict(mock_experiment_dict)
     cfg["output_dir"] = str(tmp_path / "out")
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    # Materialise the pipeline the trainrun references (pipeline: pipeline.yaml).
+    (tmp_path / cfg["pipeline"]).write_text(
+        yaml.safe_dump(mock_pipeline_dict), encoding="utf-8"
+    )
     return path
 
 
@@ -352,9 +358,9 @@ def test_restore_trainrun_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_restore_trainrun_info_mode_builds_and_returns(
-    tmp_path: Path, mock_experiment_dict
+    tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
 ) -> None:
-    path = _write_trainrun(tmp_path, mock_experiment_dict)
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
     # info mode builds the pipeline (device != auto exercises the .to() move)
     # then prints specs and returns without touching data or trainers.
     assert restore_mod.restore_trainrun(path, mode="info", device="cpu") is None

@@ -205,7 +205,7 @@ class TestSessionManager:
         # Create trainrun config
         trainrun_config = TrainRunConfig(
             name="test_trainrun",
-            pipeline=pipeline.serialize(),
+            pipeline="gradient_based",
             data=DataConfig(
                 splits=DataSplitConfig(
                     train=[

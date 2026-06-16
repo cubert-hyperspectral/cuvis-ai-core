@@ -355,11 +355,7 @@ class TestHydraConfigResolution:
         trainrun_yaml.write_text(
             """
 name: hydra-test-trainrun
-pipeline:
-  metadata:
-    name: test-pipeline
-  nodes: []
-  connections: []
+pipeline: pipeline.yaml
 data:
   data_module: cu3s
   batch_size: 2

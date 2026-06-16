@@ -303,11 +303,14 @@ class TestRestoreTrainRun:
         """Test error when trainrun references invalid pipeline (empty nodes)."""
         bad_trainrun_path = tmp_path / "bad_trainrun.yaml"
         bad_pipeline = mock_pipeline_dict.copy()
-        bad_pipeline["nodes"] = []  # Empty nodes list will cause issues
+        bad_pipeline["nodes"] = []  # Empty nodes + dangling connections -> build fails
+        bad_pipeline_path = tmp_path / "bad_pipeline.yaml"
+        with open(bad_pipeline_path, "w") as f:
+            yaml.dump(bad_pipeline, f)
 
         bad_trainrun = {
             "name": "bad_trainrun",
-            "pipeline": bad_pipeline,
+            "pipeline": "bad_pipeline.yaml",
             "data": {
                 "data_module": "cu3s",
                 "batch_size": 4,

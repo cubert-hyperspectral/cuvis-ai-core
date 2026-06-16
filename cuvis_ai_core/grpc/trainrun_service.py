@@ -9,8 +9,8 @@ import torch
 import yaml
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.utils.restore import _resolve_pipeline_reference
 
-from . import helpers
 from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
@@ -43,22 +43,51 @@ class TrainRunService:
         trainrun_path = Path(request.trainrun_path)
         trainrun_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # The trainrun's pipeline is persisted as a reference: the live pipeline
+        # is written to a sibling YAML and the trainrun points at it by name.
+        sibling_pipeline_path = trainrun_path.with_name(
+            f"{trainrun_path.stem}_pipeline.yaml"
+        )
+
+        def _write_pipeline_sibling() -> str:
+            """Write the session's live pipeline beside the trainrun, return its ref name."""
+            session.pipeline_config.save_to_file(sibling_pipeline_path)
+            return sibling_pipeline_path.name
+
+        has_live_pipeline = (
+            session.pipeline is not None or session._pipeline_config is not None
+        )
+
         if session.trainrun_config is not None:
             trainrun_config = session.trainrun_config
+            # Make the saved artifact self-contained: whenever the session holds a
+            # live pipeline, write it beside the trainrun and (re-)point the
+            # reference at that sibling. This covers both the trained-then-saved
+            # case (the in-memory config carries no reference) and the
+            # restored-then-saved-elsewhere case (its reference is relative to the
+            # *source* directory and would not resolve from the new location).
+            if has_live_pipeline:
+                trainrun_config = trainrun_config.model_copy(
+                    update={"pipeline": _write_pipeline_sibling()}
+                )
+            elif not trainrun_config.pipeline:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    "Pipeline configuration is required before saving a train run."
+                )
+                return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
         else:
-            if session.pipeline is None and session._pipeline_config is None:
+            if not has_live_pipeline:
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(
                     "Pipeline configuration is required before saving a train run."
                 )
                 return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
 
-            pipeline_config = session.pipeline_config
-
             trainrun_config = TrainRunConfig(
                 name=getattr(session.pipeline, "name", "trainrun"),
-                pipeline=pipeline_config,
-                data=session.data_config or DataConfig(cu3s_file_path=""),
+                pipeline=_write_pipeline_sibling(),
+                data=session.data_config or DataConfig(),
                 training=session.training_config or TrainingConfig(),
                 loss_nodes=[],
                 metric_nodes=[],
@@ -90,14 +119,12 @@ class TrainRunService:
                     if hasattr(node, "state_dict"):
                         state_dict[node.name] = node.state_dict()
 
+                pipeline_meta = getattr(session.pipeline_config, "metadata", None)
                 checkpoint = {
                     "state_dict": state_dict,
                     "metadata": {
                         "name": trainrun_config.name,
-                        "created": trainrun_config.pipeline.metadata.created
-                        if trainrun_config.pipeline
-                        and trainrun_config.pipeline.metadata
-                        else "",
+                        "created": pipeline_meta.created if pipeline_meta else "",
                     },
                 }
 
@@ -118,14 +145,14 @@ class TrainRunService:
         )
 
     @staticmethod
-    def parse_trainrun_yaml(trainrun_path: Path) -> tuple[TrainRunConfig, Path | None]:
-        """Parse a trainrun yaml from disk, returning the typed config + optional pipeline file ref.
+    def parse_trainrun_yaml(trainrun_path: Path) -> tuple[TrainRunConfig, Path]:
+        """Parse a trainrun yaml, returning the typed config + resolved pipeline YAML path.
 
-        Used by the orchestrator to extract just enough to compose a
-        child env (the resolved plugin set) before forwarding the
-        actual restore request to the child. The child then reuses
-        the same parse logic via :func:`restore_train_run` to build
-        the pipeline against its own ``NodeRegistry``.
+        The trainrun's ``pipeline:`` is a path reference (resolved relative to
+        the trainrun file's directory); failing that, the ``<name>_pipeline.yaml``
+        sibling convention is used. The orchestrator reads the resolved pipeline
+        to learn its plugin set before forwarding the restore request; the child
+        rebuilds it against its own ``NodeRegistry`` via :func:`restore_train_run`.
         """
         if not trainrun_path.exists():
             raise FileNotFoundError(f"Train run file not found: {trainrun_path}")
@@ -138,41 +165,26 @@ class TrainRunService:
                 "and pass the resolved YAML/JSON via config_bytes."
             )
 
-        pipeline_config_path: Path | None = None
-        pipeline_section = (
-            trainrun_dict.get("pipeline") if isinstance(trainrun_dict, dict) else None
-        )
-        if isinstance(pipeline_section, dict) and "config_path" in pipeline_section:
-            if "nodes" not in pipeline_section or "connections" not in pipeline_section:
-                pipeline_config_path = helpers.resolve_pipeline_path(
-                    pipeline_section["config_path"]
-                )
-                with pipeline_config_path.open("r", encoding="utf-8") as pipeline_file:
-                    pipeline_config_dict = yaml.safe_load(pipeline_file)
-                if not isinstance(pipeline_config_dict, dict):
-                    raise ValueError(
-                        f"Pipeline config file {pipeline_config_path} did not contain a mapping"
-                    )
-                pipeline_weights_path = pipeline_section.get("weights_path")
-                if pipeline_weights_path:
-                    weights_path = Path(pipeline_weights_path)
-                    if not weights_path.exists():
-                        raise FileNotFoundError(
-                            f"Pipeline weights file not found: {weights_path}"
-                        )
-                trainrun_dict["pipeline"] = pipeline_config_dict
-
-        if pipeline_config_path is None:
-            pipeline_config_pattern = trainrun_path.with_stem(
-                f"{trainrun_path.stem}_pipeline"
-            ).with_suffix(".yaml")
-            if pipeline_config_pattern.exists():
-                pipeline_config_path = pipeline_config_pattern
-
         trainrun_config = TrainRunConfig.from_dict(trainrun_dict)
-        if trainrun_config.pipeline is None:
-            raise ValueError("Train run config missing pipeline section")
-        return trainrun_config, pipeline_config_path
+
+        if trainrun_config.pipeline is not None:
+            # An explicit reference must resolve; a failure surfaces loudly with
+            # the tried-paths diagnostic (mirrors the CLI restore path) rather
+            # than being masked by the sibling fallback.
+            return trainrun_config, _resolve_pipeline_reference(
+                trainrun_config.pipeline, trainrun_path.parent
+            )
+
+        # No explicit reference: fall back to the ``<name>_pipeline.yaml`` sibling.
+        sibling = trainrun_path.with_stem(f"{trainrun_path.stem}_pipeline").with_suffix(
+            ".yaml"
+        )
+        if sibling.exists():
+            return trainrun_config, sibling
+        raise ValueError(
+            "Train run config missing pipeline: set 'pipeline:' to a pipeline "
+            f"YAML path or place a '{trainrun_path.stem}_pipeline.yaml' sibling."
+        )
 
     @grpc_handler("Failed to restore train run")
     def restore_train_run(
@@ -193,7 +205,8 @@ class TrainRunService:
         trainrun_path = Path(request.trainrun_path)
         trainrun_config, pipeline_config_path = self.parse_trainrun_yaml(trainrun_path)
 
-        from cuvis_ai_core.pipeline.factory import PipelineBuilder
+        from cuvis_ai_schemas.pipeline import PipelineConfig
+
         from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
         # Resolve weights override from the request, if any.
@@ -205,42 +218,27 @@ class TrainRunService:
                     f"Weights file not found: {weights_path_from_request}"
                 )
 
-        # Build or load pipeline.
-        if pipeline_config_path is not None:
-            pipeline = CuvisPipeline.load_pipeline(
-                config_path=pipeline_config_path,
-                weights_path=str(weights_path_from_request)
-                if weights_path_from_request
-                else None,
-                strict_weight_loading=request.strict
-                if request.HasField("strict")
-                else True,
-                device="cuda" if torch.cuda.is_available() else None,
-            )
-        else:
-            # Use the target session's NodeRegistry if we have one (so
-            # plugin-provided node classes registered via
-            # InitializeSession resolve correctly); otherwise instantiate
-            # a fresh registry for the legacy direct-call path.
-            if target_session_id is not None:
-                node_registry = self.session_manager.get_session(
-                    target_session_id
-                ).node_registry
-            else:
-                from cuvis_ai_core.utils.node_registry import NodeRegistry
+        # Load the referenced pipeline. Use the target session's NodeRegistry if
+        # we have one (so plugin-provided node classes registered via
+        # InitializeSession resolve correctly).
+        node_registry = None
+        if target_session_id is not None:
+            node_registry = self.session_manager.get_session(
+                target_session_id
+            ).node_registry
 
-                node_registry = NodeRegistry()
-
-            builder = PipelineBuilder(node_registry=node_registry)
-            pipeline = builder.build_from_config(trainrun_config.pipeline.to_dict())
-
-            if weights_path_from_request:
-                pipeline._restore_weights_from_checkpoint(
-                    weights_path=str(weights_path_from_request),
-                    strict_weight_loading=request.strict
-                    if request.HasField("strict")
-                    else True,
-                )
+        pipeline = CuvisPipeline.load_pipeline(
+            config_path=pipeline_config_path,
+            weights_path=str(weights_path_from_request)
+            if weights_path_from_request
+            else None,
+            strict_weight_loading=request.strict
+            if request.HasField("strict")
+            else True,
+            device="cuda" if torch.cuda.is_available() else None,
+            node_registry=node_registry,
+        )
+        pipeline_config = PipelineConfig.load_from_file(pipeline_config_path)
 
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
@@ -256,7 +254,7 @@ class TrainRunService:
             self.session_manager.set_pipeline(
                 target_session_id,
                 pipeline,
-                pipeline_config=trainrun_config.pipeline,
+                pipeline_config=pipeline_config,
             )
             session = self.session_manager.get_session(target_session_id)
             session.data_config = trainrun_config.data

@@ -123,5 +123,5 @@ def test_trainrun_resolution_with_config_root():
         search_paths=[str(Path("configs").resolve())],
     )
 
-    assert config_dict["pipeline"]["metadata"]["name"] == "gradient_based"
+    assert config_dict["pipeline"] == "../pipeline/gradient_based.yaml"
     assert config_dict["training"]["trainer"]["max_epochs"] == 20

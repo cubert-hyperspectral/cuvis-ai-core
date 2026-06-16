@@ -94,6 +94,37 @@ def test_save_train_run_isolates_weights_save_failure(tmp_path, mock_experiment_
     )
 
 
+def test_save_train_run_reanchors_reference_to_sibling(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    """A restored run saved elsewhere re-emits a self-contained sibling pipeline."""
+    from cuvis_ai_schemas.pipeline.config import PipelineConfig
+
+    sm, service = _service()
+    sid = sm.create_session()
+    session = sm.get_session(sid)
+    # Restored-style: the config carries a reference relative to the *source* dir,
+    # and the session holds the live pipeline.
+    session.trainrun_config = TrainRunConfig.from_dict(
+        {**mock_experiment_dict, "pipeline": "../elsewhere/p.yaml"}
+    )
+    session._pipeline_config = PipelineConfig.from_dict(mock_pipeline_dict)
+
+    out = tmp_path / "dest" / "tr.yaml"
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=False
+        ),
+        Mock(),
+    )
+    assert resp.success is True
+    saved = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert saved["pipeline"] == "tr_pipeline.yaml"  # re-anchored to the new dir
+    sibling = out.parent / "tr_pipeline.yaml"
+    assert sibling.is_file()
+    assert PipelineConfig.load_from_file(sibling).nodes  # self-contained + loadable
+
+
 # ---------------------------------------------------------------------------
 # parse_trainrun_yaml
 # ---------------------------------------------------------------------------
@@ -125,8 +156,10 @@ def test_parse_trainrun_yaml_missing_pipeline_section_raises(tmp_path):
 def test_parse_trainrun_yaml_finds_sibling_pipeline_file(
     tmp_path, mock_experiment_dict
 ):
+    # No explicit reference -> fall back to the <name>_pipeline.yaml sibling.
+    cfg = {k: v for k, v in mock_experiment_dict.items() if k != "pipeline"}
     tr = tmp_path / "run.yaml"
-    tr.write_text(yaml.safe_dump(mock_experiment_dict), encoding="utf-8")
+    tr.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     sibling = tmp_path / "run_pipeline.yaml"
     sibling.write_text("nodes: []\n", encoding="utf-8")
 
@@ -134,32 +167,59 @@ def test_parse_trainrun_yaml_finds_sibling_pipeline_file(
     assert pipeline_path == sibling
 
 
+def test_parse_trainrun_yaml_explicit_missing_reference_raises(
+    tmp_path, mock_experiment_dict
+):
+    # An explicit pipeline reference that does not resolve must fail loudly, even
+    # when a <name>_pipeline.yaml sibling happens to exist (no silent masking).
+    tr = tmp_path / "run.yaml"
+    tr.write_text(
+        yaml.safe_dump(mock_experiment_dict), encoding="utf-8"
+    )  # pipeline: pipeline.yaml
+    (tmp_path / "run_pipeline.yaml").write_text("nodes: []\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="could not be resolved"):
+        TrainRunService.parse_trainrun_yaml(tr)
+
+
 # ---------------------------------------------------------------------------
 # restore_train_run (builds a real pipeline from mock nodes)
 # ---------------------------------------------------------------------------
 
 
-def _write_trainrun(tmp_path, mock_experiment_dict) -> Path:
+def _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict) -> Path:
     p = tmp_path / "run.yaml"
     p.write_text(yaml.safe_dump(mock_experiment_dict), encoding="utf-8")
+    # Materialise the pipeline the trainrun references (pipeline: pipeline.yaml).
+    (tmp_path / mock_experiment_dict["pipeline"]).write_text(
+        yaml.safe_dump(mock_pipeline_dict), encoding="utf-8"
+    )
     return p
 
 
-def test_restore_train_run_creates_new_session(tmp_path, mock_experiment_dict):
+def test_restore_train_run_creates_new_session(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
     sm, service = _service()
     req = cuvis_ai_pb2.RestoreTrainRunRequest(
-        trainrun_path=str(_write_trainrun(tmp_path, mock_experiment_dict))
+        trainrun_path=str(
+            _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+        )
     )
     resp = service.restore_train_run(req, Mock())
     assert resp.session_id
     assert resp.session_id in sm.list_sessions()
 
 
-def test_restore_train_run_reuses_target_session(tmp_path, mock_experiment_dict):
+def test_restore_train_run_reuses_target_session(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
     sm, service = _service()
     sid = sm.create_session()
     req = cuvis_ai_pb2.RestoreTrainRunRequest(
-        trainrun_path=str(_write_trainrun(tmp_path, mock_experiment_dict))
+        trainrun_path=str(
+            _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+        )
     )
     resp = service.restore_train_run(req, Mock(), target_session_id=sid)
     assert resp.session_id == sid
@@ -168,11 +228,15 @@ def test_restore_train_run_reuses_target_session(tmp_path, mock_experiment_dict)
     assert session.trainrun_config is not None
 
 
-def test_restore_train_run_missing_weights_is_not_found(tmp_path, mock_experiment_dict):
+def test_restore_train_run_missing_weights_is_not_found(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
     sm, service = _service()
     ctx = Mock()
     req = cuvis_ai_pb2.RestoreTrainRunRequest(
-        trainrun_path=str(_write_trainrun(tmp_path, mock_experiment_dict)),
+        trainrun_path=str(
+            _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+        ),
         weights_path=str(tmp_path / "missing.pt"),
     )
     service.restore_train_run(req, ctx)

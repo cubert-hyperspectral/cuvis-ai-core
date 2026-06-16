@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Trainrun pipelines are referenced, not inlined.** `TrainRunConfig.pipeline` is now a path string (matching the schemas change). `restore_trainrun` resolves it relative to the trainrun file's directory (`_resolve_pipeline_reference`, trying the trainrun dir, the `configs/` root, and CWD, with an optional `.yaml` suffix) and loads the referenced `PipelineConfig`. The gRPC `RestoreTrainRun` path resolves the reference (with a `<name>_pipeline.yaml` sibling fallback) and builds against the session's `NodeRegistry`; `SaveTrainRun` writes the live pipeline to a `<name>_pipeline.yaml` sibling and stores the reference; the orchestrator loads the referenced pipeline to learn its plugin set. Inline pipelines are rejected at parse with a fix-it hint. The two bundled trainrun configs (`gradient_based`, `statistical_based`) drop their Hydra `@pipeline` group composition for a top-level `pipeline:` reference.
 - **Single import-only plugin-registration path + provisioning helpers.** Dropped the in-process
   clone / `uv pip install` / `sys.path` plugin loader: `load_plugin` / `load_plugins` and the
   clone/install internals are gone. In-process registration is now `register_plugins(manifest)` /

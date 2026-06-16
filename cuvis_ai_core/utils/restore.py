@@ -48,6 +48,48 @@ def _discover_plugins_dirs(
     return candidates
 
 
+def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
+    """Resolve a trainrun's ``pipeline:`` reference to a pipeline YAML on disk.
+
+    Resolution order (first hit wins), trying both the literal reference and a
+    ``.yaml``-suffixed form:
+
+    1. an absolute path,
+    2. relative to ``base_dir`` (the trainrun file's directory),
+    3. relative to ``base_dir``'s parent (the ``configs/`` root, since a
+       trainrun typically lives in ``configs/trainrun/``),
+    4. relative to the current working directory.
+    """
+    roots: list[Path] = []
+    if base_dir is not None:
+        roots.extend([base_dir, base_dir.parent])
+    roots.append(Path.cwd())
+
+    # Append (not replace via with_suffix) ``.yaml`` so a dotted stem like
+    # ``foo.v1`` yields ``foo.v1.yaml``, not ``foo.yaml``.
+    refs = [reference]
+    if not reference.endswith((".yaml", ".yml")):
+        refs.append(reference + ".yaml")
+
+    candidates: list[Path] = []
+    for ref_str in refs:
+        ref = Path(ref_str)
+        if ref.is_absolute():
+            candidates.append(ref)
+        else:
+            candidates.extend(root / ref for root in roots)
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    tried = ", ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        f"Pipeline reference {reference!r} could not be resolved (base_dir={base_dir}). "
+        f"Tried: {tried}."
+    )
+
+
 def _load_data_module_plugin(
     registry: NodeRegistry, data_module_name: str, candidate_dirs: list[Path]
 ) -> None:
@@ -257,16 +299,22 @@ def restore_pipeline(
 
 
 def _build_pipeline_from_config(
-    trainrun_config: TrainRunConfig, device: str = "auto"
+    trainrun_config: TrainRunConfig,
+    device: str = "auto",
+    base_dir: Path | None = None,
 ) -> CuvisPipeline:
-    """Build pipeline from trainrun configuration.
+    """Build pipeline from a trainrun's ``pipeline:`` reference.
 
     Parameters
     ----------
     trainrun_config : TrainRunConfig
-        Trainrun configuration object
+        Trainrun configuration object. Its ``pipeline`` is a path reference to
+        a pipeline YAML, not an inline config.
     device : str
         Device to load pipeline to ('cpu', 'cuda', 'auto')
+    base_dir : Path | None
+        Directory the reference is resolved against (the trainrun file's
+        directory). When omitted, only absolute / CWD-relative references resolve.
 
     Returns
     -------
@@ -275,9 +323,10 @@ def _build_pipeline_from_config(
     """
     builder = PipelineBuilder()
     if trainrun_config.pipeline is None:
-        raise ValueError("Pipeline configuration is missing in trainrun config.")
-    pipeline_dict = trainrun_config.pipeline.to_dict()
-    pipeline = builder.build_from_config(pipeline_dict)
+        raise ValueError("Pipeline reference is missing in trainrun config.")
+    pipeline_path = _resolve_pipeline_reference(trainrun_config.pipeline, base_dir)
+    pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
+    pipeline = builder.build_from_config(pipeline_cfg.to_dict())
 
     # Move pipeline to specified device if needed
     if device != "auto":
@@ -378,8 +427,10 @@ def restore_trainrun(
         # Config is already resolved - load directly
         trainrun_config: TrainRunConfig = TrainRunConfig.load_from_file(trainrun_path)
 
-    # Build pipeline
-    pipeline = _build_pipeline_from_config(trainrun_config, device=device)
+    # Build pipeline (its `pipeline:` reference resolves relative to the trainrun dir)
+    pipeline = _build_pipeline_from_config(
+        trainrun_config, device=device, base_dir=trainrun_path.parent
+    )
 
     if mode == "info":
         logger.info("Info mode - displaying pipeline specifications")
