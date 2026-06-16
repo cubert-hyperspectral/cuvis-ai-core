@@ -309,12 +309,13 @@ class TestRestoreTrainRun:
             "name": "bad_trainrun",
             "pipeline": bad_pipeline,
             "data": {
-                "cu3s_file_path": "/data/test.cu3s",
+                "data_module": "cu3s",
                 "batch_size": 4,
-                "processing_mode": "Reflectance",
-                "train_ids": [],
-                "val_ids": [],
-                "test_ids": [],
+                "splits": {"train": [], "val": [], "test": []},
+                "params": {
+                    "cu3s_file_path": "/data/test.cu3s",
+                    "processing_mode": "Reflectance",
+                },
             },
             "training": {
                 "seed": 42,

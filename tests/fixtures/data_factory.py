@@ -20,7 +20,7 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
 )
 from cuvis_ai_core.training.datamodule import CuvisDataModule
-from cuvis_ai_schemas.training import DataSplitConfig
+from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
 
 # Session-scoped cache for test data files to avoid repeated file system operations
 _test_data_cache = {}
@@ -69,12 +69,24 @@ def _create_cached_data_config(
     test_ids: tuple[int, ...],
 ) -> cuvis_ai_pb2.DataConfig:
     """Cached version of DataConfig creation."""
+
+    def _file_indices(ids: tuple[int, ...]) -> list[Selector]:
+        # Selectors reference the cu3s file by its path, matching SampleRef.source
+        # produced by the cu3s module's enumerate().
+        if not ids:
+            return []
+        return [
+            Selector(
+                kind=SelectorKind.FILE_INDICES, source=cu3s_file_path, ids=list(ids)
+            )
+        ]
+
     return DataConfig(
         data_module="cu3s",
         splits=DataSplitConfig(
-            train_ids=list(train_ids),
-            val_ids=list(val_ids),
-            test_ids=list(test_ids),
+            train=_file_indices(train_ids),
+            val=_file_indices(val_ids),
+            test=_file_indices(test_ids),
         ),
         batch_size=batch_size,
         params={

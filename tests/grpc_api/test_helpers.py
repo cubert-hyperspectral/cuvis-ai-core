@@ -258,9 +258,19 @@ class TestConfigRegistry:
         config_dict = {
             "data_module": "cu3s",
             "splits": {
-                "train_ids": [1, 2, 3],
-                "val_ids": [4],
-                "test_ids": [5],
+                "train": [
+                    {
+                        "kind": "file_indices",
+                        "source": "/tmp/data.cu3s",
+                        "ids": [1, 2, 3],
+                    }
+                ],
+                "val": [
+                    {"kind": "file_indices", "source": "/tmp/data.cu3s", "ids": [4]}
+                ],
+                "test": [
+                    {"kind": "file_indices", "source": "/tmp/data.cu3s", "ids": [5]}
+                ],
             },
             "batch_size": 4,
             "params": {

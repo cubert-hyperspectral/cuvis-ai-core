@@ -1,36 +1,58 @@
 """SDK-free base DataModule and the registry-dispatch helper.
 
-``BaseHyperspectralDataModule`` is the abstract, SDK-free contract every data
-module inherits (mirrors how ``Node`` lives in core). It owns the split-to-stage
-mapping and the four ``*_dataloader()`` methods so a concrete plugin module
-implements only the format-specific reader (``build_dataset`` for id-list splits,
-or ``build_stage_dataset`` for module-owned splits) plus ``validate_params``.
+``BaseCuvisAIDataModule`` is the abstract, SDK-free contract every data module inherits
+(mirrors how ``Node`` lives in core). It owns split resolution and the four
+``*_dataloader()`` methods, so a concrete plugin module implements only the
+format-specific reader plus:
 
-Core ships **no** concrete DataModules; every DataModule comes from a plugin
-manifest (see the ``cuvis-ai-dataloader`` plugin).
+* ``enumerate(required_attrs)`` -> the attributed ``SampleRef`` universe, and
+* ``build_dataset_from_refs(refs)`` -> a torch ``Dataset`` for a resolved subset,
+
+for the selector path (``DataConfig.splits`` set), or ``build_stage_dataset(stage)`` for a
+module that owns its split semantics (``DataConfig.splits is None``).
+
+Core ships **no** concrete DataModules; every DataModule comes from a plugin manifest
+(see the ``cuvis-ai-dataloader`` plugin).
 """
 
 from __future__ import annotations
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, ClassVar, Sequence
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 
-from cuvis_ai_core.utils.general import expand_range_selectors
-
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig, SampleRef
 
 
-class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
+class DataStage(StrEnum):
+    """The Lightning ``DataModule.setup`` stages.
+
+    These are the values Lightning passes to ``setup(stage)`` (plus ``None`` = all). They
+    are distinct from ``cuvis_ai_schemas.enums.ExecutionStage`` (node-execution filtering:
+    ``train``/``val``/``inference``); these mirror Lightning's ``fit``/``validate``/
+    ``test``/``predict``. As a ``StrEnum``, a member compares equal to the raw string
+    Lightning passes, so the branches below work whether ``setup`` is called with a member
+    or a plain string.
+    """
+
+    FIT = "fit"
+    VALIDATE = "validate"
+    TEST = "test"
+    PREDICT = "predict"
+
+
+class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
     """Shared split + dataloader plumbing for every data module.
 
-    Concrete plugin modules set ``DATA_MODULE_NAME`` and implement
-    ``validate_params()`` plus either ``build_dataset()`` (id-list splits) or
-    ``build_stage_dataset()`` (module-owned splits). The base applies the splits
-    and serves the four dataloaders, so the subclass never re-implements that.
+    Concrete plugin modules set ``DATA_MODULE_NAME`` and implement ``validate_params()``
+    plus either (``enumerate`` + ``build_dataset_from_refs``) for selector-driven splits or
+    ``build_stage_dataset`` for module-owned splits. The base resolves selectors, runs the
+    leakage validator, and serves the four dataloaders, so the subclass never re-implements
+    that.
     """
 
     #: Unique registry key; the manifest ``data_module_name`` must equal it.
@@ -55,14 +77,14 @@ class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.params = params
+        self._refs: list[SampleRef] | None = None
         self._train_ds: Dataset | None = None
         self._val_ds: Dataset | None = None
         self._test_ds: Dataset | None = None
         self._predict_ds: Dataset | None = None
 
     # -- public per-stage dataset accessors ------------------------------------
-    # The former SingleCu3sDataModule exposed these directly; consumers read
-    # ``len(dm.predict_ds)`` / ``dm.train_ds.wavelengths_nm`` and sometimes
+    # Consumers read ``len(dm.predict_ds)`` / ``dm.train_ds.wavelengths_nm`` and sometimes
     # reassign (e.g. ``dm.predict_ds = Subset(...)``), so they are settable.
     @property
     def train_ds(self) -> Dataset | None:
@@ -108,67 +130,105 @@ class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
         Pure stdlib, no heavy imports. Default is a no-op; override to validate.
         """
 
-    def build_dataset(self, ids: Sequence[int | str] | None) -> Dataset:
-        """Id-list path: return the torch ``Dataset`` for the given sample ids.
+    def enumerate(
+        self, required_attrs: frozenset[str] = frozenset()
+    ) -> list[SampleRef]:
+        """Selector path: return the attributed ``SampleRef`` universe, canonically ordered.
 
-        ``None`` means all samples (the ``predict`` case). Called per stage when
-        ``DataConfig.splits`` is provided. This is the one place heavy libs load.
-        Default raises; override for an id-list module.
+        ``required_attrs`` (a subset of ``{"tags", "category_ids"}``) tells the module which
+        metadata to populate; when empty, skip COCO / PNG parsing. Order must be stable
+        (sort by ``source`` then ``index``) so positional ``dir_indices`` are reproducible.
+        Default raises; override for a selector-driven module.
         """
         raise NotImplementedError(
-            f"{type(self).__name__}: implement build_dataset for id-list splits "
-            f"(DataConfig.splits), or build_stage_dataset for module-owned splits."
+            f"{type(self).__name__}: implement enumerate() + build_dataset_from_refs() for "
+            f"selector splits (DataConfig.splits), or build_stage_dataset() for module-owned splits."
         )
+
+    def build_dataset_from_refs(self, refs: list[SampleRef]) -> Dataset:
+        """Selector path: return the torch ``Dataset`` for an already-resolved subset.
+
+        This is the one place heavy libs load (it reads cubes + attaches labels). Default
+        raises; override for a selector-driven module.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}: implement build_dataset_from_refs() for selector splits."
+        )
+
+    def category_name_to_id(self) -> dict[str, int] | None:
+        """Map a ``categories`` selector's names to ids (``None`` if the module has no COCO).
+
+        Default ``None``; override in a module whose labeler exposes a category map.
+        """
+        return None
 
     def build_stage_dataset(self, stage: str) -> Dataset:
         """Module-owned-splits hook, called per stage when ``DataConfig.splits`` is None.
 
-        Default raises; a module that owns its split semantics (e.g. cu3s_multi)
-        overrides this instead of ``build_dataset``.
+        Default raises; a module that owns its split semantics overrides this instead of
+        ``enumerate`` / ``build_dataset_from_refs``.
         """
         raise NotImplementedError(
-            f"{type(self).__name__}: provide DataConfig.splits (id-lists) and "
-            f"build_dataset, or override build_stage_dataset to own splits."
+            f"{type(self).__name__}: provide DataConfig.splits (selectors) + enumerate/"
+            f"build_dataset_from_refs, or override build_stage_dataset to own splits."
         )
 
     # -- lightning hooks -------------------------------------------------------
     def setup(self, stage: str | None = None) -> None:
         if self.splits is not None:
-            self._setup_from_splits(stage)
+            self._setup_from_selectors(stage)
         else:
             self._setup_module_owned(stage)
 
-    def _setup_from_splits(self, stage: str | None) -> None:
-        # Range strings ("0-100", "0-10:2") in any id list expand to ints here, so
-        # every id-list module gets range selectors without its own parsing.
+    def _enumerate_once(self, wanted: frozenset[str]) -> list[SampleRef]:
+        if self._refs is None:
+            self._refs = self.enumerate(wanted)
+        return self._refs
+
+    def _setup_from_selectors(self, stage: str | None) -> None:
+        from cuvis_ai_core.data.selectors import (
+            required_attrs,
+            resolve_selectors,
+            validate_leakage,
+        )
+        from cuvis_ai_core.data.splits_io import verify_universe
+
         splits = self.splits
         assert splits is not None
-        if stage in ("fit", None):
-            if splits.train_ids:
-                self._train_ds = self.build_dataset(
-                    expand_range_selectors(splits.train_ids)
-                )
-            if splits.val_ids:
-                self._val_ds = self.build_dataset(
-                    expand_range_selectors(splits.val_ids)
-                )
-        if stage in ("test", None) and splits.test_ids:
-            self._test_ds = self.build_dataset(expand_range_selectors(splits.test_ids))
-        if stage in ("predict", None):
-            predict_ids = (
-                expand_range_selectors(splits.predict_ids)
-                if splits.predict_ids
-                else None
-            )
-            self._predict_ds = self.build_dataset(predict_ids)
+        refs = self._enumerate_once(required_attrs(splits))
+        verify_universe(splits, refs)
+        name_to_id = self.category_name_to_id()
+
+        def resolve(stage_selectors: list[Any]) -> list[SampleRef]:
+            if not stage_selectors:
+                return []
+            return resolve_selectors(stage_selectors, refs, name_to_id=name_to_id)
+
+        # Leakage is a global property; resolve train/val/test and check before building.
+        train = resolve(splits.train)
+        val = resolve(splits.val)
+        test = resolve(splits.test)
+        validate_leakage(train, val, test, mode=splits.leakage_check)
+
+        if stage in (DataStage.FIT, None) and train:
+            self._train_ds = self.build_dataset_from_refs(train)
+        if stage in (DataStage.FIT, DataStage.VALIDATE, None) and val:
+            self._val_ds = self.build_dataset_from_refs(val)
+        if stage in (DataStage.TEST, None) and test:
+            self._test_ds = self.build_dataset_from_refs(test)
+        if stage in (DataStage.PREDICT, None):
+            # Empty predict -> the whole universe (an inference run iterates all samples).
+            predict = resolve(splits.predict) if splits.predict else list(refs)
+            self._predict_ds = self.build_dataset_from_refs(predict)
 
     def _setup_module_owned(self, stage: str | None) -> None:
-        if stage in ("fit", None):
+        if stage in (DataStage.FIT, None):
             self._train_ds = self.build_stage_dataset("train")
+        if stage in (DataStage.FIT, DataStage.VALIDATE, None):
             self._val_ds = self.build_stage_dataset("val")
-        if stage in ("test", None):
+        if stage in (DataStage.TEST, None):
             self._test_ds = self.build_stage_dataset("test")
-        if stage in ("predict", None):
+        if stage in (DataStage.PREDICT, None):
             self._predict_ds = self.build_stage_dataset("predict")
 
     def _loader(
@@ -199,9 +259,7 @@ class BaseHyperspectralDataModule(pl.LightningDataModule, ABC):
         return self._loader(self._predict_ds, shuffle=False, name="predict")
 
 
-def create_data_module(
-    registry: Any, data_config: DataConfig
-) -> BaseHyperspectralDataModule:
+def create_data_module(registry: Any, data_config: DataConfig) -> BaseCuvisAIDataModule:
     """Build the DataModule named by ``data_config.data_module`` from a registry.
 
     ``registry`` is any object exposing a ``data_modules`` dict (e.g. ``NodeRegistry``).
@@ -224,4 +282,8 @@ def create_data_module(
     )
 
 
-__all__ = ["BaseHyperspectralDataModule", "create_data_module"]
+__all__ = [
+    "BaseCuvisAIDataModule",
+    "DataStage",
+    "create_data_module",
+]

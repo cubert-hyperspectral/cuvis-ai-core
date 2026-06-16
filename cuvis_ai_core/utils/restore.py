@@ -318,6 +318,7 @@ def restore_trainrun(
     checkpoint_path: str | Path | None = None,
     device: str = "auto",
     overrides: list[str] | None = None,
+    plugins_dirs: list[str | Path] | None = None,
 ) -> None:
     """Restore and reproduce training run from configuration file.
 
@@ -396,8 +397,8 @@ def restore_trainrun(
         logger.info("Info mode complete")
         return
 
-    # Create datamodule (resolve the data_module's plugin from discovered dirs)
-    candidate_dirs = _discover_plugins_dirs(trainrun_path, None)
+    # Create datamodule (resolve the data_module's plugin from discovered + explicit dirs)
+    candidate_dirs = _discover_plugins_dirs(trainrun_path, plugins_dirs)
     datamodule = _create_datamodule_from_config(trainrun_config, candidate_dirs)
     output_dir = Path(trainrun_config.output_dir)
 
@@ -489,8 +490,10 @@ def restore_trainrun(
         pipeline.save_to_file(str(restored_pipeline_path))
         logger.info(f"     Saved to {restored_pipeline_path}")
 
-        # Step 4: Run validation (populate TensorBoard monitoring)
-        if trainrun_config.data.val_ids:
+        # Step 4: Run validation (populate TensorBoard monitoring).
+        # Gate on the resolved val dataset (built by setup("fit")); the old flat
+        # ``data.val_ids`` field no longer exists on the polymorphic DataConfig.
+        if datamodule.val_ds is not None:
             logger.info("  Step 4: Validation...")
             if grad_trainer is not None:
                 grad_trainer.validate()
@@ -498,11 +501,12 @@ def restore_trainrun(
                 stat_trainer.validate()
         else:
             logger.warning(
-                "  Step 4: Validation skipped - no validation data provided (val_ids is empty)"
+                "  Step 4: Validation skipped - no validation data resolved for this run"
             )
 
-        # Step 5: Run test evaluation (populate TensorBoard monitoring)
-        if trainrun_config.data.test_ids:
+        # Step 5: Run test evaluation (populate TensorBoard monitoring).
+        datamodule.setup(stage="test")
+        if datamodule.test_ds is not None:
             logger.info("  Step 5: Test evaluation...")
             if grad_trainer is not None:
                 grad_trainer.test()
@@ -510,7 +514,7 @@ def restore_trainrun(
                 stat_trainer.test()
         else:
             logger.warning(
-                "  Step 5: Test evaluation skipped - no test data provided (test_ids is empty)"
+                "  Step 5: Test evaluation skipped - no test data resolved for this run"
             )
 
     elif mode == "validate":
@@ -714,6 +718,13 @@ Examples:
         action="append",
         help="Override config values in dot notation (e.g., data.batch_size=16). Can be specified multiple times.",
     )
+    parser.add_argument(
+        "--plugins-dir",
+        action="append",
+        default=None,
+        help="Plugins directory containing per-plugin manifest YAML files. Can be specified "
+        "multiple times. The trainrun's data_module is resolved against the merged catalog.",
+    )
 
     args = parser.parse_args()
 
@@ -723,4 +734,5 @@ Examples:
         checkpoint_path=args.checkpoint_path,
         device=args.device,
         overrides=args.override,
+        plugins_dirs=args.plugins_dir,
     )

@@ -15,15 +15,26 @@
   or an in-kernel `%pip install` for notebooks. `_plugin_source_entry` gained a `ref="tag"|"sha"`
   argument (default `sha`, so the composer's child pyproject is unchanged).
 - **Pluggable DataModules; the cuvis SDK leaves core.** Added the SDK-free
-  `cuvis_ai_core.data.datamodule.BaseHyperspectralDataModule` (split-to-stage mapping + the four
+  `cuvis_ai_core.data.datamodule.BaseCuvisAIDataModule` (split resolution + the four
   `*_dataloader()` methods + `validate_params`) and `create_data_module(registry, data_config)`. A
   concrete DataModule now ships from a plugin (see `cuvis-ai-dataloader`), registered as a
-  `kind: data_module` manifest entry; core ships no concrete DataModules.
-- **Range selectors in split id-lists.** `BaseHyperspectralDataModule._setup_from_splits` expands
-  inclusive `"start-stop[:step]"` range strings (`"0-100"`, `"0-10:2"`) in any `DataSplitConfig` id
-  list to integer selectors before `build_dataset`, via the new
-  `cuvis_ai_core.utils.general.expand_range_selectors` (ints and non-range string keys pass through
-  untouched). Every id-list DataModule gets range support with no per-module parsing.
+  `kind: data_module` manifest entry; core ships no concrete DataModules. The base contract is
+  `enumerate(required_attrs)` (the attributed `SampleRef` universe) + `build_dataset_from_refs(refs)`
+  for selector splits, or `build_stage_dataset(stage)` for module-owned splits; `DataStage` enum
+  names the Lightning setup stages.
+- **Composable selector resolution + leakage guard.** New `data/selectors.py`
+  (`resolve_selectors`, full `files/file_indices/dir_indices/stems/glob/tag/categories/all/union/
+  except/intersect` algebra, keyed on `SampleRef.uid`, order-preserving, rejects negative/out-of-range
+  indices and zero-match selectors; `validate_leakage` raises `SplitLeakageError`) and
+  `data/splits_io.py` (load + shape-validate a `splits.json`, `universe_hash` fingerprint +
+  `verify_universe` for committed `dir_indices`). `setup()` resolves each stage against
+  `enumerate()`, runs the configurable leakage guard (`DataSplitConfig.leakage_check`, default
+  `error`), then builds per-stage datasets. `expand_range_selectors` still expands `"a-b"` ranges
+  inside `file_indices`/`dir_indices` ids.
+- **Fixed `restore-trainrun --mode train`** reading the nonexistent `data.val_ids`/`.test_ids`
+  (AttributeError): validation/test are now gated on the resolved `val_ds`/`test_ds`. `restore-trainrun`
+  gained `--plugins-dir` (and a `restore_trainrun(plugins_dirs=...)` parameter) to match
+  `restore-pipeline`.
 - **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` (the
   shared core) routes each provides entry by its static `kind`: `data_module` entries register into
   `data_modules[DATA_MODULE_NAME]` (globally unique, asserts the class `DATA_MODULE_NAME` matches the

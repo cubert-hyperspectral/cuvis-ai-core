@@ -20,7 +20,13 @@ def _cfg(entry: CatalogNodeEntry) -> LocalPluginConfig:
 def test_data_module_entry_registers_into_data_modules():
     reg = NodeRegistry()
     reg.register_preinstalled(
-        {"fake": _cfg(CatalogNodeEntry(class_name=_DM, kind="data_module", data_module_name="fake"))}
+        {
+            "fake": _cfg(
+                CatalogNodeEntry(
+                    class_name=_DM, kind="data_module", data_module_name="fake"
+                )
+            )
+        }
     )
     assert "fake" in reg.data_modules
     assert reg.data_modules["fake"].DATA_MODULE_NAME == "fake"
@@ -32,25 +38,49 @@ def test_data_module_name_mismatch_raises():
     reg = NodeRegistry()
     with pytest.raises(ValueError, match="DATA_MODULE_NAME"):
         reg.register_preinstalled(
-            {"fake": _cfg(CatalogNodeEntry(class_name=_DM, kind="data_module", data_module_name="wrong"))}
+            {
+                "fake": _cfg(
+                    CatalogNodeEntry(
+                        class_name=_DM, kind="data_module", data_module_name="wrong"
+                    )
+                )
+            }
         )
 
 
 def test_non_datamodule_class_raises():
     reg = NodeRegistry()
-    with pytest.raises(TypeError, match="BaseHyperspectralDataModule"):
+    with pytest.raises(TypeError, match="BaseCuvisAIDataModule"):
         reg.register_preinstalled(
-            {"fake": _cfg(CatalogNodeEntry(class_name=_NOT_DM, kind="data_module", data_module_name="bad"))}
+            {
+                "fake": _cfg(
+                    CatalogNodeEntry(
+                        class_name=_NOT_DM, kind="data_module", data_module_name="bad"
+                    )
+                )
+            }
         )
 
 
 def test_duplicate_data_module_name_raises():
     reg = NodeRegistry()
     reg.register_preinstalled(
-        {"a": _cfg(CatalogNodeEntry(class_name=_DM, kind="data_module", data_module_name="fake"))}
+        {
+            "a": _cfg(
+                CatalogNodeEntry(
+                    class_name=_DM, kind="data_module", data_module_name="fake"
+                )
+            )
+        }
     )
     # Re-registering the SAME class under the same name is idempotent (no raise).
     reg.register_preinstalled(
-        {"a2": _cfg(CatalogNodeEntry(class_name=_DM, kind="data_module", data_module_name="fake"))}
+        {
+            "a2": _cfg(
+                CatalogNodeEntry(
+                    class_name=_DM, kind="data_module", data_module_name="fake"
+                )
+            )
+        }
     )
     assert reg.data_modules["fake"].DATA_MODULE_NAME == "fake"

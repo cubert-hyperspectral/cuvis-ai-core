@@ -13,7 +13,7 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import DataConfig, TrainRunConfig
-from cuvis_ai_schemas.training import DataSplitConfig
+from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
 
 # Configure logging for session management
 logger = logging.getLogger(__name__)
@@ -179,9 +179,16 @@ def trained_pipeline_session(
         assert load_response.success
 
         # Create data config for statistical training
+        def _fi(ids):
+            return [
+                Selector(kind=SelectorKind.FILE_INDICES, source=str(cu3s_file), ids=ids)
+            ]
+
         data_config = DataConfig(
             data_module="cu3s",
-            splits=DataSplitConfig(train_ids=[0, 1, 2], val_ids=[3, 4], test_ids=[5, 6]),
+            splits=DataSplitConfig(
+                train=_fi([0, 1, 2]), val=_fi([3, 4]), test=_fi([5, 6])
+            ),
             batch_size=2,
             params={
                 "cu3s_file_path": str(cu3s_file),

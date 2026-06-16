@@ -558,12 +558,12 @@ class NodeRegistry:
 
     def _register_data_module(self, name, class_name, cls, entry) -> None:
         """File a ``kind: data_module`` entry under ``data_modules[DATA_MODULE_NAME]``."""
-        from cuvis_ai_core.data.datamodule import BaseHyperspectralDataModule
+        from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
 
-        if not (isinstance(cls, type) and issubclass(cls, BaseHyperspectralDataModule)):
+        if not (isinstance(cls, type) and issubclass(cls, BaseCuvisAIDataModule)):
             raise TypeError(
                 f"{class_name}: manifest declares kind='data_module' but the class "
-                f"is not a BaseHyperspectralDataModule subclass."
+                f"is not a BaseCuvisAIDataModule subclass."
             )
         dm_name = entry.data_module_name
         if cls.DATA_MODULE_NAME != dm_name:

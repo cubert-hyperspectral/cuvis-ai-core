@@ -185,12 +185,35 @@ class TestWorkflow3_ResumeTraining:
                 "weights_path": str(weights_path),
             },
             "data": {
-                "cu3s_file_path": "/data/lentils.cu3s",
+                "data_module": "cu3s",
                 "batch_size": 4,
-                "processing_mode": "Reflectance",
-                "train_ids": [0, 1, 2],
-                "val_ids": [3],
-                "test_ids": [4],
+                "splits": {
+                    "train": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [0, 1, 2],
+                        }
+                    ],
+                    "val": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [3],
+                        }
+                    ],
+                    "test": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [4],
+                        }
+                    ],
+                },
+                "params": {
+                    "cu3s_file_path": "/data/lentils.cu3s",
+                    "processing_mode": "Reflectance",
+                },
             },
             "training": {
                 "seed": 42,

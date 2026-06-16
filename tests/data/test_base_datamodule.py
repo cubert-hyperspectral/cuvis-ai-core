@@ -1,17 +1,29 @@
-"""Tests for BaseHyperspectralDataModule split application + dispatch."""
+"""Tests for BaseCuvisAIDataModule selector resolution + dispatch."""
 
 from __future__ import annotations
 
 import pytest
 
 from cuvis_ai_core.data.datamodule import create_data_module
-from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+from cuvis_ai_core.data.selectors import SplitLeakageError
+from cuvis_ai_schemas.training.data import (
+    DataConfig,
+    DataSplitConfig,
+    Selector,
+    SelectorKind,
+)
 from tests.fixtures.fake_data_modules import FakeDataModule
 
 
-def test_setup_from_splits():
+def _fi(ids):
+    return Selector(kind=SelectorKind.FILE_INDICES, source="fake.cu3s", ids=ids)
+
+
+def test_setup_from_selectors_fit_and_test():
     dm = FakeDataModule(
-        splits=DataSplitConfig(train_ids=[0, 1, 2], val_ids=[0], test_ids=[0, 1]),
+        splits=DataSplitConfig(
+            train=[_fi([0, 1, 2])], val=[_fi([3])], test=[_fi([4, 5])]
+        ),
         batch_size=2,
     )
     dm.setup(stage="fit")
@@ -23,32 +35,91 @@ def test_setup_from_splits():
     assert batch["x"].shape[0] == 2
 
 
-def test_predict_empty_ids_iterates_all():
-    dm = FakeDataModule(splits=DataSplitConfig(predict_ids=[]), batch_size=1)
+def test_predict_empty_iterates_whole_universe():
+    dm = FakeDataModule(splits=DataSplitConfig(predict=[]), batch_size=1)
     dm.setup(stage="predict")
-    assert len(dm._predict_ds) == 4  # build_dataset(None) -> all
+    assert len(dm._predict_ds) == 6  # empty predict -> all
 
 
-def test_setup_from_splits_expands_range_strings():
+def test_file_indices_expand_range_strings():
     dm = FakeDataModule(
-        splits=DataSplitConfig(train_ids=["0-2"], val_ids=[0, "4-5"]),
+        splits=DataSplitConfig(train=[_fi(["0-2"])], val=[_fi([3, "4-5"])]),
         batch_size=1,
     )
     dm.setup(stage="fit")
     assert len(dm._train_ds) == 3  # "0-2" -> [0, 1, 2]
-    assert len(dm._val_ds) == 3  # [0] + "4-5" -> [0, 4, 5]
+    assert len(dm._val_ds) == 3  # [3] + "4-5" -> [3, 4, 5]
 
 
-def test_setup_predict_expands_range_strings():
-    dm = FakeDataModule(splits=DataSplitConfig(predict_ids=["0-3"]), batch_size=1)
+def test_dir_indices_select_positions():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            predict=[Selector(kind=SelectorKind.DIR_INDICES, ids=[0, 2, 4])]
+        ),
+        batch_size=1,
+    )
     dm.setup(stage="predict")
-    assert len(dm._predict_ds) == 4  # "0-3" -> [0, 1, 2, 3]
+    assert len(dm._predict_ds) == 3
+
+
+def test_tag_and_categories_resolve_by_metadata():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            train=[Selector(kind=SelectorKind.TAG, any_of=["normal"])],
+            test=[Selector(kind=SelectorKind.CATEGORIES, any_of=["scrap"])],
+        ),
+        batch_size=1,
+    )
+    dm.setup(stage="fit")
+    assert len(dm._train_ds) == 3  # even indices tagged normal
+    dm.setup(stage="test")
+    assert len(dm._test_ds) == 3  # odd indices, category scrap
+
+
+def test_unknown_category_name_raises():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            test=[Selector(kind=SelectorKind.CATEGORIES, any_of=["ghost"])]
+        ),
+    )
+    with pytest.raises(ValueError, match="not in dataset categories"):
+        dm.setup(stage="test")
+
+
+def test_selector_matching_zero_raises():
+    dm = FakeDataModule(splits=DataSplitConfig(train=[_fi([99])]))
+    with pytest.raises(ValueError, match="matched 0 samples"):
+        dm.setup(stage="fit")
+
+
+def test_leakage_error_by_default():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(train=[_fi([0, 1])], test=[_fi([1, 2])]),
+    )
+    with pytest.raises(SplitLeakageError, match="shared between train and test"):
+        dm.setup(stage="fit")
+
+
+def test_leakage_warn_allows_overlap():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            train=[_fi([0, 1])], test=[_fi([1, 2])], leakage_check="warn"
+        ),
+    )
+    dm.setup(stage="fit")  # logs, does not raise
+    assert len(dm._train_ds) == 2
+
+
+def test_predict_may_overlap_test():
+    dm = FakeDataModule(
+        splits=DataSplitConfig(test=[_fi([1])], predict=[_fi([1])]),
+    )
+    dm.setup()  # predict overlapping test is allowed
+    assert len(dm._predict_ds) == 1
 
 
 def test_public_dataset_properties_get_and_set():
-    # The former SingleCu3sDataModule exposed train/val/test/predict_ds publicly;
-    # consumers read them and sometimes reassign (e.g. predict_ds = Subset(...)).
-    dm = FakeDataModule(splits=DataSplitConfig(train_ids=[0, 1], predict_ids=[]))
+    dm = FakeDataModule(splits=DataSplitConfig(train=[_fi([0, 1])]))
     assert dm.train_ds is None and dm.predict_ds is None  # before setup
     dm.setup(stage="fit")
     assert dm.train_ds is dm._train_ds
@@ -67,13 +138,12 @@ def test_module_owned_splits():
 
 
 def test_dataloader_before_setup_raises():
-    dm = FakeDataModule(splits=DataSplitConfig(train_ids=[0]))
+    dm = FakeDataModule(splits=DataSplitConfig(train=[_fi([0])]))
     with pytest.raises(RuntimeError, match="not built"):
         dm.test_dataloader()
 
 
 def test_validate_params_default_is_noop():
-    # No required keys -> no raise.
     FakeDataModule.validate_params({})
 
 
@@ -82,7 +152,7 @@ def test_create_data_module_dispatch():
         data_modules = {"fake": FakeDataModule}
 
     dc = DataConfig(
-        data_module="fake", splits=DataSplitConfig(train_ids=[0, 1]), batch_size=2
+        data_module="fake", splits=DataSplitConfig(train=[_fi([0, 1])]), batch_size=2
     )
     dm = create_data_module(_Reg(), dc)
     assert isinstance(dm, FakeDataModule)
