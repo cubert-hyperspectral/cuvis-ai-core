@@ -123,6 +123,7 @@ def test_save_train_run_reanchors_reference_to_sibling(
     sibling = out.parent / "tr_pipeline.yaml"
     assert sibling.is_file()
     assert PipelineConfig.load_from_file(sibling).nodes  # self-contained + loadable
+    assert resp.pipeline_path == str(sibling)  # reported in the response
 
 
 # ---------------------------------------------------------------------------

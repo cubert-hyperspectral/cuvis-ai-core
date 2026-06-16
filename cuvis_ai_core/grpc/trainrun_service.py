@@ -49,9 +49,12 @@ class TrainRunService:
             f"{trainrun_path.stem}_pipeline.yaml"
         )
 
+        written_pipeline: dict[str, str] = {}
+
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
             session.pipeline_config.save_to_file(sibling_pipeline_path)
+            written_pipeline["path"] = str(sibling_pipeline_path)
             return sibling_pipeline_path.name
 
         has_live_pipeline = (
@@ -141,6 +144,7 @@ class TrainRunService:
         return cuvis_ai_pb2.SaveTrainRunResponse(
             success=True,
             trainrun_path=str(trainrun_path),
+            pipeline_path=written_pipeline.get("path", ""),
             weights_path=weights_path,
         )
 
