@@ -19,7 +19,7 @@ from cuvis_ai_core.training.config import (
     TrainerConfig,
     TrainingConfig,
 )
-from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
 from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
 
 # Session-scoped cache for test data files to avoid repeated file system operations
@@ -365,7 +365,7 @@ class _SyntheticDictDataset(Dataset):
         return sample
 
 
-class SyntheticAnomalyDataModule(CuvisDataModule):
+class SyntheticAnomalyDataModule(BaseCuvisAIDataModule):
     """Lightweight datamodule that generates deterministic synthetic anomaly data.
 
     This datamodule reuses the create_test_cube logic to ensure consistency

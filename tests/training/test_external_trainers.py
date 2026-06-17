@@ -11,7 +11,7 @@ from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import PortSpec
 
-from cuvis_ai_core.training import CuvisDataModule
+from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
 from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from tests.fixtures import (
@@ -234,7 +234,7 @@ class TestGradientTrainer:
             def load(self, params: dict, serial_dir: str) -> None:
                 pass
 
-        class TestDataModule(CuvisDataModule):
+        class TestDataModule(BaseCuvisAIDataModule):
             """Simple test datamodule."""
 
             def __init__(self, batch_size: int = 16):
