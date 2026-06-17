@@ -66,14 +66,13 @@ def _make_plugin_files(
 
 
 def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Path, fqcn: str) -> None:
-    """Write a single-plugin manifest YAML into the catalog directory."""
+    """Write a single bare plugin manifest YAML into the plugins directory."""
     plugins_dir.mkdir(parents=True, exist_ok=True)
     (plugins_dir / f"{plugin_name}.yaml").write_text(
-        f"plugins:\n"
-        f"  {plugin_name}:\n"
-        f"    path: {plugin_dir.as_posix()!r}\n"
-        f"    provides:\n"
-        f"      - class_name: {fqcn}\n"
+        f"name: {plugin_name}\n"
+        f"path: {plugin_dir.as_posix()!r}\n"
+        f"capabilities:\n"
+        f"  - class_name: {fqcn}\n"
     )
 
 

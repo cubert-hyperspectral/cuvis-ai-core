@@ -104,7 +104,7 @@ def _load_data_module_plugin(
 
     catalog = _build_catalog([Path(d) for d in candidate_dirs])
     for plugin_name, cfg in catalog.items():
-        for entry in cfg.provides:
+        for entry in cfg.capabilities:
             if (
                 getattr(entry, "kind", "node") == "data_module"
                 and entry.data_module_name == data_module_name

@@ -24,9 +24,11 @@ from cuvis_ai_core.orchestrator.cache_key import (
     ResolvedPlugin,
     local_plugin_provenance,
 )
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
-
-PluginConfig = GitPluginConfig | LocalPluginConfig
+from cuvis_ai_schemas.plugin import (
+    GitPluginManifest,
+    LocalPluginManifest,
+    PluginManifest,
+)
 
 # Identity-bearing names for the generated runtime project. The source
 # key and the dependency string must use the SAME core name or uv
@@ -96,7 +98,7 @@ def git_source_url(repo: str, sha: str) -> str:
 
 
 def _active_extras(
-    cfg: PluginConfig, active_data_module: str | None
+    cfg: PluginManifest, active_data_module: str | None
 ) -> tuple[str, ...]:
     """pip extras to install for this plugin: the activated data module's extras.
 
@@ -106,7 +108,7 @@ def _active_extras(
     """
     if not active_data_module:
         return ()
-    for entry in cfg.provides:
+    for entry in cfg.capabilities:
         if (
             getattr(entry, "kind", "node") == "data_module"
             and getattr(entry, "data_module_name", "") == active_data_module
@@ -116,7 +118,7 @@ def _active_extras(
 
 
 def resolve_plugin_sources(
-    plugin_configs: Mapping[str, PluginConfig],
+    plugin_configs: Mapping[str, PluginManifest],
     active_data_module: str | None = None,
 ) -> tuple[ResolvedPlugin, ...]:
     """Resolve git tags to SHAs and stamp local plugins with content provenance.
@@ -129,7 +131,7 @@ def resolve_plugin_sources(
     for name in sorted(plugin_configs):
         cfg = plugin_configs[name]
         extras = _active_extras(cfg, active_data_module)
-        if isinstance(cfg, GitPluginConfig):
+        if isinstance(cfg, GitPluginManifest):
             sha = resolve_git_tag(cfg.repo, cfg.tag)
             # Prefer the explicit override; otherwise trust the
             # manifest key matches the package name (the case for
@@ -148,7 +150,7 @@ def resolve_plugin_sources(
             logger.debug(
                 f"Resolved plugin '{name}' tag {cfg.tag} → {sha[:8]} from {cfg.repo}"
             )
-        elif isinstance(cfg, LocalPluginConfig):
+        elif isinstance(cfg, LocalPluginManifest):
             path = Path(cfg.path).resolve()
             pyproject_sha, head, dirty = local_plugin_provenance(path)
             # Local plugins prefer the explicit override; otherwise

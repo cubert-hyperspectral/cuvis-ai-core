@@ -1,6 +1,6 @@
 """ListAvailableNodes must not import plugin modules.
 
-The catalog is carried inline in each manifest entry's ``provides`` list,
+The catalog is carried inline in each manifest's ``capabilities`` list,
 so the parent answers ``ListAvailableNodes`` without importing any plugin
 module. The orchestrator deliberately confines plugin code to child
 venvs; a plugin module appearing in the parent's ``sys.modules`` during
@@ -44,9 +44,12 @@ def test_list_available_nodes_does_not_import_plugin(tmp_path, session_manager):
 
     session_id = session_manager.create_session()
     session = session_manager.get_session(session_id)
+    # registered_plugins holds a bare single-plugin manifest dump:
+    # name + source + capabilities (was: path + provides).
     session.registered_plugins[plugin_name] = {
+        "name": plugin_name,
         "path": str(tmp_path / plugin_name),
-        "provides": [_inline_node(fqcn)],
+        "capabilities": [_inline_node(fqcn)],
     }
 
     plugin_modules_before = {
@@ -82,15 +85,16 @@ def test_list_available_nodes_handles_malformed_catalog(tmp_path, session_manage
     plugin_name = "broken_plugin"
     bad_node = {
         "class_name": f"{plugin_name}.node.Broken",
-        # Non-int shape entries are rejected by CatalogPortSpec validation.
+        # Non-int shape entries are rejected by NodePortSpec validation.
         "input_specs": {"x": {"dtype": "float32", "shape": ["dynamic", -1]}},
     }
 
     session_id = session_manager.create_session()
     session = session_manager.get_session(session_id)
     session.registered_plugins[plugin_name] = {
+        "name": plugin_name,
         "path": str(tmp_path / plugin_name),
-        "provides": [bad_node],
+        "capabilities": [bad_node],
     }
 
     plugin_service = PluginService(session_manager)

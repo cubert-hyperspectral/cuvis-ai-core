@@ -1,9 +1,9 @@
 """Pure resolver for pipeline plugin sets.
 
 * If ``pipeline_config.plugins`` is set, look up each bare plugin name in
-  the merged catalog and return its :class:`GitPluginConfig` or
-  :class:`LocalPluginConfig` (core-side types). A name with no catalog
-  manifest is an error.
+  the merged catalog and return its :class:`GitPluginManifest` or
+  :class:`LocalPluginManifest` (the manifest union). A name with no manifest
+  on disk is an error.
 * If ``pipeline_config.plugins`` is None/empty, the production wrapper
   ``_auto_resolve`` hard-fails with a fix-it message pointing at
   ``suggest-plugins-fix``; the pure heuristic ``_compute_auto_resolution``
@@ -19,52 +19,26 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from loguru import logger
-
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig, PluginManifest
 from cuvis_ai_schemas.pipeline.config import PipelineConfig
+from cuvis_ai_schemas.plugin import PluginManifest, load_plugin_manifests
 
-PluginConfig = GitPluginConfig | LocalPluginConfig
 
+def _build_catalog(plugins_dirs: list[Path]) -> dict[str, PluginManifest]:
+    """Load per-plugin manifests from one or more dirs into a name → manifest dict.
 
-def _build_catalog(plugins_dirs: list[Path]) -> dict[str, PluginConfig]:
-    """Merge per-plugin manifests from one or more dirs into a single catalog.
-
-    Later dirs win on plugin-name collisions; the override is logged.
-    Non-existent dirs are silently skipped (covers the common case where
-    a caller passes a list of candidate dirs and some don't exist).
-
-    For :class:`LocalPluginConfig` entries, the relative ``path`` is
-    resolved against the manifest file's parent directory and stored as
-    an absolute path in the returned catalog. This means downstream
-    consumers don't need ``manifest_dir`` context to load the plugin.
+    The directory loader scans every bare manifest across all given dirs,
+    resolves local plugins' relative paths to absolute, builds a ``name → path``
+    index, and **errors on a duplicate plugin name across the whole set** (no
+    silent last-writer-wins). The returned dict is keyed by the explicit
+    ``manifest.name``; downstream consumers need no ``manifest_dir`` context.
     """
-    catalog: dict[str, PluginConfig] = {}
-    for plugins_dir in plugins_dirs:
-        if not plugins_dir.exists() or not plugins_dir.is_dir():
-            logger.debug(f"Plugins dir not found or not a directory: {plugins_dir}")
-            continue
-        for manifest_path in sorted(plugins_dir.glob("*.yaml")):
-            manifest = PluginManifest.from_yaml(manifest_path)
-            manifest_dir = manifest_path.parent
-            for name, cfg in manifest.plugins.items():
-                if isinstance(cfg, LocalPluginConfig):
-                    cfg = cfg.model_copy(
-                        update={"path": str(cfg.resolve_path(manifest_dir))}
-                    )
-                if name in catalog:
-                    logger.info(
-                        f"Plugin '{name}' overridden by manifest at {manifest_path} "
-                        "(was provided by an earlier plugins dir)"
-                    )
-                catalog[name] = cfg
-    return catalog
+    return {m.name: m for m in load_plugin_manifests(plugins_dirs)}
 
 
 def _ref_to_core(
     ref: str,
-    catalog: dict[str, PluginConfig],
-) -> tuple[str, PluginConfig]:
+    catalog: dict[str, PluginManifest],
+) -> tuple[str, PluginManifest]:
     """Materialise a single bare plugin name into ``(name, core-side config)``.
 
     Raises ``ValueError`` if the name has no manifest in the catalog.
@@ -80,9 +54,9 @@ def _ref_to_core(
 
 def _compute_auto_resolution(
     class_names: list[str],
-    catalog: dict[str, PluginConfig],
+    catalog: dict[str, PluginManifest],
     plugins_dirs: list[Path],
-) -> dict[str, PluginConfig]:
+) -> dict[str, PluginManifest]:
     """Pure heuristic: map class_names to plugins by exact-match against provides.
 
     Used by both the production hard-fail wrapper (``_auto_resolve``) and the
@@ -101,12 +75,12 @@ def _compute_auto_resolution(
 
     provides_to_plugins: dict[str, list[str]] = defaultdict(list)
     for plugin_name, cfg in catalog.items():
-        for node in cfg.provides:
+        for node in cfg.capabilities:
             if getattr(node, "kind", "node") != "node":
                 continue  # data_module entries are selected by name, not node coverage
             provides_to_plugins[node.class_name].append(plugin_name)
 
-    resolved: dict[str, PluginConfig] = {}
+    resolved: dict[str, PluginManifest] = {}
     for class_name in class_names:
         owners = provides_to_plugins.get(class_name, [])
         if not owners:
@@ -131,9 +105,9 @@ def _compute_auto_resolution(
 
 def _auto_resolve(
     class_names: list[str],
-    catalog: dict[str, PluginConfig],
+    catalog: dict[str, PluginManifest],
     plugins_dirs: list[Path],
-) -> dict[str, PluginConfig]:
+) -> dict[str, PluginManifest]:
     """Production auto-resolve: heuristic + hard-fail with fix-it hint.
 
     The ``plugins:`` field is mandatory in pipeline yamls. If a pipeline
@@ -153,13 +127,13 @@ def _auto_resolve(
 
 def _validate_coverage(
     class_names: list[str],
-    resolved: dict[str, PluginConfig],
+    resolved: dict[str, PluginManifest],
 ) -> None:
     """Ensure every class_name is provided by some plugin in the resolved set."""
     provided = {
         node.class_name
         for cfg in resolved.values()
-        for node in cfg.provides
+        for node in cfg.capabilities
         if getattr(node, "kind", "node") == "node"
     }
     missing = [c for c in class_names if c not in provided]
@@ -173,8 +147,8 @@ def _validate_coverage(
 
 
 def _union_data_module_plugin(
-    resolved: dict[str, PluginConfig],
-    catalog: dict[str, PluginConfig],
+    resolved: dict[str, PluginManifest],
+    catalog: dict[str, PluginManifest],
     data_module: str,
 ) -> None:
     """Add the plugin providing ``data_module`` to ``resolved`` (in place).
@@ -185,7 +159,7 @@ def _union_data_module_plugin(
     union its plugin into the compose set. No-op if already present or unfound.
     """
     for plugin_name, cfg in catalog.items():
-        for entry in cfg.provides:
+        for entry in cfg.capabilities:
             if (
                 getattr(entry, "kind", "node") == "data_module"
                 and getattr(entry, "data_module_name", "") == data_module
@@ -198,12 +172,12 @@ def resolve_pipeline_plugins(
     pipeline_config: PipelineConfig,
     plugins_dirs: list[Path],
     data_module: str | None = None,
-) -> dict[str, PluginConfig]:
+) -> dict[str, PluginManifest]:
     """Resolve the plugin set a pipeline depends on.
 
     Pure function: input is the parsed ``PipelineConfig`` plus a list of
     candidate plugins directories; output is a ``dict`` mapping plugin
-    name to its core-side ``GitPluginConfig`` / ``LocalPluginConfig``.
+    name to its ``GitPluginManifest`` / ``LocalPluginManifest``.
     No side effects — does not install, import, or mutate any global
     state.
 

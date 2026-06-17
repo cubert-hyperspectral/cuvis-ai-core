@@ -41,12 +41,11 @@ def workspace(tmp_path: Path) -> Path:
     _write(
         plugins_dir / "cuvis_ai_builtin.yaml",
         """
-        plugins:
-          cuvis_ai_builtin:
-            path: "../.."
-            provides:
-              - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
-              - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
+        name: cuvis_ai_builtin
+        path: "../.."
+        capabilities:
+          - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
+          - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
         """,
     )
     return tmp_path

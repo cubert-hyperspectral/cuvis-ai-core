@@ -25,7 +25,7 @@ from cuvis_ai_core.orchestrator.runtime_project import (
     resolve_git_tag,
     resolve_plugin_sources,
 )
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginManifest, LocalPluginManifest
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")
 
@@ -126,15 +126,17 @@ def test_resolve_git_tag_surfaces_subprocess_failure():
 
 def test_resolve_plugin_sources_resolves_git_tag_and_sorts_by_name(tmp_path: Path):
     configs = {
-        "z_plugin": GitPluginConfig(
+        "z_plugin": GitPluginManifest(
+            name="z_plugin",
             repo="https://example.com/z.git",
             tag="v0.1.0",
-            provides=[{"class_name": "z.Node"}],
+            capabilities=[{"class_name": "z.Node"}],
         ),
-        "a_plugin": GitPluginConfig(
+        "a_plugin": GitPluginManifest(
+            name="a_plugin",
             repo="https://example.com/a.git",
             tag="v0.2.0",
-            provides=[{"class_name": "a.Node"}],
+            capabilities=[{"class_name": "a.Node"}],
         ),
     }
     with patch(
@@ -152,8 +154,10 @@ def test_resolve_plugin_sources_stamps_local_provenance(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")
     configs = {
-        "my_local": LocalPluginConfig(
-            path=str(tmp_path), provides=[{"class_name": "x.Node"}]
+        "my_local": LocalPluginManifest(
+            name="my_local",
+            path=str(tmp_path),
+            capabilities=[{"class_name": "x.Node"}],
         )
     }
     with patch(
@@ -346,8 +350,10 @@ def test_resolve_plugin_sources_reads_local_package_name(tmp_path: Path):
         encoding="utf-8",
     )
 
-    config = LocalPluginConfig(
-        path=str(plugin_dir), provides=[{"class_name": "actual.module.Foo"}]
+    config = LocalPluginManifest(
+        name="manifest_key_only",
+        path=str(plugin_dir),
+        capabilities=[{"class_name": "actual.module.Foo"}],
     )
     resolved = resolve_plugin_sources({"manifest_key_only": config})
 

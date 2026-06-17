@@ -170,11 +170,10 @@ def _resolvable_pipeline(tmp_path):
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
     (plugins_dir / "m.yaml").write_text(
-        "plugins:\n"
-        "  test_plugin:\n"
-        "    path: '.'\n"
-        "    provides:\n"
-        f"      - class_name: {node_class}\n",
+        "name: test_plugin\n"
+        "path: '.'\n"
+        "capabilities:\n"
+        f"  - class_name: {node_class}\n",
         encoding="utf-8",
     )
     cfg = SimpleNamespace(

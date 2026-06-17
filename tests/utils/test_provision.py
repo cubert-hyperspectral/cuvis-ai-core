@@ -113,7 +113,7 @@ def test_resolve_install_specs_skips_satisfied(monkeypatch):
 
     class _Cfg:
         def __init__(self, top):
-            self.provides = [_Entry(top)]
+            self.capabilities = [_Entry(top)]
 
     monkeypatch.setattr(
         prov.PipelineConfig, "load_from_file", staticmethod(lambda p: object())
@@ -135,7 +135,7 @@ def test_resolve_install_specs_skips_satisfied(monkeypatch):
     monkeypatch.setattr(
         prov,
         "_is_satisfied",
-        lambda cfg: cfg.provides[0].class_name.startswith("cuvis_ai_sam3"),
+        lambda cfg: cfg.capabilities[0].class_name.startswith("cuvis_ai_sam3"),
     )
 
     specs = prov.resolve_install_specs("pipe.yaml", ["dir"], data_module="cu3s")

@@ -233,7 +233,7 @@ class TestCatalogSplit:
         loaded_plugin_nodes. Materialisation happens lazily."""
         import sys
 
-        from cuvis_ai_schemas.plugin import LocalPluginConfig
+        from cuvis_ai_schemas.plugin import LocalPluginManifest
 
         registry = NodeRegistry()
         modules_before = set(sys.modules)
@@ -241,16 +241,17 @@ class TestCatalogSplit:
 
         plugin_root = tmp_path / "fake_plugin"
         plugin_root.mkdir()
-        cfg = LocalPluginConfig(
+        cfg = LocalPluginManifest(
+            name="fake_plugin",
             path=str(plugin_root),
-            provides=[{"class_name": "fake_pkg.module.FakeNode"}],
+            capabilities=[{"class_name": "fake_pkg.module.FakeNode"}],
         )
         registry.register_catalog_entries({"fake_plugin": cfg})
 
         assert "fake_plugin" in registry.plugin_catalog
         assert [
             entry.class_name
-            for entry in registry.plugin_catalog["fake_plugin"].provides
+            for entry in registry.plugin_catalog["fake_plugin"].capabilities
         ] == ["fake_pkg.module.FakeNode"]
         # No import side effects: nothing loaded, sys state unchanged.
         assert registry.loaded_plugin_nodes == {}
@@ -267,7 +268,7 @@ class TestCatalogSplit:
         """Re-registering a plugin with diverging config logs an override note."""
         from loguru import logger
 
-        from cuvis_ai_schemas.plugin import LocalPluginConfig
+        from cuvis_ai_schemas.plugin import LocalPluginManifest
 
         plugin_root_a = tmp_path / "a"
         plugin_root_a.mkdir()
@@ -277,8 +278,8 @@ class TestCatalogSplit:
         registry = NodeRegistry()
         registry.register_catalog_entries(
             {
-                "p": LocalPluginConfig(
-                    path=str(plugin_root_a), provides=[{"class_name": "pkg.X"}]
+                "p": LocalPluginManifest(
+                    name="p", path=str(plugin_root_a), capabilities=[{"class_name": "pkg.X"}]
                 )
             }
         )
@@ -290,8 +291,8 @@ class TestCatalogSplit:
         try:
             registry.register_catalog_entries(
                 {
-                    "p": LocalPluginConfig(
-                        path=str(plugin_root_b), provides=[{"class_name": "pkg.X"}]
+                    "p": LocalPluginManifest(
+                        name="p", path=str(plugin_root_b), capabilities=[{"class_name": "pkg.X"}]
                     )
                 }
             )
@@ -302,12 +303,13 @@ class TestCatalogSplit:
         assert registry.plugin_catalog["p"].path == str(plugin_root_b)
 
     @staticmethod
-    def _local_cfg(path, *class_paths):
-        from cuvis_ai_schemas.plugin import LocalPluginConfig
+    def _local_cfg(path, *class_paths, name="p"):
+        from cuvis_ai_schemas.plugin import LocalPluginManifest
 
-        return LocalPluginConfig(
+        return LocalPluginManifest(
+            name=name,
             path=str(path),
-            provides=[{"class_name": cp} for cp in class_paths],
+            capabilities=[{"class_name": cp} for cp in class_paths],
         )
 
     @staticmethod
@@ -369,7 +371,7 @@ class TestCatalogSplit:
                 "newp",
                 {
                     "path": str(tmp_path),
-                    "provides": [{"class_name": "pkg.mod.DeltaNode"}],
+                    "capabilities": [{"class_name": "pkg.mod.DeltaNode"}],
                 },
             )
 

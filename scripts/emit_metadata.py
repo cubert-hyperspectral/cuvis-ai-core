@@ -1,26 +1,27 @@
-"""Regenerate a plugin's inline node catalog inside its manifest YAML.
+"""Regenerate a plugin's inline node metadata inside its manifest YAML.
 
-Each plugin manifest entry's ``provides`` list *is* its node catalog:
-every item carries an FQCN ``class_name`` plus optional palette metadata
-(port specs, category, tags, icon, doc summary). This tool imports every
-class named in ``provides`` and rewrites each entry with freshly
-introspected metadata — in place, preserving the manifest's comments and
-structure via a ruamel round-trip.
+A plugin manifest's ``capabilities`` list *is* its node catalog: every
+item carries an FQCN ``class_name`` plus, for nodes, optional palette
+metadata (port specs, category, tags, icon, doc summary). This tool
+imports every node class named in ``capabilities`` and rewrites each
+node entry with freshly introspected metadata, in place, preserving the
+manifest's comments and structure via a ruamel round-trip. ``data_module``
+entries carry no palette metadata and are left untouched.
 
-Release CI runs it once a tag is cut; the ``--check`` mode is the drift
-guard (non-zero exit when the committed catalog no longer matches the
-live node specs).
+One yaml file is one plugin (a bare manifest: ``name`` + source +
+``capabilities``), so there is no plugin selector. Release CI runs this
+once a tag is cut; the ``--check`` mode is the drift guard (non-zero exit
+when the committed metadata no longer matches the live node specs).
 
 Usage::
 
     uv run python -m scripts.emit_metadata \\
-        --manifest configs/plugins/cuvis_ai_builtin.yaml \\
-        --plugin cuvis_ai_builtin
+        --manifest configs/plugins/cuvis_ai_builtin.yaml
 
 CI guard (in the plugin repo's release workflow)::
 
-    uv run python -m scripts.emit_metadata --manifest ... --plugin ... --check
-    # non-zero exit → the committed catalog has drifted from the live specs
+    uv run python -m scripts.emit_metadata --manifest ... --check
+    # non-zero exit → the committed metadata has drifted from the live specs
 """
 
 from __future__ import annotations
@@ -39,9 +40,9 @@ from loguru import logger
 from ruamel.yaml import YAML
 
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
-from cuvis_ai_schemas.catalog import CatalogNodeEntry, CatalogPortSpec
 from cuvis_ai_schemas.enums import NodeCategory
 from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_schemas.plugin import NodePortSpec, PluginCapabilityEntry
 
 
 _TORCH_DTYPE_NAMES = {
@@ -61,7 +62,7 @@ def _dtype_to_string(dtype: Any) -> str:
 
     ``INPUT_SPECS`` / ``OUTPUT_SPECS`` accept a wide range of dtype values
     (torch.dtype, np.dtype instance, NumPy scalar class, torch.Tensor as
-    a generic marker). Catalog entries normalise everything to the string
+    a generic marker). Capability entries normalise everything to the string
     form ``np.dtype(...)`` accepts. Unknown / generic dtypes serialise as
     an empty string so the server can fall back to UNSPECIFIED.
     """
@@ -87,8 +88,8 @@ def _shape_to_int_list(shape: tuple) -> list[int]:
     return out
 
 
-def _port_spec_to_catalog(spec: PortSpec) -> CatalogPortSpec:
-    return CatalogPortSpec(
+def _port_spec_to_node(spec: PortSpec) -> NodePortSpec:
+    return NodePortSpec(
         dtype=_dtype_to_string(spec.dtype),
         shape=_shape_to_int_list(tuple(spec.shape)),
         optional=spec.optional,
@@ -97,12 +98,12 @@ def _port_spec_to_catalog(spec: PortSpec) -> CatalogPortSpec:
     )
 
 
-def _specs_map_to_catalog(
+def _specs_map_to_node(
     specs_dict: dict | None,
-) -> dict[str, CatalogPortSpec]:
+) -> dict[str, NodePortSpec]:
     if not specs_dict:
         return {}
-    return {port_name: _port_spec_to_catalog(spec) for port_name, spec in specs_dict.items()}
+    return {port_name: _port_spec_to_node(spec) for port_name, spec in specs_dict.items()}
 
 
 def _resolve_package_root(node_class: type) -> Path | None:
@@ -179,18 +180,18 @@ def _import_class(fqcn: str) -> type:
     return cls
 
 
-def _node_entry(fqcn: str) -> CatalogNodeEntry:
-    """Introspect one node class into a CatalogNodeEntry (class_name = FQCN)."""
+def _node_entry(fqcn: str) -> PluginCapabilityEntry:
+    """Introspect one node class into a PluginCapabilityEntry (class_name = FQCN)."""
     node_class = _import_class(fqcn)
     short_name = node_class.__name__
     category = _category_for(node_class, short_name)
-    return CatalogNodeEntry(
+    return PluginCapabilityEntry(
         class_name=fqcn,
         category=category.value,
         tags=_tags_for(node_class, short_name),
         icon_svg=_icon_svg_for(node_class, short_name, category),
-        input_specs=_specs_map_to_catalog(getattr(node_class, "INPUT_SPECS", {})),
-        output_specs=_specs_map_to_catalog(getattr(node_class, "OUTPUT_SPECS", {})),
+        input_specs=_specs_map_to_node(getattr(node_class, "INPUT_SPECS", {})),
+        output_specs=_specs_map_to_node(getattr(node_class, "OUTPUT_SPECS", {})),
         doc_summary=_doc_summary_for(node_class),
     )
 
@@ -200,13 +201,19 @@ def _plainify(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
-def _entry_to_manifest_dict(entry: CatalogNodeEntry) -> dict:
-    """Catalog entry → manifest 'provides' dict, dropping empty/default fields.
+def _is_node_entry(item: Any) -> bool:
+    """A capability item is a node unless it explicitly declares another kind."""
+    kind = item.get("kind", "node") if hasattr(item, "get") else "node"
+    return (kind or "node") == "node"
+
+
+def _entry_to_manifest_dict(entry: PluginCapabilityEntry) -> dict:
+    """Capability entry → manifest 'capabilities' dict, dropping empty/default fields.
 
     ``class_name`` is always present; the rest is emitted only when it
     carries information, so minimal nodes stay terse and rich nodes stay
     complete. The dropped defaults round-trip back to the same model
-    (``CatalogNodeEntry`` fills them), so ``--check`` stays exact.
+    (``PluginCapabilityEntry`` fills them), so ``--check`` stays exact.
     """
     def _drop_default_variadic(specs: dict) -> dict:
         # `variadic` is an opt-in input flag; only emit it when True.
@@ -236,43 +243,39 @@ def _yaml() -> YAML:
     y = YAML()
     y.preserve_quotes = True
     # None = leaf (scalar-only) collections like `shape` / `tags` render inline
-    # (`shape: [-1, -1, -1, 3]`); maps and the PortSpec list stay block-style.
+    # (`shape: [-1, -1, -1, 3]`); maps and the capability list stay block-style.
     y.default_flow_style = None
     y.width = 1_000_000  # never line-wrap long scalars (e.g. icon_svg)
     y.indent(mapping=2, sequence=2, offset=0)
     return y
 
 
-def emit(manifest_path: Path, plugin_name: str, *, check: bool = False) -> bool:
-    """Regenerate (or, with ``check``, verify) one plugin's inline catalog.
+def emit(manifest_path: Path, *, check: bool = False) -> bool:
+    """Regenerate (or, with ``check``, verify) a manifest's node metadata.
 
-    Reads each ``provides`` entry's ``class_name`` (FQCN), imports the
-    class, and rewrites the entry with freshly introspected palette
-    metadata, preserving the manifest's comments + structure. Returns
-    True on success (or, in check mode, when the committed catalog is
-    already in sync); False when ``check`` finds drift.
+    Reads each node entry's ``class_name`` (FQCN) from the bare manifest's
+    ``capabilities`` list, imports the class, and rewrites the entry with
+    freshly introspected palette metadata, preserving the manifest's
+    comments + structure. ``data_module`` entries are left untouched.
+    Returns True on success (or, in check mode, when the committed metadata
+    is already in sync); False when ``check`` finds drift.
     """
     yaml_rt = _yaml()
     doc = yaml_rt.load(manifest_path.read_text(encoding="utf-8"))
 
-    plugins_block = (doc or {}).get("plugins") or {}
-    if plugin_name not in plugins_block:
-        raise KeyError(
-            f"Plugin '{plugin_name}' not found in manifest {manifest_path}. "
-            f"Known plugins: {sorted(plugins_block)}"
-        )
-    provides = plugins_block[plugin_name].get("provides")
-    if not provides:
-        raise ValueError(f"Plugin '{plugin_name}' has empty 'provides:' in {manifest_path}")
+    capabilities = (doc or {}).get("capabilities")
+    if not capabilities:
+        raise ValueError(f"Manifest {manifest_path} has empty 'capabilities:'")
 
-    fresh_by_fqcn: dict[str, CatalogNodeEntry] = {}
+    node_items = [item for item in capabilities if _is_node_entry(item)]
+
+    fresh_by_fqcn: dict[str, PluginCapabilityEntry] = {}
     failures: list[tuple[str, str]] = []
-    for item in provides:
+    for item in node_items:
         fqcn = item.get("class_name") if hasattr(item, "get") else None
         if not fqcn:
             raise ValueError(
-                f"A 'provides' entry for plugin '{plugin_name}' is missing "
-                f"'class_name' in {manifest_path}"
+                f"A 'capabilities' entry is missing 'class_name' in {manifest_path}"
             )
         try:
             fresh_by_fqcn[fqcn] = _node_entry(fqcn)
@@ -280,64 +283,62 @@ def emit(manifest_path: Path, plugin_name: str, *, check: bool = False) -> bool:
             failures.append((fqcn, f"{type(exc).__name__}: {exc}"))
             logger.error(f"Skipping '{fqcn}': {exc}")
 
-    if failures and len(failures) == len(provides):
-        raise RuntimeError("All provided classes failed to import; refusing to rewrite")
+    if node_items and failures and len(failures) == len(node_items):
+        raise RuntimeError("All node classes failed to import; refusing to rewrite")
     if failures:
-        logger.warning(f"{len(failures)}/{len(provides)} classes failed; check log above")
+        logger.warning(f"{len(failures)}/{len(node_items)} node classes failed; check log above")
 
-    # Drift check: committed entry (validated) vs freshly introspected one.
+    # Drift check: committed node entry (validated) vs freshly introspected one.
     in_sync = True
-    for item in provides:
+    for item in node_items:
         fqcn = item["class_name"]
         fresh = fresh_by_fqcn.get(fqcn)
         if fresh is None:
             continue  # import failed — leave the committed entry untouched
-        committed = CatalogNodeEntry.model_validate(_plainify(item))
+        committed = PluginCapabilityEntry.model_validate(_plainify(item))
         if committed != fresh:
             in_sync = False
 
     if check:
         if in_sync:
-            logger.info(f"{manifest_path} plugin '{plugin_name}' catalog is in sync")
+            logger.info(f"{manifest_path} capabilities are in sync")
         else:
             logger.error(
-                f"{manifest_path} plugin '{plugin_name}' catalog is stale — "
+                f"{manifest_path} capabilities are stale — "
                 "re-run emit_metadata without --check to regenerate"
             )
         return in_sync
 
-    new_provides = [
+    new_capabilities = [
         _entry_to_manifest_dict(fresh_by_fqcn[item["class_name"]])
-        if item["class_name"] in fresh_by_fqcn
+        if _is_node_entry(item) and item["class_name"] in fresh_by_fqcn
         else _plainify(item)
-        for item in provides
+        for item in capabilities
     ]
-    plugins_block[plugin_name]["provides"] = new_provides
+    doc["capabilities"] = new_capabilities
 
     with manifest_path.open("w", encoding="utf-8") as f:
         yaml_rt.dump(doc, f)
     logger.info(
-        f"Updated {manifest_path}: plugin '{plugin_name}', "
-        f"{len(fresh_by_fqcn)} node(s), {len(failures)} failure(s)"
+        f"Updated {manifest_path}: {len(fresh_by_fqcn)} node(s), {len(failures)} failure(s)"
     )
     return True
 
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Regenerate a plugin's inline node catalog in its manifest YAML"
+        description="Regenerate a plugin manifest's inline node metadata"
     )
     parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--plugin", required=True, help="Plugin name (key in 'plugins:')")
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify the committed catalog matches live specs; do not write.",
+        help="Verify the committed metadata matches live specs; do not write.",
     )
     args = parser.parse_args(argv)
 
     try:
-        ok = emit(args.manifest, args.plugin, check=args.check)
+        ok = emit(args.manifest, check=args.check)
     except (KeyError, ValueError, RuntimeError) as exc:
         logger.error(f"Emit failed: {exc}")
         return 1

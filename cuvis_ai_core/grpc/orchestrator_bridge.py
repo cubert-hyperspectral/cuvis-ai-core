@@ -47,10 +47,8 @@ from cuvis_ai_core.orchestrator.spawner import (
     DeclaredPaths,
     LocalChildRuntimeSpawner,
 )
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
-
-PluginConfig = GitPluginConfig | LocalPluginConfig
 
 _NO_CHILD_DETAIL = (
     "No child runtime is attached to this session. "
@@ -189,15 +187,17 @@ def _initialize_child_session(
     handle: ChildHandle,
     session_id: str,
     session: SessionState,
-    resolved: Mapping[str, PluginConfig],
+    resolved: Mapping[str, PluginManifest],
     declared: DeclaredPaths,
 ) -> None:
     """Hand the freshly-spawned child its session context via InitializeSession.
 
     Terminates the child and raises if it rejects the init handshake.
     """
+    # resolved_plugins_json is a JSON list of single-plugin manifests; each
+    # manifest carries its own `name`, so the list is self-describing.
     payload = json.dumps(
-        {name: cfg.model_dump() for name, cfg in resolved.items()}
+        [cfg.model_dump() for cfg in resolved.values()]
     ).encode("utf-8")
     init_response = handle.stub().InitializeSession(
         cuvis_ai_pb2.InitializeSessionRequest(
@@ -217,7 +217,7 @@ def _initialize_child_session(
 
 
 def _mirror_plugin_catalog(
-    session: SessionState, resolved: Mapping[str, PluginConfig]
+    session: SessionState, resolved: Mapping[str, PluginManifest]
 ) -> None:
     """Record resolved plugin metadata on the parent session.
 
@@ -781,7 +781,7 @@ class _InMemorySpawner(ChildRuntimeSpawner):
 
 
 def _noop_composer(
-    plugin_configs: Mapping[str, PluginConfig],
+    plugin_configs: Mapping[str, PluginManifest],
     *,
     core_source: CoreSource,
     **kwargs,
@@ -811,7 +811,7 @@ def reset_orchestrator() -> None:
 
 def _resolve_plugins(
     pipeline_config: Any, plugins_dirs: list[Path], data_module: str | None = None
-) -> Mapping[str, PluginConfig]:
+) -> Mapping[str, PluginManifest]:
     """Resolve the pipeline's declared plugins against the catalog.
 
     Always runs the resolver: ``plugins:`` is mandatory, so a pipeline

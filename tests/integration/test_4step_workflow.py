@@ -29,13 +29,13 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     # plugin manifest the pipeline references must live under config_dir/plugins.
     plugins_dir = config_dir / "plugins"
     plugins_dir.mkdir()
+    # One yaml is one bare single-plugin manifest: name + source + capabilities.
     (plugins_dir / "cuvis_ai_test_nodes.yaml").write_text(
-        "plugins:\n"
-        "  cuvis_ai_test_nodes:\n"
-        "    path: '.'\n"
-        "    provides:\n"
-        "      - class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode\n"
-        "      - class_name: tests.fixtures.mock_nodes.SoftChannelSelector\n",
+        "name: cuvis_ai_test_nodes\n"
+        "path: '.'\n"
+        "capabilities:\n"
+        "  - class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode\n"
+        "  - class_name: tests.fixtures.mock_nodes.SoftChannelSelector\n",
         encoding="utf-8",
     )
 
@@ -46,13 +46,18 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     _write_pipeline_file(pipeline_path, pipeline_definition)
 
     trainrun_path = config_dir / "trainrun.yaml"
+    # A trainrun references its pipeline by path (resolved relative to the
+    # trainrun file); inline pipeline mappings are no longer accepted.
     trainrun_dict = {
         "name": "integration-trainrun",
-        "pipeline": pipeline_definition,
+        "pipeline": "pipeline.yaml",
         "data": {
-            "cu3s_file_path": "/tmp/dummy.cu3s",
+            "data_module": "cu3s",
             "batch_size": 2,
-            "processing_mode": "Reflectance",
+            "params": {
+                "cu3s_file_path": "/tmp/dummy.cu3s",
+                "processing_mode": "Reflectance",
+            },
         },
         "training": {
             "max_epochs": 2,
@@ -103,7 +108,9 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     )
     trainrun_config_json = json.loads(trainrun_resolved.config_bytes.decode("utf-8"))
     assert trainrun_config_json["name"] == "integration-trainrun"
-    assert trainrun_config_json["data"]["cu3s_file_path"] == "/tmp/dummy.cu3s"
+    assert (
+        trainrun_config_json["data"]["params"]["cu3s_file_path"] == "/tmp/dummy.cu3s"
+    )
     trainrun_config_json.pop("pipeline", None)
 
     set_trainrun_response = grpc_stub.SetTrainRunConfig(

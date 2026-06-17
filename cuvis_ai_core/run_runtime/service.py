@@ -27,9 +27,7 @@ from cuvis_ai_core.grpc.pipeline_service import PipelineService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.training_service import TrainingService
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
-
-PluginConfig = GitPluginConfig | LocalPluginConfig
+from cuvis_ai_schemas.plugin import PluginManifest, parse_plugin_manifest
 
 
 class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
@@ -263,32 +261,25 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         )
 
 
-def _decode_resolved_plugins(blob: bytes) -> dict[str, PluginConfig]:
-    """Parse the JSON-serialised resolved plugin dict the parent sends.
+def _decode_resolved_plugins(blob: bytes) -> dict[str, PluginManifest]:
+    """Parse the JSON-serialised resolved plugin list the parent sends.
 
-    The parent computes the dict via
+    The parent computes the set via
     :func:`cuvis_ai_core.utils.plugin_resolver.resolve_pipeline_plugins`
-    and serialises it as
-    ``{name: GitPluginConfig.model_dump() | LocalPluginConfig.model_dump()}``.
-    Discriminating on the presence of ``repo`` vs ``path`` avoids any
-    ambiguity in pydantic's union heuristics for the two config types.
+    and serialises it as a JSON list of single-plugin manifests
+    ``[GitPluginManifest.model_dump() | LocalPluginManifest.model_dump(), ...]``.
+    Each manifest carries its own ``name``, so the list is re-keyed into a
+    ``name → manifest`` dict here.
     """
     if not blob:
         return {}
     data = json.loads(blob)
-    if not isinstance(data, dict):
-        raise TypeError("resolved_plugins_json must decode to a dict")
-    out: dict[str, PluginConfig] = {}
-    for name, cfg in data.items():
-        if not isinstance(cfg, dict):
-            raise TypeError(f"Plugin '{name}' config must be a dict, got {type(cfg)!r}")
-        if "repo" in cfg:
-            out[name] = GitPluginConfig(**cfg)
-        elif "path" in cfg:
-            out[name] = LocalPluginConfig(**cfg)
-        else:
-            raise ValueError(
-                f"Plugin '{name}' config has neither 'repo' nor 'path' "
-                f"keys; cannot infer GitPluginConfig vs LocalPluginConfig."
-            )
+    if not isinstance(data, list):
+        raise TypeError("resolved_plugins_json must decode to a list")
+    out: dict[str, PluginManifest] = {}
+    for raw in data:
+        if not isinstance(raw, dict):
+            raise TypeError(f"Each resolved plugin must be a dict, got {type(raw)!r}")
+        manifest = parse_plugin_manifest(raw)
+        out[manifest.name] = manifest
     return out

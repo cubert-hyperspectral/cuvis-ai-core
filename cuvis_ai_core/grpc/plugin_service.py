@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import grpc
@@ -13,14 +14,14 @@ from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
 from cuvis_ai_core.grpc.helpers import dtype_to_proto
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_core.orchestrator.catalog import (
-    CatalogNodeEntry,
-    CatalogPortSpec,
-    load_catalog_entry,
+from cuvis_ai_core.orchestrator.plugin_capabilities import (
+    NodePortSpec,
+    PluginCapabilityEntry,
+    load_capabilities,
 )
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_schemas.plugin import PluginManifest
+from cuvis_ai_schemas.plugin import parse_plugin_manifest
 from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 from cuvis_ai_schemas.grpc.conversions import (
     node_category_to_proto,
@@ -159,9 +160,9 @@ def _extract_node_metadata(
 
 
 def _catalog_port_spec_to_proto(
-    port_name: str, spec: CatalogPortSpec
+    port_name: str, spec: NodePortSpec
 ) -> cuvis_ai_pb2.PortSpec:
-    """Convert a catalog port spec (string dtype) to its proto form.
+    """Convert a capability port spec (string dtype) to its proto form.
 
     Empty / unknown dtype strings map to ``D_TYPE_UNSPECIFIED`` — the
     same wire value the runtime uses for generic-tensor markers on
@@ -190,9 +191,9 @@ def _catalog_port_spec_to_proto(
 
 
 def _catalog_specs_map_to_proto(
-    specs: dict[str, CatalogPortSpec],
+    specs: dict[str, NodePortSpec],
 ) -> dict[str, cuvis_ai_pb2.PortSpec]:
-    """Convert a {port → CatalogPortSpec} map into a proto {port → PortSpec} map."""
+    """Convert a {port → NodePortSpec} map into a proto {port → PortSpec} map."""
     return {
         port_name: _catalog_port_spec_to_proto(port_name, spec)
         for port_name, spec in specs.items()
@@ -200,9 +201,9 @@ def _catalog_specs_map_to_proto(
 
 
 def _catalog_entry_to_node_info(
-    entry: CatalogNodeEntry, plugin_name: str
+    entry: PluginCapabilityEntry, plugin_name: str
 ) -> cuvis_ai_pb2.NodeInfo:
-    """Build the proto NodeInfo for one catalog node — pure data, no class import."""
+    """Build the proto NodeInfo for one capability entry — pure data, no class import."""
     try:
         category = NodeCategory(entry.category)
     except ValueError:
@@ -271,18 +272,27 @@ class PluginService:
             context.set_details("manifest.config_bytes is required")
             return cuvis_ai_pb2.LoadPluginsResponse()
 
-        # Parse JSON → Pydantic (following existing pattern)
+        # config_bytes carries a JSON list of single-plugin manifests.
         manifest_json = request.manifest.config_bytes.decode("utf-8")
-        manifest = PluginManifest.model_validate_json(manifest_json)
+        raw_manifests = json.loads(manifest_json)
+        if not isinstance(raw_manifests, list):
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                "manifest.config_bytes must be a JSON list of single-plugin manifests"
+            )
+            return cuvis_ai_pb2.LoadPluginsResponse()
 
         registered: list[str] = []
         failed: dict[str, str] = {}
 
-        # Register each entry into the session's catalog. No install, no import.
-        for plugin_name, config in manifest.plugins.items():
+        # Register each manifest into the session's catalog. No install, no import.
+        for raw in raw_manifests:
+            plugin_name = raw.get("name", "<unnamed>") if isinstance(raw, dict) else "<unnamed>"
             try:
-                session.node_registry.register_catalog_entries({plugin_name: config})
-                session.registered_plugins[plugin_name] = config.model_dump()
+                manifest = parse_plugin_manifest(raw)
+                plugin_name = manifest.name
+                session.node_registry.register_catalog_entries({plugin_name: manifest})
+                session.registered_plugins[plugin_name] = manifest.model_dump()
                 registered.append(plugin_name)
                 logger.info(
                     f"Registered plugin '{plugin_name}' in session "
@@ -316,7 +326,7 @@ class PluginService:
             plugin_type = "git" if "repo" in config else "local"
             source = config.get("repo") or config.get("path", "")
             tag = config.get("tag", "")
-            provides = [n["class_name"] for n in config.get("provides", [])]
+            capabilities = [n["class_name"] for n in config.get("capabilities", [])]
 
             plugins.append(
                 cuvis_ai_pb2.PluginInfo(
@@ -324,7 +334,7 @@ class PluginService:
                     type=plugin_type,
                     source=source,
                     tag=tag,
-                    provides=provides,
+                    capabilities=capabilities,
                 )
             )
 
@@ -352,7 +362,7 @@ class PluginService:
         plugin_type = "git" if "repo" in config else "local"
         source = config.get("repo") or config.get("path", "")
         tag = config.get("tag", "")
-        provides = [n["class_name"] for n in config.get("provides", [])]
+        capabilities = [n["class_name"] for n in config.get("capabilities", [])]
 
         return cuvis_ai_pb2.GetPluginInfoResponse(
             plugin=cuvis_ai_pb2.PluginInfo(
@@ -360,7 +370,7 @@ class PluginService:
                 type=plugin_type,
                 source=source,
                 tag=tag,
-                provides=provides,
+                capabilities=capabilities,
             )
         )
 
@@ -372,10 +382,10 @@ class PluginService:
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         """List all available nodes (built-in + session plugins).
 
-        Plugin nodes come exclusively from each plugin's inline
-        catalog — the ``provides`` list in its manifest entry. The
-        server never imports plugin code to answer this RPC. Plugins
-        whose entry provides no nodes contribute nothing to the palette.
+        Plugin nodes come exclusively from each plugin's declared
+        ``capabilities`` list in its manifest. The server never imports
+        plugin code to answer this RPC. Plugins whose capabilities include
+        no nodes contribute nothing to the palette.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -434,23 +444,23 @@ class PluginService:
         plugins_missing_metadata: list[str] = []
         for plugin_name, config in session.registered_plugins.items():
             try:
-                entry = load_catalog_entry(plugin_name, config)
+                entry = load_capabilities(config)
             except (ValueError, FileNotFoundError) as exc:
                 logger.warning(
-                    f"Failed to load catalog for plugin '{plugin_name}': {exc}"
+                    f"Failed to load capabilities for plugin '{plugin_name}': {exc}"
                 )
                 continue
             if entry is None:
                 plugins_missing_metadata.append(plugin_name)
                 continue
-            for node_entry in entry.nodes:
+            for node_entry in entry.capabilities:
                 if getattr(node_entry, "kind", "node") != "node":
                     continue  # data_module entries never appear in the node palette
                 try:
                     nodes.append(_catalog_entry_to_node_info(node_entry, plugin_name))
                 except Exception as exc:
                     logger.warning(
-                        f"Skipping catalog entry '{node_entry.class_name}' from "
+                        f"Skipping capability entry '{node_entry.class_name}' from "
                         f"plugin '{plugin_name}': {exc}"
                     )
 
@@ -458,7 +468,7 @@ class PluginService:
             logger.warning(
                 f"Plugins {sorted(plugins_missing_metadata)} provide no nodes — "
                 "their nodes will not appear in the palette. Add node entries to "
-                "the plugin manifest's 'provides:' list."
+                "the plugin manifest's 'capabilities:' list."
             )
 
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)

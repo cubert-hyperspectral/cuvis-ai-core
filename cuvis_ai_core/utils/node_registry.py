@@ -8,7 +8,12 @@ from typing import Dict, Mapping, Optional, Union
 from loguru import logger
 
 import cuvis_ai_core.utils.git_and_os as git_os
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import (
+    LocalPluginManifest,
+    PluginManifest,
+    load_plugin_manifest,
+    parse_plugin_manifest,
+)
 
 
 class NodeRegistry:
@@ -36,37 +41,37 @@ class NodeRegistry:
         # Every known plugin's config (registered or loaded) — the single
         # source of plugin config. Anything that needs a config reads it here;
         # `register_plugin(name)` with no explicit config materialises this entry.
-        self.plugin_catalog: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
+        self.plugin_catalog: Dict[str, PluginManifest] = {}
         # Loaded node classes, keyed by class name. Membership here *is* the
         # loaded state: a plugin is loaded iff its provided classes are present.
         self.loaded_plugin_nodes: Dict[str, type] = {}
         # Loaded DataModule classes, keyed by DATA_MODULE_NAME (globally unique).
-        # A `kind: data_module` provides entry registers here instead of into
+        # A `kind: data_module` capability entry registers here instead of into
         # loaded_plugin_nodes, and never appears in the node palette.
         self.data_modules: Dict[str, type] = {}
 
     @staticmethod
     def _entry_kind(node) -> str:
-        """The static kind of a provides entry; defaults to ``node``."""
+        """The static kind of a capability entry; defaults to ``node``."""
         return getattr(node, "kind", "node") or "node"
 
     def _provided_class_names(
-        self, cfg: Union[GitPluginConfig, LocalPluginConfig]
+        self, cfg: PluginManifest
     ) -> list[str]:
         """Simple (unqualified) class names of the ``kind=='node'`` entries."""
         return [
             node.class_name.rsplit(".", 1)[-1]
-            for node in cfg.provides
+            for node in cfg.capabilities
             if self._entry_kind(node) == "node"
         ]
 
     def _provided_data_module_names(
-        self, cfg: Union[GitPluginConfig, LocalPluginConfig]
+        self, cfg: PluginManifest
     ) -> list[str]:
         """DATA_MODULE_NAMEs of the ``kind=='data_module'`` entries."""
         return [
             node.data_module_name
-            for node in cfg.provides
+            for node in cfg.capabilities
             if self._entry_kind(node) == "data_module"
         ]
 
@@ -350,24 +355,25 @@ class NodeRegistry:
         return registered_count
 
     def register_plugins(self, manifest_path: Union[str, Path]) -> int:
-        """Register every plugin declared in a YAML manifest into THIS INSTANCE.
+        """Register the plugin declared in a bare manifest YAML into THIS INSTANCE.
 
         Import-only front door for in-process use (CLI, notebooks, cookbook).
-        It parses the manifest, resolves local-plugin paths, and hands the
-        resolved configs to :meth:`register_preinstalled`. Every plugin must
-        already be importable in the active environment (an editable
-        ``[tool.uv.sources]`` entry in dev, or ``uv pip install`` / the
-        ``provision`` helper otherwise); this never clones or installs.
+        One yaml file is one plugin: it loads the bare manifest (resolving a
+        local plugin's relative path), keys it by ``manifest.name``, and hands
+        it to :meth:`register_preinstalled`. The plugin must already be
+        importable in the active environment (an editable ``[tool.uv.sources]``
+        entry in dev, or ``uv pip install`` / the ``provision`` helper
+        otherwise); this never clones or installs.
 
         Args:
-            manifest_path: Path to a plugins.yaml manifest.
+            manifest_path: Path to a single-plugin manifest YAML.
 
         Returns:
-            Number of plugins registered.
+            Number of plugins registered (always 1).
 
         Example:
             registry = NodeRegistry()
-            count = registry.register_plugins("plugins.yaml")
+            count = registry.register_plugins("configs/plugins/sam3.yaml")
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
@@ -375,23 +381,12 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        from cuvis_ai_schemas.plugin import PluginManifest
-
         manifest_path = Path(manifest_path)
-        manifest = PluginManifest.from_yaml(manifest_path)
-        manifest_dir = manifest_path.resolve().parent
+        manifest = load_plugin_manifest(manifest_path)
 
-        resolved: Dict[str, Union[GitPluginConfig, LocalPluginConfig]] = {}
-        for plugin_name, cfg in manifest.plugins.items():
-            if isinstance(cfg, LocalPluginConfig):
-                cfg = cfg.model_copy(
-                    update={"path": str(cfg.resolve_path(manifest_dir))}
-                )
-            resolved[plugin_name] = cfg
-
-        self.register_preinstalled(resolved)
-        logger.info(f"Registered {len(resolved)} plugins from {manifest_path}")
-        return len(resolved)
+        self.register_preinstalled({manifest.name: manifest})
+        logger.info(f"Registered plugin '{manifest.name}' from {manifest_path}")
+        return 1
 
     def register_plugin(
         self,
@@ -410,9 +405,10 @@ class NodeRegistry:
 
         Args:
             name: Plugin identifier (e.g., "adaclip").
-            config: Optional plugin-config dict (repo+tag+provides for Git,
-                path+provides for local). When ``None``, the catalog entry for
-                ``name`` is used.
+            config: Optional manifest dict (repo+tag+capabilities for Git,
+                path+capabilities for local). When ``None``, the catalog entry
+                for ``name`` is used. A missing ``name`` key is filled from this
+                argument.
             manifest_dir: Optional base directory for resolving a local
                 plugin's relative path.
         """
@@ -438,24 +434,24 @@ class NodeRegistry:
     @staticmethod
     def _parse_config_dict(
         name: str, config: dict, manifest_dir: Optional[Path]
-    ) -> Union[GitPluginConfig, LocalPluginConfig]:
-        """Validate a plugin-config dict into a typed config (no clone/install)."""
-        if "repo" in config:
-            return GitPluginConfig.model_validate(config)
-        if "path" in config:
-            cfg = LocalPluginConfig.model_validate(config)
-            if manifest_dir is not None:
-                cfg = cfg.model_copy(
-                    update={"path": str(cfg.resolve_path(manifest_dir))}
-                )
-            return cfg
-        raise ValueError(
-            f"Plugin '{name}' config must have either 'repo' (Git) or 'path' (local)."
-        )
+    ) -> PluginManifest:
+        """Validate a manifest dict into a typed manifest (no clone/install)."""
+        if "repo" not in config and "path" not in config:
+            raise ValueError(
+                f"Plugin '{name}' config must have either 'repo' (Git) or 'path' (local)."
+            )
+        data = dict(config)
+        data.setdefault("name", name)
+        manifest = parse_plugin_manifest(data)
+        if isinstance(manifest, LocalPluginManifest) and manifest_dir is not None:
+            manifest = manifest.model_copy(
+                update={"path": str(manifest.resolve_path(manifest_dir))}
+            )
+        return manifest
 
     def register_catalog_entries(
         self,
-        configs: Dict[str, Union[GitPluginConfig, LocalPluginConfig]],
+        configs: Dict[str, PluginManifest],
     ) -> None:
         """
         Register plugin metadata into the session's catalog WITHOUT installing.
@@ -472,12 +468,12 @@ class NodeRegistry:
         replaced: the live class objects came from the old config, so swapping
         it would make the catalog describe a source the loaded classes never
         came from (and would desync ``unload_plugin``, which pops
-        ``loaded_plugin_nodes`` by the catalog entry's ``provides``). Such an
+        ``loaded_plugin_nodes`` by the catalog entry's ``capabilities``). Such an
         override is logged and ignored; the caller must ``unload_plugin`` first.
 
         Args:
-            configs: dict mapping plugin name → parsed GitPluginConfig /
-                LocalPluginConfig (already-resolved paths, etc.).
+            configs: dict mapping plugin name → parsed GitPluginManifest /
+                LocalPluginManifest (already-resolved paths, etc.).
 
         Example:
             from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
@@ -514,7 +510,7 @@ class NodeRegistry:
     def _register_node_classes(
         self,
         name: str,
-        config: Union[GitPluginConfig, LocalPluginConfig],
+        config: PluginManifest,
         *,
         clear_cache: bool = False,
     ) -> None:
@@ -527,7 +523,7 @@ class NodeRegistry:
         mutates ``sys.path``. The plugin package must already be importable, so a
         missing one is re-raised with a hint pointing at the ``provision`` helper.
         """
-        class_paths = [node.class_name for node in config.provides]
+        class_paths = [node.class_name for node in config.capabilities]
         if clear_cache:
             package_prefixes = git_os.extract_package_prefixes(class_paths)
             git_os.clear_package_modules(package_prefixes)
@@ -546,7 +542,7 @@ class NodeRegistry:
                 f"uv pip install '<pkg>[extras] @ git+<url>@<tag>'."
             ) from exc
         by_simple_name = {
-            node.class_name.rsplit(".", 1)[-1]: node for node in config.provides
+            node.class_name.rsplit(".", 1)[-1]: node for node in config.capabilities
         }
         for class_name, node_class in imported_nodes.items():
             entry = by_simple_name.get(class_name)
@@ -582,7 +578,7 @@ class NodeRegistry:
 
     def register_preinstalled(
         self,
-        resolved_plugins: Mapping[str, Union[GitPluginConfig, LocalPluginConfig]],
+        resolved_plugins: Mapping[str, PluginManifest],
     ) -> None:
         """Register classes from already-installed plugin packages.
 
@@ -599,7 +595,7 @@ class NodeRegistry:
             self.plugin_catalog[name] = config
             self._register_node_classes(name, config, clear_cache=False)
             logger.info(
-                f"Loaded preinstalled plugin '{name}' with {len(config.provides)} nodes"
+                f"Loaded preinstalled plugin '{name}' with {len(config.capabilities)} nodes"
             )
 
     def unload_plugin(self, name: str) -> None:

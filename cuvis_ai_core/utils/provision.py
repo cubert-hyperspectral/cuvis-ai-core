@@ -35,7 +35,7 @@ from cuvis_ai_schemas.pipeline.config import PipelineConfig
 
 def _top_import_module(cfg) -> str | None:
     """Top-level import package of a plugin (from its first provides FQCN)."""
-    for entry in cfg.provides:
+    for entry in cfg.capabilities:
         return entry.class_name.split(".", 1)[0]
     return None
 

@@ -78,16 +78,18 @@ class CustomNode(Node):
 
             # Load plugin1 into session1's registry instance
             config1 = {
+                "name": "plugin1",
                 "path": str(plugin1_dir),
-                "provides": [{"class_name": "plugin1.node.CustomNode"}],
+                "capabilities": [{"class_name": "plugin1.node.CustomNode"}],
             }
             state1.node_registry.register_plugin("plugin1", config1)
             state1.registered_plugins["plugin1"] = config1
 
             # Load plugin2 into session2's registry instance
             config2 = {
+                "name": "plugin2",
                 "path": str(plugin2_dir),
-                "provides": [{"class_name": "plugin2.node.CustomNode"}],
+                "capabilities": [{"class_name": "plugin2.node.CustomNode"}],
             }
             state2.node_registry.register_plugin("plugin2", config2)
             state2.registered_plugins["plugin2"] = config2
@@ -149,8 +151,9 @@ class CleanupTestNode(Node):
 
             # Load plugin into session's registry instance
             config = {
+                "name": "cleanup_test_plugin",
                 "path": str(plugin_dir),
-                "provides": [
+                "capabilities": [
                     {"class_name": "cleanup_test_plugin.node.CleanupTestNode"}
                 ],
             }
@@ -212,8 +215,9 @@ class PluginNode{i}(Node):
                 session_states.append(session_state)
 
                 config = {
+                    "name": f"plugin_{i}",
                     "path": str(plugins[i]),
-                    "provides": [{"class_name": f"plugin_{i}.node.PluginNode{i}"}],
+                    "capabilities": [{"class_name": f"plugin_{i}.node.PluginNode{i}"}],
                 }
                 session_state.node_registry.register_plugin(f"plugin_{i}", config)
                 session_state.registered_plugins[f"plugin_{i}"] = config
@@ -301,8 +305,9 @@ class PluginNode(Node):
 
             # Load plugin only in session1's registry instance
             config = {
+                "name": "test_plugin",
                 "path": str(plugin_dir),
-                "provides": [{"class_name": "test_plugin.node.PluginNode"}],
+                "capabilities": [{"class_name": "test_plugin.node.PluginNode"}],
             }
             state1.node_registry.register_plugin("test_plugin", config)
             state1.registered_plugins["test_plugin"] = config
@@ -377,8 +382,9 @@ class SharedNode(Node):
 
             # Load plugin only in session1's registry instance
             config = {
+                "name": "override_plugin",
                 "path": str(plugin_dir),
-                "provides": [{"class_name": "override_plugin.node.SharedNode"}],
+                "capabilities": [{"class_name": "override_plugin.node.SharedNode"}],
             }
             state1.node_registry.register_plugin("override_plugin", config)
             state1.registered_plugins["override_plugin"] = config
@@ -451,8 +457,9 @@ class TrackedNode2(Node):
 
             # Load first plugin into session's registry instance
             config1 = {
+                "name": "tracked_plugin1",
                 "path": str(plugin1_dir),
-                "provides": [{"class_name": "tracked_plugin1.node.TrackedNode1"}],
+                "capabilities": [{"class_name": "tracked_plugin1.node.TrackedNode1"}],
             }
             session_state.node_registry.register_plugin("tracked_plugin1", config1)
             session_state.registered_plugins["tracked_plugin1"] = config1
@@ -461,8 +468,9 @@ class TrackedNode2(Node):
 
             # Load second plugin into session's registry instance
             config2 = {
+                "name": "tracked_plugin2",
                 "path": str(plugin2_dir),
-                "provides": [{"class_name": "tracked_plugin2.node.TrackedNode2"}],
+                "capabilities": [{"class_name": "tracked_plugin2.node.TrackedNode2"}],
             }
             session_state.node_registry.register_plugin("tracked_plugin2", config2)
             session_state.registered_plugins["tracked_plugin2"] = config2
@@ -525,8 +533,9 @@ class SessionOnlyNode(Node):
         try:
             # Load plugin into session's registry instance
             config = {
+                "name": "session_plugin",
                 "path": str(plugin_dir),
-                "provides": [{"class_name": "session_plugin.node.SessionOnlyNode"}],
+                "capabilities": [{"class_name": "session_plugin.node.SessionOnlyNode"}],
             }
             session_state.node_registry.register_plugin("session_plugin", config)
             session_state.registered_plugins["session_plugin"] = config

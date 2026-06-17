@@ -1,11 +1,10 @@
-"""Tests for kind-routing of data_module provides entries in NodeRegistry."""
+"""Tests for kind-routing of data_module capabilities in NodeRegistry."""
 
 from __future__ import annotations
 
 import pytest
 
-from cuvis_ai_schemas.catalog import CatalogNodeEntry
-from cuvis_ai_schemas.plugin import LocalPluginConfig
+from cuvis_ai_schemas.plugin import LocalPluginManifest, PluginCapabilityEntry
 
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
@@ -13,8 +12,10 @@ _DM = "tests.fixtures.fake_data_modules.FakeDataModule"
 _NOT_DM = "tests.fixtures.fake_data_modules.NotADataModule"
 
 
-def _cfg(entry: CatalogNodeEntry) -> LocalPluginConfig:
-    return LocalPluginConfig(path=".", package_name="fake_pkg", provides=[entry])
+def _cfg(name: str, entry: PluginCapabilityEntry) -> LocalPluginManifest:
+    return LocalPluginManifest(
+        name=name, path=".", package_name="fake_pkg", capabilities=[entry]
+    )
 
 
 def test_data_module_entry_registers_into_data_modules():
@@ -22,9 +23,10 @@ def test_data_module_entry_registers_into_data_modules():
     reg.register_preinstalled(
         {
             "fake": _cfg(
-                CatalogNodeEntry(
+                "fake",
+                PluginCapabilityEntry(
                     class_name=_DM, kind="data_module", data_module_name="fake"
-                )
+                ),
             )
         }
     )
@@ -40,9 +42,10 @@ def test_data_module_name_mismatch_raises():
         reg.register_preinstalled(
             {
                 "fake": _cfg(
-                    CatalogNodeEntry(
+                    "fake",
+                    PluginCapabilityEntry(
                         class_name=_DM, kind="data_module", data_module_name="wrong"
-                    )
+                    ),
                 )
             }
         )
@@ -54,9 +57,10 @@ def test_non_datamodule_class_raises():
         reg.register_preinstalled(
             {
                 "fake": _cfg(
-                    CatalogNodeEntry(
+                    "fake",
+                    PluginCapabilityEntry(
                         class_name=_NOT_DM, kind="data_module", data_module_name="bad"
-                    )
+                    ),
                 )
             }
         )
@@ -67,9 +71,10 @@ def test_duplicate_data_module_name_raises():
     reg.register_preinstalled(
         {
             "a": _cfg(
-                CatalogNodeEntry(
+                "a",
+                PluginCapabilityEntry(
                     class_name=_DM, kind="data_module", data_module_name="fake"
-                )
+                ),
             )
         }
     )
@@ -77,9 +82,10 @@ def test_duplicate_data_module_name_raises():
     reg.register_preinstalled(
         {
             "a2": _cfg(
-                CatalogNodeEntry(
+                "a2",
+                PluginCapabilityEntry(
                     class_name=_DM, kind="data_module", data_module_name="fake"
-                )
+                ),
             )
         }
     )

@@ -18,7 +18,7 @@ from cuvis_ai_core.run_runtime.service import (
     RunRuntimeServicer,
     _decode_resolved_plugins,
 )
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig
+from cuvis_ai_schemas.plugin import GitPluginManifest, LocalPluginManifest
 
 
 class FakeContext:
@@ -45,37 +45,47 @@ def test_decode_resolved_plugins_empty_bytes_returns_empty_dict():
 
 
 def test_decode_resolved_plugins_discriminates_git_vs_local(tmp_path):
+    # The wire format is a JSON LIST of bare single-plugin manifests; each
+    # manifest carries its own ``name`` and the decoder re-keys by it.
     payload = json.dumps(
-        {
-            "from_git": {
+        [
+            {
+                "name": "from_git",
                 "repo": "https://example.com/repo.git",
                 "tag": "v1.2.3",
-                "provides": [{"class_name": "pkg.Cls"}],
+                "capabilities": [{"class_name": "pkg.mod.Cls"}],
             },
-            "from_local": {
+            {
+                "name": "from_local",
                 "path": str(tmp_path),
-                "provides": [{"class_name": "pkg2.Cls"}],
+                "capabilities": [{"class_name": "pkg2.mod.Cls"}],
             },
-        }
+        ]
     ).encode("utf-8")
     out = _decode_resolved_plugins(payload)
-    assert isinstance(out["from_git"], GitPluginConfig)
-    assert isinstance(out["from_local"], LocalPluginConfig)
+    assert isinstance(out["from_git"], GitPluginManifest)
+    assert isinstance(out["from_local"], LocalPluginManifest)
 
 
-def test_decode_resolved_plugins_missing_key_raises():
-    payload = json.dumps({"bad": {"provides": [{"class_name": "x.Y"}]}}).encode("utf-8")
-    with pytest.raises(ValueError, match="neither 'repo' nor 'path'"):
+def test_decode_resolved_plugins_missing_source_raises():
+    # A bare manifest with neither 'repo' nor 'path' fails union validation.
+    payload = json.dumps(
+        [{"name": "bad", "capabilities": [{"class_name": "x.mod.Y"}]}]
+    ).encode("utf-8")
+    with pytest.raises(ValueError):
         _decode_resolved_plugins(payload)
 
 
-def test_decode_resolved_plugins_top_level_not_dict_raises():
-    with pytest.raises(TypeError):
-        _decode_resolved_plugins(b"[]")
+def test_decode_resolved_plugins_top_level_not_list_raises():
+    # The payload must decode to a LIST; an empty list is valid (-> {}),
+    # but a JSON object at the top level is rejected.
+    assert _decode_resolved_plugins(b"[]") == {}
+    with pytest.raises(TypeError, match="must decode to a list"):
+        _decode_resolved_plugins(b"{}")
 
 
 def test_decode_resolved_plugins_entry_not_dict_raises():
-    payload = json.dumps({"x": "not-a-dict"}).encode("utf-8")
+    payload = json.dumps(["not-a-dict"]).encode("utf-8")
     with pytest.raises(TypeError, match="must be a dict"):
         _decode_resolved_plugins(payload)
 
@@ -154,12 +164,13 @@ def test_initialize_session_imports_class_and_registers_it():
     servicer = RunRuntimeServicer()
     ctx = FakeContext()
     payload = json.dumps(
-        {
-            "fake_plugin": {
+        [
+            {
+                "name": "fake_plugin",
                 "path": "/tmp/does-not-need-to-exist",
-                "provides": [{"class_name": f"{__name__}._FakeTestNode"}],
+                "capabilities": [{"class_name": f"{__name__}._FakeTestNode"}],
             }
-        }
+        ]
     ).encode("utf-8")
     response = servicer.InitializeSession(
         cuvis_ai_pb2.InitializeSessionRequest(

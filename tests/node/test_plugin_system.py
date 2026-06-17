@@ -10,7 +10,12 @@ import pytest
 
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_schemas.plugin import GitPluginConfig, LocalPluginConfig, PluginManifest
+from cuvis_ai_schemas.plugin import (
+    GitPluginManifest,
+    LocalPluginManifest,
+    parse_plugin_manifest,
+    write_plugin_manifest,
+)
 
 
 @pytest.fixture
@@ -58,73 +63,85 @@ def _write_local_plugin(plugin_root: Path, create_pyproject_toml) -> Path:
 
 
 def test_plugin_config_validation():
-    git_config = GitPluginConfig(
+    git_config = GitPluginManifest(
+        name="test_plugin",
         repo="git@gitlab.cubert.local:cubert/test-plugin.git",
         tag="v1.2.3",
-        provides=[{"class_name": "test_plugin.TestNode"}],
+        capabilities=[{"class_name": "test_plugin.TestNode"}],
     )
     assert git_config.repo.endswith("test-plugin.git")
     assert git_config.tag == "v1.2.3"
 
-    local_config = LocalPluginConfig(
+    local_config = LocalPluginManifest(
+        name="local_plugin",
         path="/path/to/plugin",
-        provides=[{"class_name": "local_plugin.LocalNode"}],
+        capabilities=[{"class_name": "local_plugin.LocalNode"}],
     )
     assert local_config.path == "/path/to/plugin"
 
     with pytest.raises(Exception):
-        GitPluginConfig(
-            repo="invalid-url", tag="v1.0.0", provides=[{"class_name": "test.Node"}]
+        GitPluginManifest(
+            name="test_plugin",
+            repo="invalid-url",
+            tag="v1.0.0",
+            capabilities=[{"class_name": "test.Node"}],
         )
 
     with pytest.raises(Exception):
-        GitPluginConfig(
+        GitPluginManifest(
+            name="repo",
             repo="git@gitlab.com:user/repo.git",
             tag="v1.0.0",
-            provides=[{"class_name": "InvalidPath"}],
+            capabilities=[{"class_name": "InvalidPath"}],
         )
 
     with pytest.raises(Exception):
-        GitPluginConfig(
+        GitPluginManifest(
+            name="repo",
             repo="git@gitlab.com:user/repo.git",
             tag="v1.0.0",
-            provides=[],
+            capabilities=[],
         )
 
 
 def test_plugin_manifest_validation(tmp_path: Path):
-    manifest_data = {
-        "plugins": {
-            "test_git": {
-                "repo": "git@gitlab.com:user/repo.git",
-                "tag": "v1.0.0",
-                "provides": [{"class_name": "repo.TestNode"}],
-            },
-            "test_local": {
-                "path": "../my-plugin",
-                "provides": [{"class_name": "my_plugin.MyNode"}],
-            },
-        }
+    """A bare manifest (one yaml = one plugin) parses, validates ``name``, and
+    round-trips through write/load."""
+    git_data = {
+        "name": "test_git",
+        "repo": "git@gitlab.com:user/repo.git",
+        "tag": "v1.0.0",
+        "capabilities": [{"class_name": "repo.TestNode"}],
     }
+    git_manifest = parse_plugin_manifest(git_data)
+    assert isinstance(git_manifest, GitPluginManifest)
+    assert git_manifest.name == "test_git"
 
-    manifest = PluginManifest.from_dict(manifest_data)
-    assert len(manifest.plugins) == 2
-
-    invalid_data = {
-        "plugins": {
-            "invalid-name!": {
-                "path": "../my-plugin",
-                "provides": [{"class_name": "my_plugin.MyNode"}],
-            }
-        }
+    local_data = {
+        "name": "test_local",
+        "path": "../my-plugin",
+        "capabilities": [{"class_name": "my_plugin.MyNode"}],
     }
+    local_manifest = parse_plugin_manifest(local_data)
+    assert isinstance(local_manifest, LocalPluginManifest)
+
+    # A non-identifier plugin name is rejected.
     with pytest.raises(Exception):
-        PluginManifest.from_dict(invalid_data)
+        parse_plugin_manifest(
+            {
+                "name": "invalid-name!",
+                "path": "../my-plugin",
+                "capabilities": [{"class_name": "my_plugin.MyNode"}],
+            }
+        )
+
+    # Round-trip a bare manifest through write + load.
+    from cuvis_ai_schemas.plugin import load_plugin_manifest
 
     temp_manifest = tmp_path / "test_manifest.yaml"
-    manifest.to_yaml(temp_manifest)
-    loaded_manifest = PluginManifest.from_yaml(temp_manifest)
-    assert "test_git" in loaded_manifest.plugins
+    write_plugin_manifest(git_manifest, temp_manifest)
+    loaded_manifest = load_plugin_manifest(temp_manifest)
+    assert loaded_manifest.name == "test_git"
 
 
 def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject, provision_local):
@@ -138,7 +155,7 @@ def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject, provision
         "simple_test",
         {
             "path": str(plugin_root),
-            "provides": [{"class_name": "simple_node.SimpleTestNode"}],
+            "capabilities": [{"class_name": "simple_node.SimpleTestNode"}],
         },
     )
 
@@ -158,17 +175,14 @@ def test_manifest_relative_path_resolution(
         plugins_dir / "rel_plugin", create_plugin_pyproject
     )
     provision_local(plugin_root)
-    manifest_data = {
-        "plugins": {
-            "rel_test": {
-                "path": "plugins/rel_plugin",
-                "provides": [{"class_name": "simple_node.SimpleTestNode"}],
-            }
-        }
-    }
+    manifest = LocalPluginManifest(
+        name="rel_test",
+        path="plugins/rel_plugin",
+        capabilities=[{"class_name": "simple_node.SimpleTestNode"}],
+    )
 
-    manifest_file = tmp_path / "plugins.yaml"
-    PluginManifest.from_dict(manifest_data).to_yaml(manifest_file)
+    manifest_file = tmp_path / "rel_test.yaml"
+    write_plugin_manifest(manifest, manifest_file)
 
     registry = NodeRegistry()
     loaded_count = registry.register_plugins(manifest_file)
@@ -183,16 +197,13 @@ def test_register_plugins_is_import_only(
     clones / installs (the dropped in-process path) or mutates sys.path itself."""
     plugin_root = _write_local_plugin(tmp_path / "io_plugin", create_plugin_pyproject)
     provision_local(plugin_root)
-    manifest_data = {
-        "plugins": {
-            "io": {
-                "path": str(plugin_root),
-                "provides": [{"class_name": "simple_node.SimpleTestNode"}],
-            }
-        }
-    }
-    manifest_file = tmp_path / "plugins.yaml"
-    PluginManifest.from_dict(manifest_data).to_yaml(manifest_file)
+    manifest = LocalPluginManifest(
+        name="io",
+        path=str(plugin_root),
+        capabilities=[{"class_name": "simple_node.SimpleTestNode"}],
+    )
+    manifest_file = tmp_path / "io.yaml"
+    write_plugin_manifest(manifest, manifest_file)
 
     registry = NodeRegistry()
     sys_path_before = list(sys.path)
@@ -208,16 +219,13 @@ def test_register_plugins_is_import_only(
 
 def test_register_plugins_missing_plugin_hints_provision(tmp_path: Path):
     """An un-provisioned plugin raises a guided error pointing at provision."""
-    manifest_data = {
-        "plugins": {
-            "absent": {
-                "path": str(tmp_path),
-                "provides": [{"class_name": "definitely_absent_pkg.Node"}],
-            }
-        }
-    }
-    manifest_file = tmp_path / "plugins.yaml"
-    PluginManifest.from_dict(manifest_data).to_yaml(manifest_file)
+    manifest = LocalPluginManifest(
+        name="absent",
+        path=str(tmp_path),
+        capabilities=[{"class_name": "definitely_absent_pkg.Node"}],
+    )
+    manifest_file = tmp_path / "absent.yaml"
+    write_plugin_manifest(manifest, manifest_file)
 
     registry = NodeRegistry()
     with pytest.raises(ModuleNotFoundError, match="provision"):
@@ -237,7 +245,7 @@ def test_pipeline_integration_with_plugin(
         "simple_test",
         {
             "path": str(plugin_root),
-            "provides": [{"class_name": "simple_node.SimpleTestNode"}],
+            "capabilities": [{"class_name": "simple_node.SimpleTestNode"}],
         },
     )
     config = {

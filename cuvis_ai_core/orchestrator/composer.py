@@ -30,7 +30,7 @@ from cuvis_ai_core.orchestrator.cache_key import (
     spec_hash_of,
 )
 from cuvis_ai_core.orchestrator.runtime_project import (
-    PluginConfig,
+    PluginManifest,
     build_runtime_pyproject,
     resolve_plugin_sources,
 )
@@ -124,7 +124,7 @@ def _build_lock(digest: str, locks_dir: Path) -> Iterator[None]:
 
 
 def compose_env(
-    plugin_configs: Mapping[str, PluginConfig],
+    plugin_configs: Mapping[str, PluginManifest],
     *,
     core_source: CoreSource,
     cache_root: Path | None = None,

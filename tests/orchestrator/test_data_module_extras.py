@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cuvis_ai_schemas.catalog import CatalogNodeEntry
-from cuvis_ai_schemas.plugin import LocalPluginConfig
+from cuvis_ai_schemas.plugin import LocalPluginManifest, PluginCapabilityEntry
 
 from cuvis_ai_core.orchestrator.cache_key import (
     CoreSource,
@@ -20,18 +19,19 @@ from cuvis_ai_core.orchestrator.runtime_project import (
 from cuvis_ai_core.utils.plugin_resolver import _union_data_module_plugin
 
 
-def _dataloader_cfg() -> LocalPluginConfig:
-    return LocalPluginConfig(
+def _dataloader_cfg() -> LocalPluginManifest:
+    return LocalPluginManifest(
+        name="cuvis_ai_dataloader",
         path=".",
         package_name="cuvis-ai-dataloader",
-        provides=[
-            CatalogNodeEntry(
+        capabilities=[
+            PluginCapabilityEntry(
                 class_name="cuvis_ai_dataloader.data.datamodule_cu3s.Cu3sDataModule",
                 kind="data_module",
                 data_module_name="cu3s",
                 extras=["cu3s", "coco"],
             ),
-            CatalogNodeEntry(
+            PluginCapabilityEntry(
                 class_name="cuvis_ai_dataloader.data.datamodule_tiff_paired.TiffPairedDataModule",
                 kind="data_module",
                 data_module_name="tiff_paired",

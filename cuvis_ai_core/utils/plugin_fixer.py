@@ -30,11 +30,11 @@ import yaml
 from loguru import logger
 
 from cuvis_ai_core.utils.plugin_resolver import (
-    PluginConfig,
     _build_catalog,
     _compute_auto_resolution,
 )
 from cuvis_ai_schemas.pipeline import PipelineConfig
+from cuvis_ai_schemas.plugin import PluginManifest
 
 # Canonical leading order for known top-level keys. Unknown keys (e.g.
 # a future ``version`` field) are appended in their original order so the
@@ -90,7 +90,7 @@ def suggest_plugins_field(
         )
         raise ValueError(msg)
 
-    catalog: dict[str, PluginConfig] = _build_catalog(plugins_dirs)
+    catalog: dict[str, PluginManifest] = _build_catalog(plugins_dirs)
     class_names = [node.class_name for node in pipeline_config.nodes]
     resolved = _compute_auto_resolution(class_names, catalog, plugins_dirs)
     plugin_names = sorted(resolved)
