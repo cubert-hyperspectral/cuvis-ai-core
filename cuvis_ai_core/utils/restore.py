@@ -542,8 +542,8 @@ def restore_trainrun(
         logger.info(f"     Saved to {restored_pipeline_path}")
 
         # Step 4: Run validation (populate TensorBoard monitoring).
-        # Gate on the resolved val dataset (built by setup("fit")); the old flat
-        # ``data.val_ids`` field no longer exists on the polymorphic DataConfig.
+        # Gate on the resolved val dataset (built by setup("fit")); a run whose
+        # config resolves no val split simply skips this step.
         if datamodule.val_ds is not None:
             logger.info("  Step 4: Validation...")
             if grad_trainer is not None:
