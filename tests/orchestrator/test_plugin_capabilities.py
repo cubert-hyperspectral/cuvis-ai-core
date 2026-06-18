@@ -82,9 +82,7 @@ def test_load_capabilities_builds_from_manifest_dump():
 
 def test_load_capabilities_minimal_class_name_only():
     """A bare `class_name` entry yields a palette node with defaults."""
-    caps = load_capabilities(
-        _manifest(capabilities=[{"class_name": "p.node.Bare"}])
-    )
+    caps = load_capabilities(_manifest(capabilities=[{"class_name": "p.node.Bare"}]))
     assert caps is not None
     entry = caps.capabilities[0]
     assert entry.class_name == "p.node.Bare"
@@ -102,16 +100,6 @@ def test_from_manifest_builds_capabilities_from_manifest_object():
     assert isinstance(caps, PluginCapabilities)
     assert caps.plugin_name == "my_plugin"
     assert caps.capabilities[0].class_name == "my_plugin.node.MyNode"
-
-
-def test_plugin_capabilities_schema_version_defaults_and_validates():
-    # Absent → default supported version.
-    caps = load_capabilities(_manifest())
-    assert caps.schema_version in PluginCapabilities.SUPPORTED_VERSIONS
-
-    # Explicit unsupported version → rejected by the capabilities model.
-    with pytest.raises(ValueError, match="unsupported schema_version"):
-        PluginCapabilities(plugin_name="p", schema_version=999)
 
 
 def test_load_capabilities_rejects_node_without_class_name():

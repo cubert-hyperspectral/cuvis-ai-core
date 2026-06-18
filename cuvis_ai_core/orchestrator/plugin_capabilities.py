@@ -16,7 +16,6 @@ built; the declared capabilities close that gap.
 from __future__ import annotations
 
 from cuvis_ai_schemas.plugin import (
-    SUPPORTED_SCHEMA_VERSIONS,
     NodePortSpec,
     PluginCapabilities,
     PluginCapabilityEntry,
@@ -44,6 +43,5 @@ __all__ = [
     "NodePortSpec",
     "PluginCapabilities",
     "PluginCapabilityEntry",
-    "SUPPORTED_SCHEMA_VERSIONS",
     "load_capabilities",
 ]
