@@ -1264,3 +1264,32 @@ class TestPluginServiceFastHandlers:
         )
         # The plugin had one node, but conversion failed → it is skipped.
         assert all(n.plugin_name != "p" for n in resp.nodes)
+
+    def test_load_plugin_non_dict_manifest_is_invalid_argument(self):
+        sid = self.session_manager.create_session()
+        # Valid JSON, but a list rather than a single manifest object.
+        request = cuvis_ai_pb2.LoadPluginRequest(
+            session_id=sid,
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=b"[1, 2]"),
+        )
+        resp = self.plugin_service.load_plugin(request, self.mock_context)
+        assert resp.registered_plugin == ""
+        self.mock_context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_list_available_nodes_skips_plugin_without_metadata(self, monkeypatch):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["p"] = {
+            "name": "p",
+            "path": ".",
+            "capabilities": [{"class_name": "a.B"}],
+        }
+        # load_capabilities returning None marks the plugin metadata-less: it
+        # contributes no palette nodes and trips the missing-metadata warning.
+        monkeypatch.setattr(
+            plugin_service_mod, "load_capabilities", Mock(return_value=None)
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
+        assert all(n.plugin_name != "p" for n in resp.nodes)

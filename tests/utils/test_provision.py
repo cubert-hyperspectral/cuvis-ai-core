@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -141,3 +143,104 @@ def test_resolve_install_specs_skips_satisfied(monkeypatch):
     specs = prov.resolve_install_specs("pipe.yaml", ["dir"], data_module="cu3s")
     assert len(specs) == 1
     assert specs[0].startswith("cuvis-ai-dataloader @ file://")
+
+
+# ---------------------------------------------------------------------------
+# _top_import_module / _is_satisfied (the real implementation; the resolver
+# test above monkeypatches _is_satisfied away, so these pin its actual
+# behaviour: importable -> True, missing / no-module / lookup error -> False).
+# ---------------------------------------------------------------------------
+
+
+def _cfg(*class_names):
+    """Fake resolved config exposing ``.capabilities[*].class_name``."""
+    return SimpleNamespace(
+        capabilities=[SimpleNamespace(class_name=cn) for cn in class_names]
+    )
+
+
+def test_top_import_module_first_capability_and_empty():
+    assert prov._top_import_module(_cfg("pkg.mod.Node", "x.Y")) == "pkg"
+    assert prov._top_import_module(_cfg()) is None
+
+
+def test_is_satisfied_true_when_importable(monkeypatch):
+    monkeypatch.setattr(prov.importlib.util, "find_spec", lambda mod: object())
+    assert prov._is_satisfied(_cfg("pkg.mod.Node")) is True
+
+
+def test_is_satisfied_false_when_missing(monkeypatch):
+    monkeypatch.setattr(prov.importlib.util, "find_spec", lambda mod: None)
+    assert prov._is_satisfied(_cfg("pkg.mod.Node")) is False
+
+
+def test_is_satisfied_false_without_module():
+    assert prov._is_satisfied(_cfg()) is False
+
+
+def test_is_satisfied_false_when_find_spec_raises(monkeypatch):
+    def _boom(mod):
+        raise ValueError("bad module name")
+
+    monkeypatch.setattr(prov.importlib.util, "find_spec", _boom)
+    assert prov._is_satisfied(_cfg("pkg.mod.Node")) is False
+
+
+# ---------------------------------------------------------------------------
+# _provision_notebook apply=True (the in-kernel %pip path)
+# ---------------------------------------------------------------------------
+
+
+def _inject_ipython(monkeypatch, ip):
+    """Make ``from IPython import get_ipython`` return a fake yielding ``ip``."""
+    monkeypatch.setitem(sys.modules, "IPython", SimpleNamespace(get_ipython=lambda: ip))
+
+
+def test_provision_notebook_apply_runs_magic(monkeypatch, capsys):
+    calls: list[tuple[str, str]] = []
+    _inject_ipython(
+        monkeypatch, SimpleNamespace(run_line_magic=lambda m, a: calls.append((m, a)))
+    )
+    assert prov._provision_notebook(["a", "b"], apply=True) is None
+    assert calls == [("pip", "install 'a' 'b'")]
+    assert "Installed 2 plugin" in capsys.readouterr().out
+
+
+def test_provision_notebook_apply_no_specs(monkeypatch, capsys):
+    _inject_ipython(monkeypatch, SimpleNamespace(run_line_magic=lambda m, a: None))
+    assert prov._provision_notebook([], apply=True) is None
+    assert "already provisioned" in capsys.readouterr().out
+
+
+def test_provision_notebook_apply_without_kernel_raises(monkeypatch):
+    _inject_ipython(monkeypatch, None)
+    with pytest.raises(RuntimeError, match="running"):
+        prov._provision_notebook(["a"], apply=True)
+
+
+# ---------------------------------------------------------------------------
+# provision_environment: apply + env-file sync (subprocess-backed paths)
+# ---------------------------------------------------------------------------
+
+
+def test_provision_environment_apply_installs(monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(prov.subprocess, "run", lambda *a, **k: calls.append((a, k)))
+    assert prov.provision_environment(["a", "b"], apply=True) is None
+    assert calls[0][0][0] == ["uv", "pip", "install", "a", "b"]
+
+
+def test_provision_environment_apply_no_specs_skips_install(monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(prov.subprocess, "run", lambda *a, **k: calls.append(a))
+    assert prov.provision_environment([], apply=True) is None
+    assert calls == []
+
+
+def test_provision_environment_env_file_sync_installs(monkeypatch, tmp_path):
+    calls: list[tuple] = []
+    monkeypatch.setattr(prov.subprocess, "run", lambda *a, **k: calls.append((a, k)))
+    out = tmp_path / "env.toml"
+    prov.provision_environment(["a"], env_file=out, sync=True, pipeline_name="P")
+    assert out.exists()
+    assert calls[0][0][0][:4] == ["uv", "pip", "install", "-r"]
