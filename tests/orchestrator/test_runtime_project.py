@@ -25,7 +25,7 @@ from cuvis_ai_core.orchestrator.runtime_project import (
     resolve_git_tag,
     resolve_plugin_sources,
 )
-from cuvis_ai_schemas.plugin import GitPluginManifest, LocalPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource, LocalPluginSource
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")
 
@@ -79,10 +79,7 @@ def test_resolve_git_tag_picks_peeled_sha_for_annotated_tags():
         "cuvis_ai_core.orchestrator.runtime_project.subprocess.check_output",
         return_value=raw,
     ):
-        assert (
-            resolve_git_tag("https://example.com/repo.git", "v0.1.0")
-            == "2" * 40
-        )
+        assert resolve_git_tag("https://example.com/repo.git", "v0.1.0") == "2" * 40
 
 
 def test_resolve_git_tag_uses_first_line_for_lightweight_tags():
@@ -91,10 +88,7 @@ def test_resolve_git_tag_uses_first_line_for_lightweight_tags():
         "cuvis_ai_core.orchestrator.runtime_project.subprocess.check_output",
         return_value=raw,
     ):
-        assert (
-            resolve_git_tag("https://example.com/repo.git", "v0.1.0")
-            == "3" * 40
-        )
+        assert resolve_git_tag("https://example.com/repo.git", "v0.1.0") == "3" * 40
 
 
 def test_resolve_git_tag_rejects_missing_tag():
@@ -126,13 +120,13 @@ def test_resolve_git_tag_surfaces_subprocess_failure():
 
 def test_resolve_plugin_sources_resolves_git_tag_and_sorts_by_name(tmp_path: Path):
     configs = {
-        "z_plugin": GitPluginManifest(
+        "z_plugin": GitPluginSource(
             name="z_plugin",
             repo="https://example.com/z.git",
             tag="v0.1.0",
             capabilities=[{"class_name": "z.Node"}],
         ),
-        "a_plugin": GitPluginManifest(
+        "a_plugin": GitPluginSource(
             name="a_plugin",
             repo="https://example.com/a.git",
             tag="v0.2.0",
@@ -154,7 +148,7 @@ def test_resolve_plugin_sources_stamps_local_provenance(tmp_path: Path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")
     configs = {
-        "my_local": LocalPluginManifest(
+        "my_local": LocalPluginSource(
             name="my_local",
             path=str(tmp_path),
             capabilities=[{"class_name": "x.Node"}],
@@ -350,7 +344,7 @@ def test_resolve_plugin_sources_reads_local_package_name(tmp_path: Path):
         encoding="utf-8",
     )
 
-    config = LocalPluginManifest(
+    config = LocalPluginSource(
         name="manifest_key_only",
         path=str(plugin_dir),
         capabilities=[{"class_name": "actual.module.Foo"}],

@@ -20,7 +20,7 @@ from cuvis_ai_core.orchestrator import composer as composer_mod
 from cuvis_ai_core.orchestrator.cache_key import CoreSource
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
 from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
-from cuvis_ai_schemas.plugin import GitPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource
 
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")
@@ -37,7 +37,7 @@ def _isolate_in_process_locks():
 
 def _simple_plugin() -> dict:
     return {
-        "p": GitPluginManifest(
+        "p": GitPluginSource(
             name="p",
             repo="https://example.com/p.git",
             tag="v0.1.0",
@@ -241,7 +241,7 @@ def test_compose_env_moving_tag_rejected_via_resolver(tmp_path: Path):
         with pytest.raises(RuntimeProjectError, match="moving refs"):
             compose_env(
                 {
-                    "p": GitPluginManifest(
+                    "p": GitPluginSource(
                         name="p",
                         repo="https://example.com/p.git",
                         tag="main",

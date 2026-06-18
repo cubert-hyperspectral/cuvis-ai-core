@@ -36,7 +36,7 @@ def test_delegating_handlers_forward_without_error():
             "RestoreTrainRun",
             cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path="absent.yaml"),
         ),
-        ("LoadPlugins", cuvis_ai_pb2.LoadPluginsRequest(session_id="ghost")),
+        ("LoadPlugin", cuvis_ai_pb2.LoadPluginRequest(session_id="ghost")),
         (
             "ListLoadedPlugins",
             cuvis_ai_pb2.ListLoadedPluginsRequest(session_id="ghost"),

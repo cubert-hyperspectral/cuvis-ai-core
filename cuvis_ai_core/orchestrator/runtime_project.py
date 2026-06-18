@@ -25,8 +25,8 @@ from cuvis_ai_core.orchestrator.cache_key import (
     local_plugin_provenance,
 )
 from cuvis_ai_schemas.plugin import (
-    GitPluginManifest,
-    LocalPluginManifest,
+    GitPluginSource,
+    LocalPluginSource,
     PluginManifest,
 )
 
@@ -131,7 +131,7 @@ def resolve_plugin_sources(
     for name in sorted(plugin_configs):
         cfg = plugin_configs[name]
         extras = _active_extras(cfg, active_data_module)
-        if isinstance(cfg, GitPluginManifest):
+        if isinstance(cfg, GitPluginSource):
             sha = resolve_git_tag(cfg.repo, cfg.tag)
             # Prefer the explicit override; otherwise trust the
             # manifest key matches the package name (the case for
@@ -150,7 +150,7 @@ def resolve_plugin_sources(
             logger.debug(
                 f"Resolved plugin '{name}' tag {cfg.tag} → {sha[:8]} from {cfg.repo}"
             )
-        elif isinstance(cfg, LocalPluginManifest):
+        elif isinstance(cfg, LocalPluginSource):
             path = Path(cfg.path).resolve()
             pyproject_sha, head, dirty = local_plugin_provenance(path)
             # Local plugins prefer the explicit override; otherwise

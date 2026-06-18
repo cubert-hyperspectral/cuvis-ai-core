@@ -267,7 +267,7 @@ def _decode_resolved_plugins(blob: bytes) -> dict[str, PluginManifest]:
     The parent computes the set via
     :func:`cuvis_ai_core.utils.plugin_resolver.resolve_pipeline_plugins`
     and serialises it as a JSON list of single-plugin manifests
-    ``[GitPluginManifest.model_dump() | LocalPluginManifest.model_dump(), ...]``.
+    ``[GitPluginSource.model_dump() | LocalPluginSource.model_dump(), ...]``.
     Each manifest carries its own ``name``, so the list is re-keyed into a
     ``name → manifest`` dict here.
     """

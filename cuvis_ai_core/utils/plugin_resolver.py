@@ -1,9 +1,9 @@
 """Pure resolver for pipeline plugin sets.
 
 * If ``pipeline_config.plugins`` is set, look up each bare plugin name in
-  the merged catalog and return its :class:`GitPluginManifest` or
-  :class:`LocalPluginManifest` (the manifest union). A name with no manifest
-  on disk is an error.
+  the merged catalog and return its :class:`GitPluginSource` or
+  :class:`LocalPluginSource` (the manifest union). A name with no manifest
+  in the catalog is an error.
 * If ``pipeline_config.plugins`` is None/empty, the production wrapper
   ``_auto_resolve`` hard-fails with a fix-it message pointing at
   ``suggest-plugins-fix``; the pure heuristic ``_compute_auto_resolution``
@@ -20,19 +20,35 @@ from collections import defaultdict
 from pathlib import Path
 
 from cuvis_ai_schemas.pipeline.config import PipelineConfig
-from cuvis_ai_schemas.plugin import PluginManifest, load_plugin_manifests
+from cuvis_ai_schemas.plugin import PluginManifest, load_plugin_manifest
 
 
 def _build_catalog(plugins_dirs: list[Path]) -> dict[str, PluginManifest]:
     """Load per-plugin manifests from one or more dirs into a name → manifest dict.
 
-    The directory loader scans every bare manifest across all given dirs,
-    resolves local plugins' relative paths to absolute, builds a ``name → path``
-    index, and **errors on a duplicate plugin name across the whole set** (no
-    silent last-writer-wins). The returned dict is keyed by the explicit
+    Scans every bare ``*.yaml`` across the given dirs (in precedence order),
+    resolves each local plugin's relative path to absolute, and **errors on a
+    duplicate plugin name anywhere in the whole set** (no silent
+    last-writer-wins). The returned dict is keyed by the explicit
     ``manifest.name``; downstream consumers need no ``manifest_dir`` context.
     """
-    return {m.name: m for m in load_plugin_manifests(plugins_dirs)}
+    catalog: dict[str, PluginManifest] = {}
+    sources: dict[str, Path] = {}
+    for plugins_dir in plugins_dirs:
+        if not plugins_dir.is_dir():
+            continue
+        for manifest_path in sorted(plugins_dir.glob("*.yaml")):
+            manifest = load_plugin_manifest(manifest_path)
+            if manifest.name in catalog:
+                msg = (
+                    f"Duplicate plugin name '{manifest.name}' declared by "
+                    f"{manifest_path} and {sources[manifest.name]}. Plugin names "
+                    "must be unique across all plugins directories."
+                )
+                raise ValueError(msg)
+            catalog[manifest.name] = manifest
+            sources[manifest.name] = manifest_path
+    return catalog
 
 
 def _ref_to_core(
@@ -168,31 +184,36 @@ def _union_data_module_plugin(
                 return
 
 
-def resolve_pipeline_plugins(
+def resolve_against_catalog(
     pipeline_config: PipelineConfig,
-    plugins_dirs: list[Path],
+    catalog: dict[str, PluginManifest],
     data_module: str | None = None,
+    plugins_dirs: list[Path] | None = None,
 ) -> dict[str, PluginManifest]:
-    """Resolve the plugin set a pipeline depends on.
+    """Resolve a pipeline's plugin set against an already-built catalog.
 
-    Pure function: input is the parsed ``PipelineConfig`` plus a list of
-    candidate plugins directories; output is a ``dict`` mapping plugin
-    name to its ``GitPluginManifest`` / ``LocalPluginManifest``.
-    No side effects — does not install, import, or mutate any global
-    state.
+    Pure function: input is the parsed ``PipelineConfig`` plus a ``name →
+    manifest`` catalog (built from a plugins directory by the CLI, or from the
+    session's client-pushed registered plugins by the gRPC orchestrator);
+    output is a ``dict`` mapping plugin name to its ``GitPluginSource`` /
+    ``LocalPluginSource``. No side effects — does not install, import, or mutate
+    any global state.
 
     Resolution:
 
     * If ``pipeline_config.plugins`` is set, every bare name is looked up
-      in the merged catalog and materialised into its core-side config.
-      Duplicate names collapse to a single entry.
+      in the catalog and materialised into its core-side config. A name with
+      no manifest in the catalog raises ``ValueError``. Duplicate names
+      collapse to a single entry.
     * Otherwise run the exact-match heuristic to produce a fix-it hint,
       then raise ``ValueError`` because ``plugins:`` is mandatory.
 
     Final coverage check: every ``class_name`` in the pipeline must be
-    provided by at least one entry in the resolved set.
+    provided by at least one entry in the resolved set. ``plugins_dirs`` is
+    only used to phrase the missing-catalog fix-it message; it defaults to
+    empty for the gRPC path (where the fix is ``LoadPlugin``, not a directory).
     """
-    catalog = _build_catalog(plugins_dirs)
+    plugins_dirs = plugins_dirs or []
     class_names = [node.class_name for node in pipeline_config.nodes]
 
     if not pipeline_config.plugins:
@@ -211,4 +232,24 @@ def resolve_pipeline_plugins(
     return resolved
 
 
-__all__ = ["resolve_pipeline_plugins"]
+def resolve_pipeline_plugins(
+    pipeline_config: PipelineConfig,
+    plugins_dirs: list[Path],
+    data_module: str | None = None,
+) -> dict[str, PluginManifest]:
+    """Resolve the plugin set a pipeline depends on, scanning a plugins directory.
+
+    Thin wrapper for the in-process / CLI path: it builds the catalog by
+    scanning ``plugins_dirs`` (see :func:`_build_catalog`) and delegates to
+    :func:`resolve_against_catalog`. The gRPC orchestrator instead builds the
+    catalog from the session's client-pushed plugins and calls
+    :func:`resolve_against_catalog` directly, so the server never scans a
+    plugins directory.
+    """
+    catalog = _build_catalog(plugins_dirs)
+    return resolve_against_catalog(
+        pipeline_config, catalog, data_module=data_module, plugins_dirs=plugins_dirs
+    )
+
+
+__all__ = ["resolve_pipeline_plugins", "resolve_against_catalog"]

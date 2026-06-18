@@ -47,8 +47,8 @@ from cuvis_ai_core.orchestrator.spawner import (
     DeclaredPaths,
     LocalChildRuntimeSpawner,
 )
-from cuvis_ai_schemas.plugin import PluginManifest
-from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
+from cuvis_ai_schemas.plugin import PluginManifest, parse_plugin_manifest
+from cuvis_ai_core.utils.plugin_resolver import resolve_against_catalog
 
 _NO_CHILD_DETAIL = (
     "No child runtime is attached to this session. "
@@ -121,11 +121,28 @@ def detect_core_source() -> CoreSource:
     return CoreSource(kind="local", identity=str(project_root))
 
 
+class PluginsNotRegisteredError(Exception):
+    """A pipeline names plugins that were never registered via LoadPlugin.
+
+    Raised before composing the child env so the gRPC layer can surface a
+    FAILED_PRECONDITION telling the caller to LoadPlugin each missing plugin
+    first (distinct from a malformed-request ValueError).
+    """
+
+    def __init__(self, missing: list[str], registered: list[str]) -> None:
+        self.missing = missing
+        self.registered = registered
+        super().__init__(
+            f"Pipeline requires plugin(s) {missing} that are not registered in "
+            f"this session. Call LoadPlugin for each before LoadPipeline. "
+            f"Registered plugins: {registered or '[]'}."
+        )
+
+
 def ensure_child_for_session(
     session_manager: SessionManager,
     session_id: str,
     pipeline_config: Any,
-    plugins_dirs: list[Path],
     data_module: str | None = None,
 ) -> ChildHandle:
     """Return a child runtime handle bound to ``session_id``.
@@ -150,7 +167,7 @@ def ensure_child_for_session(
         )
         session.child_handle = None
 
-    resolved = _resolve_plugins(pipeline_config, plugins_dirs, data_module)
+    resolved = _resolve_plugins(pipeline_config, session, data_module)
     core_source = detect_core_source()
     logger.info(
         f"Composing child env for session {session_id} "
@@ -179,7 +196,6 @@ def ensure_child_for_session(
     # Record the child's scratch root (output/scratch share this parent) so
     # close_session can remove it once the child exits.
     session.runtime_base_dir = declared.output_dir.parent
-    _mirror_plugin_catalog(session, resolved)
     return handle
 
 
@@ -196,9 +212,9 @@ def _initialize_child_session(
     """
     # resolved_plugins_json is a JSON list of single-plugin manifests; each
     # manifest carries its own `name`, so the list is self-describing.
-    payload = json.dumps(
-        [cfg.model_dump() for cfg in resolved.values()]
-    ).encode("utf-8")
+    payload = json.dumps([cfg.model_dump() for cfg in resolved.values()]).encode(
+        "utf-8"
+    )
     init_response = handle.stub().InitializeSession(
         cuvis_ai_pb2.InitializeSessionRequest(
             session_id=session_id,
@@ -214,19 +230,6 @@ def _initialize_child_session(
             f"Child runtime rejected InitializeSession for session "
             f"{session_id!r} ({len(resolved)} plugins: {sorted(resolved)})."
         )
-
-
-def _mirror_plugin_catalog(
-    session: SessionState, resolved: Mapping[str, PluginManifest]
-) -> None:
-    """Record resolved plugin metadata on the parent session.
-
-    ListLoadedPlugins / GetPluginInfo / external inspection report what
-    the orchestrator materialised, even though the actual class registry
-    lives inside the child.
-    """
-    for name, cfg in resolved.items():
-        session.registered_plugins[name] = cfg.model_dump()
 
 
 def get_child(session: SessionState) -> ChildHandle | None:
@@ -276,17 +279,22 @@ def forward_load_pipeline(
     # pipeline; only a pipeline run needs a data module.
     data_module = request.data_module or None
 
-    plugins_dirs = _plugins_dirs_for_session(session)
     try:
         child = ensure_child_for_session(
             session_manager,
             request.session_id,
             pipeline_config,
-            plugins_dirs,
             data_module=data_module,
         )
+    except PluginsNotRegisteredError as exc:
+        # The pipeline names plugins the client never registered. This is a
+        # precondition failure, not a malformed request: the fix is to call
+        # LoadPlugin for each before LoadPipeline.
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.LoadPipelineResponse(success=False)
     except ValueError as exc:
-        # resolve_pipeline_plugins's contract: missing plugins block,
+        # resolve_against_catalog's contract: missing plugins block,
         # ambiguous class, coverage gap, duplicate with diverging refs
         # all raise ValueError. Surface as INVALID_ARGUMENT.
         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -393,7 +401,6 @@ def forward_restore_train_run(
     # pin the child to that id.
     parent_session_id = session_manager.create_session()
     parent_session = session_manager.get_session(parent_session_id)
-    plugins_dirs = _plugins_dirs_for_session(parent_session)
 
     trainrun_data_module = getattr(
         getattr(trainrun_config, "data", None), "data_module", None
@@ -403,9 +410,19 @@ def forward_restore_train_run(
             session_manager,
             parent_session_id,
             pipeline_config,
-            plugins_dirs,
             data_module=trainrun_data_module,
         )
+    except PluginsNotRegisteredError as exc:
+        # Drop the empty session; the trainrun's pipeline needs plugins the
+        # client never registered. Surface as FAILED_PRECONDITION (call
+        # LoadPlugin first).
+        try:
+            session_manager.close_session(parent_session_id)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.RestoreTrainRunResponse()
     except ValueError as exc:
         # Drop the empty session; surface resolver errors as INVALID_ARGUMENT
         # so callers don't have to dig through "UNKNOWN" wrapping.
@@ -606,15 +623,6 @@ def forward_get_train_status(session_manager, request, context):
     )
 
 
-def _plugins_dirs_for_session(session: SessionState) -> list[Path]:
-    plugins_dirs: list[Path] = []
-    for search_path in session.search_paths:
-        candidate = Path(search_path) / "plugins"
-        if candidate.is_dir():
-            plugins_dirs.append(candidate)
-    return plugins_dirs
-
-
 # ---------------------------------------------------------------------------
 # In-memory test seam — production code never instantiates these.
 # ---------------------------------------------------------------------------
@@ -810,19 +818,28 @@ def reset_orchestrator() -> None:
 
 
 def _resolve_plugins(
-    pipeline_config: Any, plugins_dirs: list[Path], data_module: str | None = None
+    pipeline_config: Any, session: SessionState, data_module: str | None = None
 ) -> Mapping[str, PluginManifest]:
-    """Resolve the pipeline's declared plugins against the catalog.
+    """Resolve the pipeline's declared plugins against the session catalog.
 
-    Always runs the resolver: ``plugins:`` is mandatory, so a pipeline
-    that omits it (or names a plugin with no manifest) hard-fails with a
-    ``ValueError`` instead of silently loading with an empty plugin set.
-    ``data_module`` (from the run's DataConfig) unions the providing data
-    plugin into the set, since it ships no node classes to resolve by coverage.
+    The catalog is the set of plugins the client registered via ``LoadPlugin``
+    (``session.registered_plugins``); the server never scans a plugins
+    directory. Every plugin a pipeline names in its ``plugins:`` list must
+    already be registered so the child env can be composed — a missing one
+    raises :class:`PluginsNotRegisteredError`. ``plugins:`` is mandatory, so a
+    pipeline that omits it still hard-fails in the resolver. ``data_module``
+    (from the run's DataConfig) unions the providing data plugin into the set,
+    since it ships no node classes to resolve by coverage.
     """
-    return resolve_pipeline_plugins(
-        pipeline_config, plugins_dirs, data_module=data_module
-    )
+    catalog: dict[str, PluginManifest] = {
+        name: parse_plugin_manifest(dump)
+        for name, dump in session.registered_plugins.items()
+    }
+    declared = list(getattr(pipeline_config, "plugins", None) or [])
+    missing = [name for name in declared if name not in catalog]
+    if missing:
+        raise PluginsNotRegisteredError(missing, registered=sorted(catalog))
+    return resolve_against_catalog(pipeline_config, catalog, data_module=data_module)
 
 
 def _default_declared_paths(session_id: str) -> DeclaredPaths:

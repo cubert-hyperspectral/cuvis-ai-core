@@ -17,13 +17,18 @@ The plugin API lets a client:
 
 This is the central concept and the biggest difference from older versions:
 
-1. `LoadPlugins` is **register-only**. It parses the manifest, validates each entry, and records
-   its catalog metadata in the session. It does **not** clone, install, or import anything. The
-   response field is `registered_plugins` (names registered as metadata), not "loaded".
+1. `LoadPlugin` is **register-only**, and **singular**: one call registers exactly one plugin's
+   catalog metadata in the session, so the client loops to register each plugin it needs. It parses
+   and validates the manifest and records its metadata; it does **not** clone, install, or import
+   anything. The response field is `registered_plugin` (the name registered, empty on failure), not
+   "loaded".
 2. A plugin is **materialised lazily** when `LoadPipeline` loads a pipeline whose top-level
-   `plugins:` list references that plugin. At that point the server composes an isolated
-   environment containing exactly the plugins the pipeline declares, installs them, and runs the
-   pipeline there. **Install/import failures surface at `LoadPipeline`, not `LoadPlugins`.**
+   `plugins:` list references that plugin. The server resolves the pipeline's `plugins:` against the
+   plugins the client registered (it does **not** scan a directory), composes an isolated
+   environment containing exactly those plugins, installs them, and runs the pipeline there. So
+   **`LoadPlugin` is a prerequisite of `LoadPipeline`**: a pipeline naming a plugin that was never
+   registered fails with `FAILED_PRECONDITION`. **Install/import failures surface at `LoadPipeline`,
+   not `LoadPlugin`.**
 
 This split keeps the server process clean: a plugin's dependencies are never installed into the
 server's own environment, so conflicting plugin dependencies cannot corrupt the server.
@@ -56,9 +61,9 @@ manifest: an explicit `name`, a source, and a `capabilities` list.
 supported, for reproducibility):
 
 ```python
-from cuvis_ai_schemas.plugin import GitPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource
 
-GitPluginManifest(
+GitPluginSource(
     name="adaclip",                                                    # required, explicit
     repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",  # git@ or https://
     tag="v1.2.3",                                                      # tag only
@@ -67,14 +72,16 @@ GitPluginManifest(
 )
 ```
 
-**Local plugin** — a filesystem path (absolute, or relative to the manifest file):
+**Local plugin** — a filesystem path. Over gRPC the `path` must be **absolute**: the server runs
+elsewhere and cannot resolve a client-relative path, so `LoadPlugin` rejects a relative local path.
+(In-process loaders still resolve a relative path against the manifest file.)
 
 ```python
-from cuvis_ai_schemas.plugin import LocalPluginManifest
+from cuvis_ai_schemas.plugin import LocalPluginSource
 
-LocalPluginManifest(
+LocalPluginSource(
     name="my_plugin",
-    path="../my-plugin",
+    path="/abs/path/to/my-plugin",
     capabilities=[{"class_name": "my_plugin.node.MyNode"}],
 )
 ```
@@ -98,35 +105,37 @@ FQCN) is required; the rest are optional palette metadata:
 
 All plugin RPCs live on `CuvisAIService`.
 
-### LoadPlugins
+### LoadPlugin
 
-Register the manifest's plugins as catalog metadata in a session. **No install, no import.**
+Register **one** plugin as catalog metadata in a session. **No install, no import.** To register
+several plugins, call `LoadPlugin` once per manifest (loop).
 
 **Request / Response**
 
 ```protobuf
-message LoadPluginsRequest {
+message LoadPluginRequest {
   string session_id = 1;
   PluginManifest manifest = 2;     // PluginManifest{ bytes config_bytes }
 }
 
-message LoadPluginsResponse {
-  repeated string registered_plugins = 1;   // registered as catalog metadata (NOT installed)
-  map<string, string> failed_plugins = 2;   // name → Pydantic validation error
+message LoadPluginResponse {
+  string registered_plugin = 1;   // name registered as catalog metadata (empty on failure)
+  string error = 2;               // validation / precondition message (empty on success)
 }
 ```
 
-`PluginManifest.config_bytes` is a JSON **list** of single-plugin manifests
-(`json.dumps([m.model_dump() for m in manifests]).encode()`).
+`PluginManifest.config_bytes` is a **single** plugin manifest serialised as JSON
+(`json.dumps(m.model_dump()).encode()`). A local plugin's `path` must be **absolute** — the server
+cannot resolve a client-relative path, so a relative local path is rejected (reported in `error`).
 
 **Python example**
 
 ```python
 import json
-from cuvis_ai_schemas.plugin import GitPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource
 
 manifests = [
-    GitPluginManifest(
+    GitPluginSource(
         name="adaclip",
         repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",
         tag="v1.2.3",
@@ -134,25 +143,27 @@ manifests = [
     )
 ]
 
-response = client.LoadPlugins(
-    cuvis_ai_pb2.LoadPluginsRequest(
-        session_id=session_id,
-        manifest=cuvis_ai_pb2.PluginManifest(
-            config_bytes=json.dumps([m.model_dump() for m in manifests]).encode()
-        ),
+for m in manifests:
+    response = client.LoadPlugin(
+        cuvis_ai_pb2.LoadPluginRequest(
+            session_id=session_id,
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=json.dumps(m.model_dump()).encode()),
+        )
     )
-)
-
-print(f"Registered: {response.registered_plugins}")
-print(f"Failed:     {dict(response.failed_plugins)}")
+    if response.registered_plugin:
+        print(f"Registered: {response.registered_plugin}")
+    else:
+        print(f"Failed:     {response.error}")
 ```
 
 **Behaviour**
 
-- Validates each manifest entry (Pydantic). Per-entry validation errors go to `failed_plugins`;
-  the other entries still register (partial success).
-- Records each plugin's catalog metadata in the session; tracked in `SessionState.registered_plugins`.
-- Does **not** clone/install/import — that happens at `LoadPipeline` (see below).
+- Validates the manifest (Pydantic). A validation failure or a relative local `path` is reported in
+  `error` with an empty `registered_plugin`; structurally malformed `config_bytes` is an
+  `INVALID_ARGUMENT` status.
+- Records the plugin's catalog metadata in the session; tracked in `SessionState.registered_plugins`.
+- Does **not** clone/install/import — that happens at `LoadPipeline` (see below), which resolves the
+  pipeline's `plugins:` against exactly these registered plugins.
 
 ---
 
@@ -257,7 +268,7 @@ message ClearPluginCacheResponse { int32 cleared_count = 1; }
 import grpc
 import json
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
-from cuvis_ai_schemas.plugin import GitPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource
 
 # 1. Connect
 channel = grpc.insecure_channel("localhost:50051")
@@ -266,24 +277,23 @@ client = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
 # 2. Create a session
 session_id = client.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id
 
-# 3. Register plugins (metadata only — nothing is installed yet)
+# 3. Register plugins (metadata only — nothing is installed yet). One call per plugin.
 manifests = [
-    GitPluginManifest(
+    GitPluginSource(
         name="adaclip",
         repo="git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git",
         tag="v1.2.3",
         capabilities=[{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}],
     )
 ]
-reg = client.LoadPlugins(
-    cuvis_ai_pb2.LoadPluginsRequest(
-        session_id=session_id,
-        manifest=cuvis_ai_pb2.PluginManifest(
-            config_bytes=json.dumps([m.model_dump() for m in manifests]).encode()
-        ),
+for m in manifests:
+    reg = client.LoadPlugin(
+        cuvis_ai_pb2.LoadPluginRequest(
+            session_id=session_id,
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=json.dumps(m.model_dump()).encode()),
+        )
     )
-)
-print(f"Registered: {reg.registered_plugins}")
+    print(f"Registered: {reg.registered_plugin}")
 
 # 4. (Optional) inspect the palette — served from the inline catalog, no plugin import
 nodes = client.ListAvailableNodes(
@@ -319,7 +329,8 @@ client.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 
 ## Error handling
 
-`LoadPlugins` reports only **manifest/validation** failures (per entry, in `failed_plugins`):
+`LoadPlugin` reports only **manifest/validation/precondition** failures, per call, in its `error`
+field (with an empty `registered_plugin`):
 
 | Failure | Example |
 |---|---|
@@ -328,11 +339,13 @@ client.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))
 | Non-FQCN class path | `Invalid class path 'MyNode'. Must be fully-qualified` |
 | Empty `capabilities` | a plugin must declare at least one capability |
 | Missing / non-identifier `name` | every manifest needs an explicit `name` (a valid identifier) |
+| Relative local `path` | a local plugin's `path` must be absolute over gRPC |
 
 **Install/import failures happen later, at `LoadPipeline`** — when the declaring pipeline triggers
 materialisation. Examples: clone failure, dependency resolution failure, `ModuleNotFoundError`
-inside the composed environment. They surface as a `LoadPipeline` error, not in
-`LoadPlugins.failed_plugins`.
+inside the composed environment. A pipeline that names a plugin which was never registered fails
+`LoadPipeline` with `FAILED_PRECONDITION` (call `LoadPlugin` for it first). None of these surface in
+`LoadPlugin.error`.
 
 ## Best practices
 
@@ -346,5 +359,5 @@ inside the composed environment. They surface as a `LoadPipeline` error, not in
 ## See also
 
 - [gRPC API Overview](../README.md#grpc-api)
-- Manifest/capability schemas: `cuvis_ai_schemas.plugin` (`GitPluginManifest`, `LocalPluginManifest`,
+- Manifest/capability schemas: `cuvis_ai_schemas.plugin` (`GitPluginSource`, `LocalPluginSource`,
   `PluginManifest`, `PluginCapabilityEntry`, `PluginCapabilities`, `NodePortSpec`).

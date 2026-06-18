@@ -21,7 +21,7 @@ from cuvis_ai_core.orchestrator.plugin_capabilities import (
 )
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_schemas.plugin import parse_plugin_manifest
+from cuvis_ai_schemas.plugin import LocalPluginSource, parse_plugin_manifest
 from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 from cuvis_ai_schemas.grpc.conversions import (
     node_category_to_proto,
@@ -243,70 +243,79 @@ class PluginService:
     def __init__(self, session_manager: SessionManager) -> None:
         self.session_manager = session_manager
 
-    @grpc_handler("Failed to load plugins")
-    def load_plugins(
+    @grpc_handler("Failed to load plugin")
+    def load_plugin(
         self,
-        request: cuvis_ai_pb2.LoadPluginsRequest,
+        request: cuvis_ai_pb2.LoadPluginRequest,
         context: grpc.ServicerContext,
-    ) -> cuvis_ai_pb2.LoadPluginsResponse:
-        """Register manifest entries as catalog metadata in the session.
+    ) -> cuvis_ai_pb2.LoadPluginResponse:
+        """Register one plugin manifest as catalog metadata in the session.
 
-        This RPC does not install or import plugins. It parses the manifest,
-        validates each entry, and registers them via
-        ``session.node_registry.register_catalog_entries(...)``. Actual
-        materialisation (clone, install, import) happens lazily when
-        ``LoadPipeline`` references the registered plugin through the
-        pipeline yaml's ``plugins:`` field.
+        This RPC does not install or import the plugin. It parses and validates
+        the single manifest in ``request.manifest.config_bytes`` and records it
+        via ``session.node_registry.register_catalog_entries(...)``. Callers
+        loop to register several. Actual materialisation (clone, install,
+        import) happens lazily when ``LoadPipeline`` references the registered
+        plugin through the pipeline yaml's ``plugins:`` field, so every plugin a
+        pipeline needs must be registered first.
 
-        ``failed_plugins`` reports per-entry Pydantic validation failures;
-        install failures surface later in the ``LoadPipeline`` path.
+        A local plugin must carry an absolute ``path``: the server's working
+        directory is not the client's, so a client-relative path cannot be
+        resolved server-side and is rejected here. Per-manifest validation /
+        precondition failures are reported in ``error`` (empty on success);
+        structurally malformed ``config_bytes`` is an INVALID_ARGUMENT status.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
         )
         if session is None:
-            return cuvis_ai_pb2.LoadPluginsResponse()
+            return cuvis_ai_pb2.LoadPluginResponse()
 
         if not request.manifest or not request.manifest.config_bytes:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("manifest.config_bytes is required")
-            return cuvis_ai_pb2.LoadPluginsResponse()
+            return cuvis_ai_pb2.LoadPluginResponse()
 
-        # config_bytes carries a JSON list of single-plugin manifests.
-        manifest_json = request.manifest.config_bytes.decode("utf-8")
-        raw_manifests = json.loads(manifest_json)
-        if not isinstance(raw_manifests, list):
+        # config_bytes carries a single plugin manifest as JSON.
+        try:
+            raw = json.loads(request.manifest.config_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"manifest.config_bytes is not valid JSON: {exc}")
+            return cuvis_ai_pb2.LoadPluginResponse()
+        if not isinstance(raw, dict):
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(
-                "manifest.config_bytes must be a JSON list of single-plugin manifests"
+                "manifest.config_bytes must be a single plugin manifest object"
             )
-            return cuvis_ai_pb2.LoadPluginsResponse()
+            return cuvis_ai_pb2.LoadPluginResponse()
 
-        registered: list[str] = []
-        failed: dict[str, str] = {}
+        plugin_name = raw.get("name", "<unnamed>")
+        try:
+            manifest = parse_plugin_manifest(raw)
+        except Exception as e:
+            logger.error(f"Failed to register plugin '{plugin_name}' in catalog: {e}")
+            return cuvis_ai_pb2.LoadPluginResponse(error=f"{plugin_name}: {e}")
 
-        # Register each manifest into the session's catalog. No install, no import.
-        for raw in raw_manifests:
-            plugin_name = raw.get("name", "<unnamed>") if isinstance(raw, dict) else "<unnamed>"
-            try:
-                manifest = parse_plugin_manifest(raw)
-                plugin_name = manifest.name
-                session.node_registry.register_catalog_entries({plugin_name: manifest})
-                session.registered_plugins[plugin_name] = manifest.model_dump()
-                registered.append(plugin_name)
-                logger.info(
-                    f"Registered plugin '{plugin_name}' in session "
-                    f"{request.session_id} catalog (not yet installed)"
-                )
-            except Exception as e:
-                failed[plugin_name] = str(e)
-                logger.error(
-                    f"Failed to register plugin '{plugin_name}' in catalog: {e}"
-                )
+        if (
+            isinstance(manifest, LocalPluginSource)
+            and not Path(manifest.path).is_absolute()
+        ):
+            msg = (
+                f"{manifest.name}: a local plugin 'path' must be absolute over gRPC "
+                f"(got {manifest.path!r}); the server cannot resolve a "
+                "client-relative path. Send an absolute path."
+            )
+            logger.error(msg)
+            return cuvis_ai_pb2.LoadPluginResponse(error=msg)
 
-        return cuvis_ai_pb2.LoadPluginsResponse(
-            registered_plugins=registered, failed_plugins=failed
+        session.node_registry.register_catalog_entries({manifest.name: manifest})
+        session.registered_plugins[manifest.name] = manifest.model_dump()
+        logger.info(
+            f"Registered plugin '{manifest.name}' in session "
+            f"{request.session_id} catalog (not yet installed)"
         )
+        return cuvis_ai_pb2.LoadPluginResponse(registered_plugin=manifest.name)
 
     @grpc_handler("Failed to list loaded plugins")
     def list_loaded_plugins(

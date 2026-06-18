@@ -147,10 +147,10 @@ class CuvisAIServiceStub(object):
             response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.InferenceResponse.FromString,
             _registered_method=True,
         )
-        self.LoadPlugins = channel.unary_unary(
-            "/cuvis_ai.v1.CuvisAIService/LoadPlugins",
-            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsRequest.SerializeToString,
-            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsResponse.FromString,
+        self.LoadPlugin = channel.unary_unary(
+            "/cuvis_ai.v1.CuvisAIService/LoadPlugin",
+            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginRequest.SerializeToString,
+            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginResponse.FromString,
             _registered_method=True,
         )
         self.ListLoadedPlugins = channel.unary_unary(
@@ -324,7 +324,7 @@ class CuvisAIServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def LoadPlugins(self, request, context):
+    def LoadPlugin(self, request, context):
         """Plugin Management"""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -474,10 +474,10 @@ def add_CuvisAIServiceServicer_to_server(servicer, server):
             request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.InferenceRequest.FromString,
             response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.InferenceResponse.SerializeToString,
         ),
-        "LoadPlugins": grpc.unary_unary_rpc_method_handler(
-            servicer.LoadPlugins,
-            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsRequest.FromString,
-            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsResponse.SerializeToString,
+        "LoadPlugin": grpc.unary_unary_rpc_method_handler(
+            servicer.LoadPlugin,
+            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginRequest.FromString,
+            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginResponse.SerializeToString,
         ),
         "ListLoadedPlugins": grpc.unary_unary_rpc_method_handler(
             servicer.ListLoadedPlugins,
@@ -1158,7 +1158,7 @@ class CuvisAIService(object):
         )
 
     @staticmethod
-    def LoadPlugins(
+    def LoadPlugin(
         request,
         target,
         options=(),
@@ -1173,9 +1173,9 @@ class CuvisAIService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/cuvis_ai.v1.CuvisAIService/LoadPlugins",
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsRequest.SerializeToString,
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginsResponse.FromString,
+            "/cuvis_ai.v1.CuvisAIService/LoadPlugin",
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginRequest.SerializeToString,
+            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.LoadPluginResponse.FromString,
             options,
             channel_credentials,
             insecure,

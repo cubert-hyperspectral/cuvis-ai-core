@@ -43,8 +43,9 @@ class SessionState:
     # the session *knows about* (parsed manifest entries), NOT what has been
     # installed/imported. The full config of every known plugin lives in
     # ``node_registry.plugin_catalog``; the loaded class set is in
-    # ``node_registry.loaded_plugin_nodes``. On the wire this is the
-    # ``registered_plugins`` field of ``LoadPluginsResponse``.
+    # ``node_registry.loaded_plugin_nodes``. Populated by the client's
+    # ``LoadPlugin`` calls; each registered name is echoed back in that RPC's
+    # ``LoadPluginResponse.registered_plugin`` field.
     registered_plugins: dict[str, dict] = field(default_factory=dict)
     # Orchestrator state, populated once the parent has spawned a child
     # runtime for this session. The handle keeps the child alive;

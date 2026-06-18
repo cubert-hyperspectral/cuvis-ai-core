@@ -51,18 +51,21 @@ The Pydantic models live in `cuvis_ai_schemas.plugin`:
 
 ```python
 from cuvis_ai_schemas.plugin import (
-    GitPluginManifest,
-    LocalPluginManifest,
-    PluginManifest,          # the union: GitPluginManifest | LocalPluginManifest
+    GitPluginSource,         # a git-sourced plugin manifest (repo + tag)
+    LocalPluginSource,       # a local-path-sourced plugin manifest
+    PluginManifest,          # the union: GitPluginSource | LocalPluginSource
     PluginCapabilityEntry,   # one capability (a node or a data module)
     PluginCapabilities,      # install-stripped capability set for the palette
     NodePortSpec,            # serialized port spec
     load_plugin_manifest,    # load one bare manifest file (resolves a local path)
-    load_plugin_manifests,   # scan dirs; errors on a duplicate `name` across the set
     parse_plugin_manifest,   # validate an in-memory dict
     write_plugin_manifest,   # write a bare manifest file
 )
 ```
+
+The git/local variants are named for the plugin **source** (where it comes from), not a
+kind of manifest. The directory scan + cross-directory duplicate-name guard lives in
+`cuvis-ai-core` (`plugin_resolver._build_catalog`), not in schemas.
 
 ## In-process use (CLI, notebooks, cookbook)
 
@@ -117,10 +120,13 @@ points at `suggest-plugins-fix`, which proposes the field from the plugins direc
 
 ## gRPC
 
-Over gRPC the same model applies: `LoadPlugins` registers manifests as session catalog metadata
-(its `config_bytes` is a JSON **list** of bare manifests), and `LoadPipeline` materialises the
-plugins a pipeline declares. See [gRPC Plugin Management API](grpc_plugin_api.md) for the RPCs,
-message shapes, and a complete client workflow.
+Over gRPC the same model applies, with the client owning the catalog: `LoadPlugin` registers **one**
+manifest as session catalog metadata (its `config_bytes` is a single bare manifest), so the client
+loops to register each plugin its pipeline needs. `LoadPipeline` then resolves the pipeline's
+`plugins:` against that client-pushed catalog (the server never scans a directory) and materialises
+them — a pipeline naming an unregistered plugin fails with `FAILED_PRECONDITION`. See
+[gRPC Plugin Management API](grpc_plugin_api.md) for the RPCs, message shapes, and a complete client
+workflow.
 
 ## Keeping the catalog accurate
 

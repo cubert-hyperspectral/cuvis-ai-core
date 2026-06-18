@@ -18,7 +18,7 @@ from cuvis_ai_core.run_runtime.service import (
     RunRuntimeServicer,
     _decode_resolved_plugins,
 )
-from cuvis_ai_schemas.plugin import GitPluginManifest, LocalPluginManifest
+from cuvis_ai_schemas.plugin import GitPluginSource, LocalPluginSource
 
 
 class FakeContext:
@@ -63,8 +63,8 @@ def test_decode_resolved_plugins_discriminates_git_vs_local(tmp_path):
         ]
     ).encode("utf-8")
     out = _decode_resolved_plugins(payload)
-    assert isinstance(out["from_git"], GitPluginManifest)
-    assert isinstance(out["from_local"], LocalPluginManifest)
+    assert isinstance(out["from_git"], GitPluginSource)
+    assert isinstance(out["from_local"], LocalPluginSource)
 
 
 def test_decode_resolved_plugins_missing_source_raises():

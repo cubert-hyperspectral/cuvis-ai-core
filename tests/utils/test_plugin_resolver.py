@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-from cuvis_ai_schemas.plugin import LocalPluginManifest
+from cuvis_ai_schemas.plugin import LocalPluginSource
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline import (
     NodeConfig,
@@ -70,7 +70,7 @@ def test_declared_bare_name(plugins_dir: Path):
     )
     resolved = resolve_pipeline_plugins(pipeline, [plugins_dir])
     assert set(resolved) == {"cuvis_ai_builtin"}
-    assert isinstance(resolved["cuvis_ai_builtin"], LocalPluginManifest)
+    assert isinstance(resolved["cuvis_ai_builtin"], LocalPluginSource)
 
 
 def test_declared_unknown_bare_name(plugins_dir: Path):

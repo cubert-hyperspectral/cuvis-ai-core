@@ -129,12 +129,12 @@ class TestPluginServiceErrors:
         for sid in list(self.session_manager._sessions.keys()):
             self.session_manager.close_session(sid)
 
-    def test_load_plugins_invalid_session(self):
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+    def test_load_plugin_invalid_session(self):
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id="nonexistent",
         )
-        response = self.service.load_plugins(request, self.ctx)
-        assert len(response.registered_plugins) == 0
+        response = self.service.load_plugin(request, self.ctx)
+        assert response.registered_plugin == ""
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
     def test_list_loaded_plugins_invalid_session(self):

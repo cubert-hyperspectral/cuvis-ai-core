@@ -9,7 +9,7 @@ from loguru import logger
 
 import cuvis_ai_core.utils.git_and_os as git_os
 from cuvis_ai_schemas.plugin import (
-    LocalPluginManifest,
+    LocalPluginSource,
     PluginManifest,
     load_plugin_manifest,
     parse_plugin_manifest,
@@ -55,9 +55,7 @@ class NodeRegistry:
         """The static kind of a capability entry; defaults to ``node``."""
         return getattr(node, "kind", "node") or "node"
 
-    def _provided_class_names(
-        self, cfg: PluginManifest
-    ) -> list[str]:
+    def _provided_class_names(self, cfg: PluginManifest) -> list[str]:
         """Simple (unqualified) class names of the ``kind=='node'`` entries."""
         return [
             node.class_name.rsplit(".", 1)[-1]
@@ -65,9 +63,7 @@ class NodeRegistry:
             if self._entry_kind(node) == "node"
         ]
 
-    def _provided_data_module_names(
-        self, cfg: PluginManifest
-    ) -> list[str]:
+    def _provided_data_module_names(self, cfg: PluginManifest) -> list[str]:
         """DATA_MODULE_NAMEs of the ``kind=='data_module'`` entries."""
         return [
             node.data_module_name
@@ -443,7 +439,7 @@ class NodeRegistry:
         data = dict(config)
         data.setdefault("name", name)
         manifest = parse_plugin_manifest(data)
-        if isinstance(manifest, LocalPluginManifest) and manifest_dir is not None:
+        if isinstance(manifest, LocalPluginSource) and manifest_dir is not None:
             manifest = manifest.model_copy(
                 update={"path": str(manifest.resolve_path(manifest_dir))}
             )
@@ -472,8 +468,8 @@ class NodeRegistry:
         override is logged and ignored; the caller must ``unload_plugin`` first.
 
         Args:
-            configs: dict mapping plugin name → parsed GitPluginManifest /
-                LocalPluginManifest (already-resolved paths, etc.).
+            configs: dict mapping plugin name → parsed GitPluginSource /
+                LocalPluginSource (already-resolved paths, etc.).
 
         Example:
             from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins

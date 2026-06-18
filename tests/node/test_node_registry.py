@@ -233,7 +233,7 @@ class TestCatalogSplit:
         loaded_plugin_nodes. Materialisation happens lazily."""
         import sys
 
-        from cuvis_ai_schemas.plugin import LocalPluginManifest
+        from cuvis_ai_schemas.plugin import LocalPluginSource
 
         registry = NodeRegistry()
         modules_before = set(sys.modules)
@@ -241,7 +241,7 @@ class TestCatalogSplit:
 
         plugin_root = tmp_path / "fake_plugin"
         plugin_root.mkdir()
-        cfg = LocalPluginManifest(
+        cfg = LocalPluginSource(
             name="fake_plugin",
             path=str(plugin_root),
             capabilities=[{"class_name": "fake_pkg.module.FakeNode"}],
@@ -268,7 +268,7 @@ class TestCatalogSplit:
         """Re-registering a plugin with diverging config logs an override note."""
         from loguru import logger
 
-        from cuvis_ai_schemas.plugin import LocalPluginManifest
+        from cuvis_ai_schemas.plugin import LocalPluginSource
 
         plugin_root_a = tmp_path / "a"
         plugin_root_a.mkdir()
@@ -278,8 +278,10 @@ class TestCatalogSplit:
         registry = NodeRegistry()
         registry.register_catalog_entries(
             {
-                "p": LocalPluginManifest(
-                    name="p", path=str(plugin_root_a), capabilities=[{"class_name": "pkg.X"}]
+                "p": LocalPluginSource(
+                    name="p",
+                    path=str(plugin_root_a),
+                    capabilities=[{"class_name": "pkg.X"}],
                 )
             }
         )
@@ -291,8 +293,10 @@ class TestCatalogSplit:
         try:
             registry.register_catalog_entries(
                 {
-                    "p": LocalPluginManifest(
-                        name="p", path=str(plugin_root_b), capabilities=[{"class_name": "pkg.X"}]
+                    "p": LocalPluginSource(
+                        name="p",
+                        path=str(plugin_root_b),
+                        capabilities=[{"class_name": "pkg.X"}],
                     )
                 }
             )
@@ -304,9 +308,9 @@ class TestCatalogSplit:
 
     @staticmethod
     def _local_cfg(path, *class_paths, name="p"):
-        from cuvis_ai_schemas.plugin import LocalPluginManifest
+        from cuvis_ai_schemas.plugin import LocalPluginSource
 
-        return LocalPluginManifest(
+        return LocalPluginSource(
             name=name,
             path=str(path),
             capabilities=[{"class_name": cp} for cp in class_paths],

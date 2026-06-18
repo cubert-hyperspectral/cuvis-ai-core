@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cuvis_ai_schemas.plugin import LocalPluginManifest, PluginCapabilityEntry
+from cuvis_ai_schemas.plugin import LocalPluginSource, PluginCapabilityEntry
 
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
@@ -12,8 +12,8 @@ _DM = "tests.fixtures.fake_data_modules.FakeDataModule"
 _NOT_DM = "tests.fixtures.fake_data_modules.NotADataModule"
 
 
-def _cfg(name: str, entry: PluginCapabilityEntry) -> LocalPluginManifest:
-    return LocalPluginManifest(
+def _cfg(name: str, entry: PluginCapabilityEntry) -> LocalPluginSource:
+    return LocalPluginSource(
         name=name, path=".", package_name="fake_pkg", capabilities=[entry]
     )
 
