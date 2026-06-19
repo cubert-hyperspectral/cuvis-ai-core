@@ -16,7 +16,11 @@ _NODE_FQCN = "tests.fixtures.mock_nodes.MinMaxNormalizer"
 def _write_manifest(path: Path, capabilities: list[dict]) -> None:
     path.write_text(
         yaml.safe_dump(
-            {"name": "cuvis_ai_test_nodes", "path": "../..", "capabilities": capabilities},
+            {
+                "name": "cuvis_ai_test_nodes",
+                "path": "../..",
+                "capabilities": capabilities,
+            },
             sort_keys=False,
         ),
         encoding="utf-8",

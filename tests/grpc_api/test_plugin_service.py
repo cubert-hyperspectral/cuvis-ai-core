@@ -1,6 +1,5 @@
 """Tests for PluginService gRPC functionality."""
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -20,16 +19,7 @@ from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_schemas.plugin import NodePortSpec, PluginCapabilityEntry
-
-
-def _manifest_config_bytes(manifest: dict) -> bytes:
-    """Encode one bare plugin manifest dict as the LoadPlugin wire payload.
-
-    ``LoadPlugin`` carries one single-plugin manifest dump in
-    ``manifest.config_bytes``; the dict is a bare manifest
-    (``name`` + source + ``capabilities``).
-    """
-    return json.dumps(manifest).encode()
+from tests.fixtures.grpc import manifest_config_bytes as _manifest_config_bytes
 
 
 @pytest.mark.slow

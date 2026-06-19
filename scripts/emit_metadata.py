@@ -103,7 +103,9 @@ def _specs_map_to_node(
 ) -> dict[str, NodePortSpec]:
     if not specs_dict:
         return {}
-    return {port_name: _port_spec_to_node(spec) for port_name, spec in specs_dict.items()}
+    return {
+        port_name: _port_spec_to_node(spec) for port_name, spec in specs_dict.items()
+    }
 
 
 def _resolve_package_root(node_class: type) -> Path | None:
@@ -215,10 +217,13 @@ def _entry_to_manifest_dict(entry: PluginCapabilityEntry) -> dict:
     complete. The dropped defaults round-trip back to the same model
     (``PluginCapabilityEntry`` fills them), so ``--check`` stays exact.
     """
+
     def _drop_default_variadic(specs: dict) -> dict:
         # `variadic` is an opt-in input flag; only emit it when True.
         return {
-            port: {k: v for k, v in spec.items() if not (k == "variadic" and v is False)}
+            port: {
+                k: v for k, v in spec.items() if not (k == "variadic" and v is False)
+            }
             for port, spec in specs.items()
         }
 
@@ -286,7 +291,9 @@ def emit(manifest_path: Path, *, check: bool = False) -> bool:
     if node_items and failures and len(failures) == len(node_items):
         raise RuntimeError("All node classes failed to import; refusing to rewrite")
     if failures:
-        logger.warning(f"{len(failures)}/{len(node_items)} node classes failed; check log above")
+        logger.warning(
+            f"{len(failures)}/{len(node_items)} node classes failed; check log above"
+        )
 
     # Drift check: committed node entry (validated) vs freshly introspected one.
     in_sync = True

@@ -1,5 +1,6 @@
 """Configuration factory fixtures for creating pipeline and experiment configs."""
 
+import copy
 import json
 
 import pytest
@@ -242,6 +243,20 @@ def mock_experiment_dict():
             },
         },
     }
+
+
+@pytest.fixture
+def statistical_experiment_dict(mock_experiment_dict):
+    """Variant of mock_experiment_dict with the entire training block removed.
+
+    Exercises the ``has_gradient_training=False`` branch in ``restore_trainrun``.
+    ``TrainingConfig.trainer`` has a ``default_factory`` so popping the sub-key
+    still yields a non-None ``trainer``; only dropping ``training`` entirely makes
+    ``TrainRunConfig.training is None`` and therefore ``has_gradient_training=False``.
+    """
+    cfg = copy.deepcopy(mock_experiment_dict)
+    cfg.pop("training", None)
+    return cfg
 
 
 @pytest.fixture

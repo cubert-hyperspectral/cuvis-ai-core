@@ -261,29 +261,3 @@ def test_pipeline_integration_with_plugin(
 
     assert pipeline.name == "plugin_pipeline"
     assert any(node.__class__.__name__ == "SimpleTestNode" for node in pipeline.nodes)
-
-
-# this doesnt work in windows apparently
-# @pytest.mark.skipif(git is None, reason="gitpython not installed")
-# def test_git_cache_clearing(tmp_path: Path):
-#     repo_root, _, commit_2 = _write_git_plugin(tmp_path / "git_plugin")
-#     cache_dir = tmp_path / "cache"
-#     NodeRegistry.set_cache_dir(cache_dir)
-
-#     NodeRegistry.clear_plugins()
-#     try:
-#         NodeRegistry.load_plugin(
-#             "git_test",
-#             {
-#                 "repo": f"file://{repo_root}",
-#                 "tag": commit_2,
-#                 "provides": ["node_impl.GitTestNode"],
-#             },
-#         )
-#         cache_entry = cache_dir / f"git_test@{commit_2}"
-#         assert cache_entry.exists()
-
-#         NodeRegistry.clear_plugin_cache("git_test")
-#         assert not cache_entry.exists()
-#     finally:
-#         NodeRegistry.clear_plugins()

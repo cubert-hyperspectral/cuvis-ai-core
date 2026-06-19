@@ -4,7 +4,6 @@ Optimized to minimize redundant training by using module-scoped shared fixtures
 and reusing trained sessions across multiple tests where appropriate.
 """
 
-import json
 from pathlib import Path
 
 import grpc
@@ -14,14 +13,9 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import TrainRunConfig
+from tests.fixtures.grpc import pipeline_bytes_from_path as _pipeline_bytes_from_path
 
 DEFAULT_CHANNELS = 61
-
-
-def _pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
-    """Load a pipeline YAML and return JSON-encoded bytes for LoadPipeline RPC."""
-    pipeline_dict = yaml.safe_load(Path(pipeline_path).read_text())
-    return json.dumps(pipeline_dict).encode("utf-8")
 
 
 # ============================================================================

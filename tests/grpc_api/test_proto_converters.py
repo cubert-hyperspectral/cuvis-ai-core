@@ -209,9 +209,7 @@ class TestProcessingModeMapping:
         """Test new ProcessingMode enum values (DarkSubtract, SpectralRadiance)"""
         # Test DarkSubtract mapping
         proto_darksubtract = cuvis_ai_pb2.PROCESSING_MODE_DARKSUBTRACT
-        assert (
-            helpers.proto_to_processing_mode(proto_darksubtract) == "DarkSubtract"
-        )
+        assert helpers.proto_to_processing_mode(proto_darksubtract) == "DarkSubtract"
 
         # Test SpectralRadiance mapping
         proto_spectral_radiance = cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE
@@ -243,7 +241,9 @@ class TestDtypeToProto:
         assert helpers.dtype_to_proto(torch.Tensor) == cuvis_ai_pb2.D_TYPE_UNSPECIFIED
 
     def test_numpy_dtype_instance(self):
-        assert helpers.dtype_to_proto(np.dtype("float32")) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        assert (
+            helpers.dtype_to_proto(np.dtype("float32")) == cuvis_ai_pb2.D_TYPE_FLOAT32
+        )
         assert helpers.dtype_to_proto(np.dtype("int32")) == cuvis_ai_pb2.D_TYPE_INT32
 
     def test_numpy_scalar_class(self):

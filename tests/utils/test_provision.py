@@ -109,14 +109,6 @@ def test_resolve_install_specs_skips_satisfied(monkeypatch):
     git_p = _git()
     local_p = _local("/tmp/dl")
 
-    class _Entry:
-        def __init__(self, top):
-            self.class_name = f"{top}.X"
-
-    class _Cfg:
-        def __init__(self, top):
-            self.capabilities = [_Entry(top)]
-
     monkeypatch.setattr(
         prov.PipelineConfig, "load_from_file", staticmethod(lambda p: object())
     )
@@ -124,8 +116,8 @@ def test_resolve_install_specs_skips_satisfied(monkeypatch):
         prov,
         "resolve_pipeline_plugins",
         lambda cfg, dirs, dm: {
-            "sam3": _Cfg("cuvis_ai_sam3"),
-            "dl": _Cfg("cuvis_ai_dataloader"),
+            "sam3": _cfg("cuvis_ai_sam3.X"),
+            "dl": _cfg("cuvis_ai_dataloader.X"),
         },
     )
     monkeypatch.setattr(

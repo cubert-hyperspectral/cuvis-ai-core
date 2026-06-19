@@ -107,4 +107,6 @@ def test_list_available_nodes_handles_malformed_catalog(tmp_path, session_manage
     # builtins still come back.
     assert response.nodes, "Builtins should still be returned despite bad plugin"
     plugin_nodes = [n for n in response.nodes if n.plugin_name == plugin_name]
-    assert plugin_nodes == [], "Broken catalog should contribute no nodes for that plugin"
+    assert plugin_nodes == [], (
+        "Broken catalog should contribute no nodes for that plugin"
+    )

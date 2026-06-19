@@ -108,9 +108,7 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
     )
     trainrun_config_json = json.loads(trainrun_resolved.config_bytes.decode("utf-8"))
     assert trainrun_config_json["name"] == "integration-trainrun"
-    assert (
-        trainrun_config_json["data"]["params"]["cu3s_file_path"] == "/tmp/dummy.cu3s"
-    )
+    assert trainrun_config_json["data"]["params"]["cu3s_file_path"] == "/tmp/dummy.cu3s"
     trainrun_config_json.pop("pipeline", None)
 
     set_trainrun_response = grpc_stub.SetTrainRunConfig(

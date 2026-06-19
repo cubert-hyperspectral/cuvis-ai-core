@@ -1,20 +1,9 @@
 """Integration tests for gRPC plugin management workflow."""
 
-import json
-
 import pytest
 
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-
-
-def _manifest_config_bytes(manifest: dict) -> bytes:
-    """Encode one bare plugin manifest dict as the LoadPlugin wire payload.
-
-    ``LoadPlugin`` carries one single-plugin manifest dump in
-    ``manifest.config_bytes``; the dict is a bare manifest
-    (``name`` + source + ``capabilities``).
-    """
-    return json.dumps(manifest).encode()
+from tests.fixtures.grpc import manifest_config_bytes as _manifest_config_bytes
 
 
 @pytest.mark.slow

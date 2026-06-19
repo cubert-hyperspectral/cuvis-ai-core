@@ -6,85 +6,14 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
 
 import cuvis_ai_core.utils.restore as restore_mod
 from cuvis_ai_schemas.enums import ExecutionStage
-
-
-class _FakeInferenceDataModule:
-    """Fake LightningDataModule standing in for a registry-dispatched module.
-
-    Records the ``DataConfig`` it was built from and serves a fixed two-batch
-    ``predict_dataloader`` so the inference loop can be exercised without the
-    cu3s DataModule (which now lives in the cuvis-ai-dataloader plugin).
-    """
-
-    instances: list["_FakeInferenceDataModule"] = []
-
-    def __init__(self, data_config) -> None:
-        self.data_config = data_config
-        self.setup_stages: list[str | None] = []
-        self.batches = [
-            {"cube": torch.tensor([1.0], dtype=torch.float32)},
-            {"cube": torch.tensor([2.0], dtype=torch.float32)},
-        ]
-        self.__class__.instances.append(self)
-
-    def setup(self, stage: str | None = None) -> None:
-        self.setup_stages.append(stage)
-
-    def predict_dataloader(self):
-        return list(self.batches)
-
-
-class _FakeTorchLayer:
-    def __init__(self) -> None:
-        self.eval_calls = 0
-
-    def eval(self) -> None:
-        self.eval_calls += 1
-
-
-class _FakeVideoNode:
-    def __init__(self) -> None:
-        self.output_video_path = "out.mp4"
-        self.close_calls = 0
-
-    def close(self) -> None:
-        self.close_calls += 1
-
-
-class _FakePipeline:
-    def __init__(self) -> None:
-        self.torch_layers = [_FakeTorchLayer()]
-        self.video_node = _FakeVideoNode()
-        self.nodes = [self.video_node, object()]
-        self.profiling_enabled: list[bool] = []
-        self.forward_calls: list[tuple[dict[str, torch.Tensor], object]] = []
-        self.summary_calls: list[tuple[ExecutionStage, int]] = []
-
-    def set_profiling(self, *, enabled: bool) -> None:
-        self.profiling_enabled.append(enabled)
-
-    def forward(self, *, batch: dict[str, torch.Tensor], context: object) -> dict:
-        self.forward_calls.append((batch, context))
-        return {}
-
-    def format_profiling_summary(
-        self,
-        *,
-        stage: ExecutionStage,
-        total_frames: int,
-    ) -> str:
-        self.summary_calls.append((stage, total_frames))
-        return "profiling-summary"
-
-    def get_input_specs(self) -> dict[str, str]:
-        return {"cube": "spec"}
-
-    def get_output_specs(self) -> dict[str, str]:
-        return {"node.output": "spec"}
+from tests.fixtures.restore_doubles import (
+    FakeRestoreDataModule,
+    FakeRestorePipeline,
+    RecordingTrainer,
+)
 
 
 def test_restore_module_imports() -> None:
@@ -99,17 +28,17 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    fake_pipeline = _FakePipeline()
+    fake_pipeline = FakeRestorePipeline()
     tqdm_calls: list[dict[str, object]] = []
 
     def _fake_tqdm(iterable, **kwargs):
         tqdm_calls.append(kwargs)
         return iterable
 
-    _FakeInferenceDataModule.instances.clear()
+    FakeRestoreDataModule.instances.clear()
 
     def _fake_build_data_module(registry, data_config, candidate_dirs):
-        return _FakeInferenceDataModule(data_config)
+        return FakeRestoreDataModule(data_config)
 
     monkeypatch.setattr(restore_mod, "_build_data_module", _fake_build_data_module)
     monkeypatch.setattr(restore_mod, "tqdm", _fake_tqdm)
@@ -131,8 +60,8 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     )
 
     assert pipeline is fake_pipeline
-    assert len(_FakeInferenceDataModule.instances) == 1
-    datamodule = _FakeInferenceDataModule.instances[0]
+    assert len(FakeRestoreDataModule.instances) == 1
+    datamodule = FakeRestoreDataModule.instances[0]
     assert datamodule.data_config.data_module == "cu3s"
     assert datamodule.data_config.params["processing_mode"] == "SpectralRadiance"
     assert datamodule.data_config.params["annotation_json_path"] == str(
@@ -255,22 +184,6 @@ def test_discover_plugins_dirs_walks_up_and_appends_explicit(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-class _SpecPipeline:
-    """Fake pipeline exposing only what info-mode + visualize need."""
-
-    def __init__(self) -> None:
-        self.visualize_calls: list[dict] = []
-
-    def get_input_specs(self):
-        return {"cube": "spec"}
-
-    def get_output_specs(self):
-        return {"out": "spec"}
-
-    def visualize(self, *, format, output_path):
-        self.visualize_calls.append({"format": format, "output_path": output_path})
-
-
 def _write_no_plugin_pipeline(path: Path) -> None:
     path.write_text(
         "metadata:\n"
@@ -292,7 +205,7 @@ def _write_no_plugin_pipeline(path: Path) -> None:
 def test_restore_pipeline_info_mode_no_cu3s(monkeypatch, tmp_path: Path) -> None:
     pipeline_path = tmp_path / "pipe.yaml"
     _write_no_plugin_pipeline(pipeline_path)
-    fake = _SpecPipeline()
+    fake = FakeRestorePipeline()
     monkeypatch.setattr(
         restore_mod.CuvisPipeline,
         "load_pipeline",
@@ -318,7 +231,7 @@ def test_restore_pipeline_exports_visualization(
 ) -> None:
     pipeline_path = tmp_path / "pipe.yaml"
     _write_no_plugin_pipeline(pipeline_path)
-    fake = _SpecPipeline()
+    fake = FakeRestorePipeline()
     monkeypatch.setattr(
         restore_mod.CuvisPipeline,
         "load_pipeline",
@@ -366,14 +279,99 @@ def test_restore_trainrun_info_mode_builds_and_returns(
     assert restore_mod.restore_trainrun(path, mode="info", device="cpu") is None
 
 
-@pytest.mark.parametrize("mode", ["train", "validate", "test"])
+_DS = object()  # sentinel: a non-None dataset is available
+
+
+@pytest.mark.parametrize(
+    "mode,use_gradient,requires_fit,val_ds,test_ds",
+    [
+        # stat-only (no GradientTrainer), requires_initial_fit=True, val+test present
+        ("train", False, True, _DS, _DS),
+        # stat-only, no val or test dataset configured
+        ("train", False, False, None, None),
+        # gradient training with val+test; stat.fit() also runs (requires_fit=True)
+        ("train", True, True, _DS, _DS),
+        # validate mode - stat only
+        ("validate", False, True, None, None),
+        # validate mode - gradient
+        ("validate", True, False, None, None),
+        # test mode - stat only
+        ("test", False, True, None, None),
+        # test mode - gradient
+        ("test", True, False, None, None),
+    ],
+)
 def test_restore_trainrun_execution_modes_with_mocked_trainers(
-    monkeypatch, tmp_path: Path, mock_experiment_dict, mode
+    monkeypatch,
+    tmp_path: Path,
+    mock_experiment_dict,
+    statistical_experiment_dict,
+    mock_pipeline_dict,
+    mode,
+    use_gradient,
+    requires_fit,
+    val_ds,
+    test_ds,
 ) -> None:
-    pytest.skip(
-        "cu3s DataModule moved to the cuvis-ai-dataloader plugin; not available "
-        "in core's test env"
+    """Dispatch test: proves mode -> which trainer methods fire, and that save_to_file
+    is only called in train mode.  No real training; all heavy components are patched.
+    """
+    exp_dict = mock_experiment_dict if use_gradient else statistical_experiment_dict
+    path = _write_trainrun(tmp_path, exp_dict, mock_pipeline_dict)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(requires_fit,))
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: fake_pipeline,
     )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=val_ds, test_ds=test_ds),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+
+    restore_mod.restore_trainrun(path, mode=mode, device="cpu")
+
+    # stat_trainer is always the first RecordingTrainer created
+    stat_trainer = RecordingTrainer.all_instances[0]
+    grad_trainer = RecordingTrainer.all_instances[1] if use_gradient else None
+
+    if mode == "train":
+        assert fake_pipeline.save_to_file_calls, "save_to_file must fire in train mode"
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        if use_gradient:
+            assert grad_trainer is not None
+            assert "fit" in grad_trainer.calls
+            if val_ds is not None:
+                assert "validate" in grad_trainer.calls
+            if test_ds is not None:
+                assert "test" in grad_trainer.calls
+        else:
+            if val_ds is not None:
+                assert "validate" in stat_trainer.calls
+            if test_ds is not None:
+                assert "test" in stat_trainer.calls
+    elif mode == "validate":
+        assert not fake_pipeline.save_to_file_calls, (
+            "save_to_file must NOT fire in validate mode"
+        )
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        active = grad_trainer if use_gradient else stat_trainer
+        assert "validate" in active.calls
+    elif mode == "test":
+        assert not fake_pipeline.save_to_file_calls, (
+            "save_to_file must NOT fire in test mode"
+        )
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        active = grad_trainer if use_gradient else stat_trainer
+        assert "test" in active.calls
 
 
 # ---------------------------------------------------------------------------
