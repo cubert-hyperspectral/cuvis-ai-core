@@ -1,416 +1,147 @@
 # NodeRegistry Plugin System
 
-The NodeRegistry plugin system enables dynamic loading of external nodes from Git repositories and local filesystem paths, allowing teams to extend the cuvis-ai framework without modifying the core or catalog repositories.
+The plugin system lets teams extend cuvis-ai with external nodes (and data modules) shipped in
+their own packages, without modifying the core or node libraries. A plugin is a pip-installable
+Python package plus a **bare manifest** that declares what it provides.
 
-## Overview
+## Concepts
 
-The plugin system integrates directly into the existing `NodeRegistry` class, providing a unified API for all node lookups while maintaining backward compatibility with existing pipelines.
+### One file, one plugin
 
-### Key Features
+A plugin manifest is a single YAML file describing exactly one plugin: an explicit `name`, a source
+(a local `path` or a git `repo` + `tag`), and a `capabilities` list. There is no multi-plugin
+wrapper. A directory of these files (the "plugins directory") is the catalog.
 
-- **Dynamic Plugin Loading**: Load nodes from external Git repositories
-- **Version Pinning**: Support Git tags, branches, and commit hashes via `ref` field
-- **Local Development**: Support filesystem paths for development workflows
-- **Intelligent Caching**: Cache Git repos and verify versions before re-cloning
-- **Pydantic Validation**: Strict validation for all plugin configurations
-- **Backward Compatible**: Existing pipelines work without modification
-
-## Installation
-
-The plugin system is included in cuvis-ai-core. For Git-based plugins, ensure GitPython is installed:
-
-```bash
-uv add "cuvis-ai-core[plugins]"
+```yaml
+# configs/plugins/adaclip.yaml  (git source)
+name: adaclip                       # required, explicit; never derived from the filename
+repo: "git@github.com:cubert-hyperspectral/cuvis-ai-adaclip.git"   # git@ or https://
+tag: "v1.2.3"                       # tag only — branches and commit hashes are not supported
+package_name: "cuvis-ai-adaclip"    # optional: real [project].name when it differs from `name`
+capabilities:
+  - class_name: cuvis_ai_adaclip.node.AdaCLIPDetector   # FQCN; optional palette metadata may follow
 ```
 
-## Usage
+```yaml
+# configs/plugins/my_plugin.yaml  (local source, for development)
+name: my_plugin
+path: "../my-plugin"                # absolute, or relative to this manifest file
+capabilities:
+  - class_name: my_plugin.node.MyNode
+```
 
-### Basic Usage Pattern
+Each `capabilities` entry is a `PluginCapabilityEntry`: `class_name` (an FQCN) is required; the rest
+is optional palette metadata (`category`, `tags`, `icon_svg`, `input_specs`, `output_specs`,
+`doc_summary`). A `kind: data_module` entry instead registers a data module (it carries
+`data_module_name` + pip `extras` and never appears in the node palette).
+
+The `capabilities` list **is** the plugin's node catalog: the server enumerates it for the node
+palette without importing any plugin code.
+
+### Register, then materialise
+
+Registering a plugin records its manifest as catalog metadata. It does **not** clone, install, or
+import anything. A plugin is materialised lazily — cloned/installed/imported into an isolated
+per-pipeline environment — only when a pipeline that references it is loaded. This keeps the server
+process clean: plugin dependencies never land in the server's own environment.
+
+## Manifest schemas
+
+The Pydantic models live in `cuvis_ai_schemas.plugin`:
+
+```python
+from cuvis_ai_schemas.plugin import (
+    GitPluginSource,         # a git-sourced plugin manifest (repo + tag)
+    LocalPluginSource,       # a local-path-sourced plugin manifest
+    PluginManifest,          # the union: GitPluginSource | LocalPluginSource
+    PluginCapabilityEntry,   # one capability (a node or a data module)
+    PluginCapabilities,      # install-stripped capability set for the palette
+    NodePortSpec,            # serialized port spec
+    load_plugin_manifest,    # load one bare manifest file (resolves a local path)
+    parse_plugin_manifest,   # validate an in-memory dict
+    write_plugin_manifest,   # write a bare manifest file
+)
+```
+
+The git/local variants are named for the plugin **source** (where it comes from), not a
+kind of manifest. The directory scan + cross-directory duplicate-name guard lives in
+`cuvis-ai-core` (`plugin_resolver._build_catalog`), not in schemas.
+
+## In-process use (CLI, notebooks, cookbook)
+
+For an in-process pipeline, register plugins into a `NodeRegistry` instance. The plugin package must
+already be importable in the active environment (an editable `[tool.uv.sources]` entry in dev, the
+`provision` helper, or `uv pip install`). This path never clones or installs.
 
 ```python
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.pipeline.factory import PipelineBuilder
 
-# Step 1: Load plugins into NodeRegistry BEFORE building pipeline
-NodeRegistry.load_plugins("plugins.yaml")
+registry = NodeRegistry()
 
-# Step 2: Build pipeline (unchanged - uses NodeRegistry.get() internally)
-builder = PipelineBuilder()
-pipeline = builder.build_from_config("pipeline.yaml")
+# Register one bare manifest (one plugin) by path.
+registry.register_plugins("configs/plugins/adaclip.yaml")
 
-# Run inference
-results = pipeline.run(input_data)
+# Or register a single plugin by name + explicit config dict.
+registry.register_plugin("my_plugin", {"path": "../my-plugin",
+                                       "capabilities": [{"class_name": "my_plugin.node.MyNode"}]})
 ```
 
-### Loading Plugins
+A plugin whose package is not installed raises a guided `ModuleNotFoundError` pointing at the
+`provision` command:
 
-#### From YAML Manifest
-
-Create a `plugins.yaml` file:
-
-```yaml
-plugins:
-  adaclip:
-    repo: "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git"
-    ref: "v1.2.3"
-    provides:
-      - cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector
-
-  custom_models:
-    repo: "https://github.com/company/custom-models.git"
-    ref: "v2.0.0"
-    provides:
-      - custom_models.segmentation.SegmentationNode
-      - custom_models.classification.ClassifierNode
-```
-
-Load plugins:
-
-```python
-NodeRegistry.load_plugins("plugins.yaml")
-```
-
-#### Programmatic Loading
-
-```python
-# Git plugin
-NodeRegistry.load_plugin("adaclip", {
-    "repo": "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git",
-    "tag": "v1.2.3",
-    "provides": ["cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector"]
-})
-
-# Local plugin
-NodeRegistry.load_plugin("local_dev", {
-    "path": "../my-plugin",
-    "provides": ["my_plugin.MyNode"]
-})
-```
-
-### Plugin Management
-
-```python
-# List loaded plugins
-plugins = NodeRegistry.list_plugins()
-print(f"Loaded plugins: {plugins}")
-
-# List plugin nodes
-plugin_nodes = NodeRegistry.list_plugin_nodes()
-print(f"Plugin nodes: {plugin_nodes}")
-
-# Unload a plugin
-NodeRegistry.unload_plugin("adaclip")
-
-# Clear all plugins
-NodeRegistry.clear_plugins()
-
-# Clear Git cache
-NodeRegistry.clear_plugin_cache()  # Clear all cached plugins
-NodeRegistry.clear_plugin_cache("adaclip")  # Clear specific plugin
-```
-
-## Plugin Configuration
-
-### Git Plugin Configuration
-
-```python
-from cuvis_ai_schemas.plugin import GitPluginConfig
-
-config = GitPluginConfig(
-    repo="git@gitlab.cubert.local:cubert/test-plugin.git",
-    ref="v1.2.3",  # Can be tag, branch, or commit hash
-    provides=["test_plugin.TestNode"]
-)
-```
-
-### Local Plugin Configuration
-
-```python
-from cuvis_ai_schemas.plugin import LocalPluginConfig
-
-config = LocalPluginConfig(
-    path="/path/to/plugin",  # Absolute or relative path
-    provides=["local_plugin.LocalNode"]
-)
-```
-
-### Plugin Manifest
-
-```python
-from cuvis_ai_schemas.plugin import PluginManifest
-
-# Load from YAML
-manifest = PluginManifest.from_yaml("plugins.yaml")
-
-# Load from dict
-manifest = PluginManifest.from_dict({
-    "plugins": {
-        "plugin1": {...},
-        "plugin2": {...}
-    }
-})
-
-# Save to YAML
-manifest.to_yaml("plugins.yaml")
-```
-
-## Plugin Development
-
-### Creating a Plugin
-
-A plugin is simply a Python package that contains Node classes. The package should have:
-
-1. A proper Python package structure with `__init__.py`
-2. Node classes that inherit from `cuvis_ai_core.node.node.Node`
-3. All required dependencies declared in `pyproject.toml`
-
-### Example Plugin Structure
-
-```
-my_plugin/
-├── __init__.py
-├── pyproject.toml
-└── nodes/
-    ├── __init__.py
-    └── my_node.py
-```
-
-### Example Node Implementation
-
-```python
-from cuvis_ai_core.node.node import Node
-
-class MyCustomNode(Node):
-    def __init__(self, name="MyCustomNode"):
-        super().__init__(name)
-        self.custom_param = "default_value"
-
-    def forward(self, input_data):
-        # Your node logic here
-        result = process_data(input_data, self.custom_param)
-        return {"output": result}
-```
-
-## Cache Management
-
-The plugin system caches Git repositories to improve performance. Cache behavior:
-
-- **Cache Location**: `~/.cuvis_plugins/` by default
-- **Cache Structure**: `~/.cuvis_plugins/{plugin_name}@{ref}/`
-- **Cache Verification**: Automatically verifies cached repos match expected ref
-- **Cache Reuse**: Reuses cached repos when ref matches
-
-### Custom Cache Directory
-
-```python
-NodeRegistry.set_cache_dir("/custom/cache/path")
-```
-
-### Cache Performance
-
-| Plugin Size | First Load | Cached Load |
-|-------------|------------|-------------|
-| Small (< 10 MB) | ~2-5s | < 0.1s |
-| Medium (10-50 MB) | ~5-15s | < 0.1s |
-| Large (> 50 MB) | ~15-60s | < 0.1s |
-
-## Error Handling
-
-The plugin system provides clear error messages for common issues:
-
-```python
-# Invalid configuration
-try:
-    NodeRegistry.load_plugin("invalid", {
-        "repo": "invalid-url",
-        "tag": "v1.0.0",
-        "provides": ["test.Node"]
-    })
-except ValidationError as e:
-    print(f"Configuration error: {e}")
-
-# Missing plugin
-try:
-    NodeRegistry.get("NonExistentNode")
-except KeyError as e:
-    print(f"Node not found: {e}")
-```
-
-## Best Practices
-
-1. **Use Tagged Releases**: More reliable than branches for production
-2. **Pin Versions**: Avoid unexpected changes from floating branches
-3. **Pre-warm Cache**: Clone plugins before production deployment
-4. **Monitor Cache Size**: Clear old plugin versions periodically
-5. **Use Local Paths for Development**: Faster iteration during development
-
-## API Reference
-
-### NodeRegistry Plugin Methods
-
-#### `load_plugins(manifest_path: Union[str, Path]) -> int`
-Load multiple plugins from a YAML manifest file.
-
-#### `load_plugin(name: str, config: dict) -> None`
-Load a single plugin from a configuration dict.
-
-#### `unload_plugin(name: str) -> None`
-Unload a plugin and remove its nodes from the registry.
-
-#### `list_plugins() -> list[str]`
-List all loaded plugin names.
-
-#### `list_plugin_nodes() -> list[str]`
-List all nodes provided by plugins.
-
-#### `clear_plugins() -> None`
-Unload all plugins and clear plugin registries.
-
-#### `clear_plugin_cache(plugin_name: Optional[str] = None) -> None`
-Clear cached Git repositories.
-
-#### `set_cache_dir(path: Union[str, Path]) -> None`
-Set the cache directory for Git plugins.
-
-### Pydantic Models
-
-#### `GitPluginConfig`
-Git repository plugin configuration.
-
-#### `LocalPluginConfig`
-Local filesystem plugin configuration.
-
-#### `PluginManifest`
-Complete plugin manifest containing all plugin configurations.
-
-## Migration Guide
-
-### From Hard Dependencies to Plugins
-
-If you're currently using hard dependencies like `cuvis-ai-adaclip`, you can migrate to plugins:
-
-1. **Remove hard dependency** from your `pyproject.toml`
-2. **Add plugin configuration** to your `plugins.yaml`
-3. **Load plugins** before building pipelines
-
-### Example Migration
-
-**Before:**
-```toml
-[project]
-dependencies = [
-    "cuvis-ai-core>=0.1.0",
-    "cuvis-ai-adaclip>=1.0.0",  # Hard dependency
-]
-```
-
-**After:**
-```toml
-[project]
-dependencies = [
-    "cuvis-ai-core>=0.1.0",
-    # adaclip is now loaded as a plugin
-]
-```
-
-**plugins.yaml:**
-```yaml
-plugins:
-  adaclip:
-    repo: "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git"
-    ref: "v1.2.3"
-    provides:
-      - cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector
-```
-
-**Python code:**
-```python
-# Load plugins before building pipeline
-NodeRegistry.load_plugins("plugins.yaml")
-
-# Build pipeline (unchanged)
-builder = PipelineBuilder()
-pipeline = builder.build_from_config("pipeline.yaml")
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**GitPython not installed:**
 ```bash
-uv add gitpython>=3.1.40
+uv run provision --pipeline-path <pipeline.yaml> --plugins-dir configs/plugins --apply
 ```
 
-**Plugin not found:**
-- Verify the plugin name is correct
-- Check that the plugin was loaded successfully
-- Ensure the class path in `provides` is correct
+## Pipelines reference plugins by name
 
-**Cache verification failed:**
-- The cached repository may be corrupted
-- Try clearing the cache: `NodeRegistry.clear_plugin_cache()`
-- The plugin will be re-cloned on next load
-
-**Node instantiation failed:**
-- Verify the node class implements all required methods
-- Check that all dependencies are installed
-- Ensure the node follows the cuvis-ai Node API
-
-## Examples
-
-### Production Setup with Git Plugins
-
-**plugins.yaml:**
-```yaml
-plugins:
-  adaclip:
-    repo: "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git"
-    ref: "v1.2.3"
-    provides:
-      - cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector
-
-  custom_models:
-    repo: "https://github.com/company/custom-models.git"
-    ref: "v2.0.0"
-    provides:
-      - custom_models.segmentation.SegmentationNode
-      - custom_models.classification.ClassifierNode
-```
-
-### Development Setup with Local Plugins
-
-**plugins.yaml:**
-```yaml
-plugins:
-  dev_plugin:
-    path: "../my-plugin-dev"  # Relative path
-    provides:
-      - my_plugin.experimental.ExperimentalNode
-```
-
-### Multiple Plugin Versions
+A pipeline declares the plugins it needs by **bare name** in a top-level `plugins:` list; each name
+resolves to a manifest in the plugins directory.
 
 ```yaml
 plugins:
-  adaclip_stable:
-    repo: "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git"
-    ref: "v1.2.3"
-    provides:
-      - cuvis_ai_adaclip.node.adaclip_node.AdaCLIPDetector
-
-  adaclip_experimental:
-    repo: "git@gitlab.cubert.local:cubert/cuvis-ai-adaclip.git"
-    ref: "develop"
-    provides:
-      - cuvis_ai_adaclip.experimental.ExperimentalDetector
+  - adaclip
+  - cuvis_ai_builtin
+nodes:
+  - name: detector
+    class_name: cuvis_ai_adaclip.node.AdaCLIPDetector
+    hparams: {}
+connections: []
 ```
 
-## Support
+Load it against a plugins directory:
 
-For issues or questions about the plugin system:
+```bash
+uv run restore-pipeline --pipeline-path pipeline.yaml --plugins-dir configs/plugins
+```
 
-1. Check the [troubleshooting section](#troubleshooting)
-2. Review the [API reference](#api-reference)
-3. Consult the [implementation documentation](ALL_4976_cuvis_ai_core_phase2.md)
-4. Contact the cuvis-ai development team
+If a pipeline omits the mandatory `plugins:` field, `restore-pipeline` fails with a fix-it hint that
+points at `suggest-plugins-fix`, which proposes the field from the plugins directory.
+
+## gRPC
+
+Over gRPC the same model applies, with the client owning the catalog: `LoadPlugin` registers **one**
+manifest as session catalog metadata (its `config_bytes` is a single bare manifest), so the client
+loops to register each plugin its pipeline needs. `LoadPipeline` then resolves the pipeline's
+`plugins:` against that client-pushed catalog (the server never scans a directory) and materialises
+them — a pipeline naming an unregistered plugin fails with `FAILED_PRECONDITION`. See
+[gRPC Plugin Management API](grpc_plugin_api.md) for the RPCs, message shapes, and a complete client
+workflow.
+
+## Keeping the catalog accurate
+
+A node entry's palette metadata (category, tags, icon, port specs) is regenerated from the live node
+classes by `scripts/emit_metadata.py`:
+
+```bash
+uv run python -m scripts.emit_metadata --manifest configs/plugins/adaclip.yaml
+uv run python -m scripts.emit_metadata --manifest configs/plugins/adaclip.yaml --check   # CI drift guard
+```
+
+`--check` exits non-zero when the committed metadata has drifted from the live specs. `data_module`
+entries carry no palette metadata and are left untouched.
+
+## See also
+
+- [gRPC Plugin Management API](grpc_plugin_api.md)
+- Manifest/capability schemas: `cuvis_ai_schemas.plugin`

@@ -197,8 +197,8 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Plugin Management
     # ------------------------------------------------------------------
-    def LoadPlugins(self, request, context) -> cuvis_ai_pb2.LoadPluginsResponse:
-        return self.plugin_service.load_plugins(request, context)
+    def LoadPlugin(self, request, context) -> cuvis_ai_pb2.LoadPluginResponse:
+        return self.plugin_service.load_plugin(request, context)
 
     def ListLoadedPlugins(
         self, request, context

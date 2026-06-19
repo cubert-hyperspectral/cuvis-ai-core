@@ -8,6 +8,7 @@ in-memory mode used by the rest of the suite.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -157,69 +158,63 @@ def test_inmemory_stub_returns_response_on_success():
 # ---------------------------------------------------------------------------
 
 
-def _resolvable_pipeline(tmp_path):
-    """A minimal pipeline config + plugins dir the resolver accepts.
+def _register_resolvable_plugin(sm, sid):
+    """Register a plugin into the session catalog and return a pipeline that uses it.
 
-    ``ensure_child_for_session`` always runs ``resolve_pipeline_plugins``
-    now (``plugins:`` is mandatory), so the lifecycle tests below need a
-    config whose declared plugin resolves against a real manifest. The
-    in-memory spawner ignores the plugin ``path``; only the catalog lookup
-    and coverage check matter here.
+    ``ensure_child_for_session`` resolves a pipeline's plugins against the
+    session's client-pushed ``registered_plugins`` (no directory scan), and
+    ``plugins:`` is mandatory, so the lifecycle tests below must register the
+    manifest first. The in-memory spawner ignores the plugin ``path``; only the
+    catalog lookup and coverage check matter here.
     """
     node_class = "tests.fixtures.mock_nodes.MinMaxNormalizer"
-    plugins_dir = tmp_path / "plugins"
-    plugins_dir.mkdir()
-    (plugins_dir / "m.yaml").write_text(
-        "plugins:\n"
-        "  test_plugin:\n"
-        "    path: '.'\n"
-        "    provides:\n"
-        f"      - class_name: {node_class}\n",
-        encoding="utf-8",
-    )
-    cfg = SimpleNamespace(
+    sm.get_session(sid).registered_plugins["test_plugin"] = {
+        "name": "test_plugin",
+        "path": ".",
+        "capabilities": [{"class_name": node_class}],
+    }
+    return SimpleNamespace(
         plugins=["test_plugin"],
         nodes=[SimpleNamespace(class_name=node_class)],
     )
-    return cfg, [plugins_dir]
 
 
-def test_ensure_child_for_session_is_idempotent(tmp_path):
+def test_ensure_child_for_session_is_idempotent():
     sm = SessionManager()
     sid = sm.create_session()
-    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
+    cfg = _register_resolvable_plugin(sm, sid)
 
-    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
-    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
 
     assert first is second
     assert sm.get_session(sid).child_handle is first
 
 
-def test_ensure_child_respawns_when_child_has_exited(tmp_path):
+def test_ensure_child_respawns_when_child_has_exited():
     """A dead child handle is dropped and replaced, so the session recovers."""
     sm = SessionManager()
     sid = sm.create_session()
-    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
+    cfg = _register_resolvable_plugin(sm, sid)
 
-    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
     # Simulate a crash: terminate flips returncode away from None.
     first.terminate()
     assert first.returncode is not None
 
-    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
     assert second is not first
     assert second.returncode is None
     assert sm.get_session(sid).child_handle is second
 
 
-def test_ensure_child_records_runtime_base_dir_and_close_removes_it(tmp_path):
+def test_ensure_child_records_runtime_base_dir_and_close_removes_it():
     """ensure_child stamps the scratch root; close_session deletes the tree."""
     sm = SessionManager()
     sid = sm.create_session()
-    cfg, plugins_dirs = _resolvable_pipeline(tmp_path)
+    cfg = _register_resolvable_plugin(sm, sid)
 
-    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg, plugins_dirs)
+    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
     base = sm.get_session(sid).runtime_base_dir
     assert base is not None
     assert base.exists()
@@ -279,6 +274,73 @@ def test_forward_load_pipeline_malformed_config_bytes_is_invalid_argument(bad_by
     assert resp.success is False
     assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
     assert "pipeline config" in ctx.details()
+
+
+def test_forward_load_pipeline_unregistered_plugin_is_failed_precondition():
+    """A pipeline naming a plugin that was never LoadPlugin'd -> FAILED_PRECONDITION.
+
+    Resolution now runs against the session's client-pushed catalog, so a
+    pipeline that references an unregistered plugin fails the precondition
+    instead of silently scanning a server directory; the message points the
+    caller at LoadPlugin.
+    """
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    config_bytes = json.dumps(
+        {"plugins": ["ghost"], "nodes": [], "connections": []}
+    ).encode("utf-8")
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_bytes),
+        ),
+        ctx,
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "ghost" in ctx.details()
+    assert "LoadPlugin" in ctx.details()
+
+
+def test_forward_load_pipeline_forwards_data_module(monkeypatch):
+    """The ``data_module`` name on the request reaches the env composer."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ensure = MagicMock()
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", ensure)
+
+    orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=b"{}"),
+            data_module="cu3s",
+        ),
+        _InMemoryContext(),
+    )
+
+    assert ensure.call_args.kwargs["data_module"] == "cu3s"
+
+
+def test_forward_load_pipeline_without_data_module_passes_none(monkeypatch):
+    """An unset ``data_module`` (empty proto string) forwards as None, not ''."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ensure = MagicMock()
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", ensure)
+
+    orchestrator_bridge.forward_load_pipeline(
+        sm,
+        cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=sid,
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=b"{}"),
+        ),
+        _InMemoryContext(),
+    )
+
+    assert ensure.call_args.kwargs["data_module"] is None
 
 
 def test_forward_inference_without_child_is_failed_precondition():
@@ -390,10 +452,14 @@ def test_forward_restore_train_run_cleans_up_session_on_resolver_error(
     monkeypatch, tmp_path
 ):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["needs_this"]))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text(
+        "plugins: [needs_this]\nnodes: []\nconnections: []\n", encoding="utf-8"
+    )
     monkeypatch.setattr(
         "cuvis_ai_core.grpc.trainrun_service.TrainRunService.parse_trainrun_yaml",
-        lambda path: (fake_cfg, None),
+        lambda path: (fake_cfg, pl),
     )
     monkeypatch.setattr(
         orchestrator_bridge,
@@ -564,8 +630,10 @@ def test_forward_restore_train_run_bad_yaml_is_invalid_argument(monkeypatch, tmp
 
 def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_path):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
-    _patch_parse(monkeypatch, result=(fake_cfg, None))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
     monkeypatch.setattr(
         orchestrator_bridge,
         "ensure_child_for_session",
@@ -584,10 +652,12 @@ def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_pat
 
 def test_forward_restore_train_run_fills_parent_session_id(monkeypatch, tmp_path):
     sm = SessionManager()
-    fake_cfg = SimpleNamespace(pipeline=SimpleNamespace(plugins=["p"]))
-    _patch_parse(monkeypatch, result=(fake_cfg, None))
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
 
-    def _fake_ensure(session_manager, session_id, pipeline_config, plugins_dirs):
+    def _fake_ensure(session_manager, session_id, pipeline_config, data_module=None):
         handle = MagicMock()
         handle.stub.return_value.RestoreTrainRun.return_value = (
             cuvis_ai_pb2.RestoreTrainRunResponse(session_id="")

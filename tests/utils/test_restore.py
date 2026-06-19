@@ -6,87 +6,14 @@ import sys
 from pathlib import Path
 
 import pytest
-import torch
 
 import cuvis_ai_core.utils.restore as restore_mod
 from cuvis_ai_schemas.enums import ExecutionStage
-
-
-class _FakeDataset:
-    instances: list["_FakeDataset"] = []
-
-    def __init__(
-        self,
-        *,
-        cu3s_file_path: str,
-        processing_mode: str,
-        annotation_json_path: str | None,
-        measurement_indices: list[int] | None,
-    ) -> None:
-        self.cu3s_file_path = cu3s_file_path
-        self.processing_mode = processing_mode
-        self.annotation_json_path = annotation_json_path
-        self.measurement_indices = measurement_indices
-        self.samples = [
-            {"cube": torch.tensor([1.0], dtype=torch.float32)},
-            {"cube": torch.tensor([2.0], dtype=torch.float32)},
-        ]
-        self.__class__.instances.append(self)
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        return self.samples[idx]
-
-
-class _FakeTorchLayer:
-    def __init__(self) -> None:
-        self.eval_calls = 0
-
-    def eval(self) -> None:
-        self.eval_calls += 1
-
-
-class _FakeVideoNode:
-    def __init__(self) -> None:
-        self.output_video_path = "out.mp4"
-        self.close_calls = 0
-
-    def close(self) -> None:
-        self.close_calls += 1
-
-
-class _FakePipeline:
-    def __init__(self) -> None:
-        self.torch_layers = [_FakeTorchLayer()]
-        self.video_node = _FakeVideoNode()
-        self.nodes = [self.video_node, object()]
-        self.profiling_enabled: list[bool] = []
-        self.forward_calls: list[tuple[dict[str, torch.Tensor], object]] = []
-        self.summary_calls: list[tuple[ExecutionStage, int]] = []
-
-    def set_profiling(self, *, enabled: bool) -> None:
-        self.profiling_enabled.append(enabled)
-
-    def forward(self, *, batch: dict[str, torch.Tensor], context: object) -> dict:
-        self.forward_calls.append((batch, context))
-        return {}
-
-    def format_profiling_summary(
-        self,
-        *,
-        stage: ExecutionStage,
-        total_frames: int,
-    ) -> str:
-        self.summary_calls.append((stage, total_frames))
-        return "profiling-summary"
-
-    def get_input_specs(self) -> dict[str, str]:
-        return {"cube": "spec"}
-
-    def get_output_specs(self) -> dict[str, str]:
-        return {"node.output": "spec"}
+from tests.fixtures.restore_doubles import (
+    FakeRestoreDataModule,
+    FakeRestorePipeline,
+    RecordingTrainer,
+)
 
 
 def test_restore_module_imports() -> None:
@@ -101,15 +28,19 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    fake_pipeline = _FakePipeline()
+    fake_pipeline = FakeRestorePipeline()
     tqdm_calls: list[dict[str, object]] = []
 
     def _fake_tqdm(iterable, **kwargs):
         tqdm_calls.append(kwargs)
         return iterable
 
-    _FakeDataset.instances.clear()
-    monkeypatch.setattr(restore_mod, "SingleCu3sDataset", _FakeDataset)
+    FakeRestoreDataModule.instances.clear()
+
+    def _fake_build_data_module(registry, data_config, candidate_dirs):
+        return FakeRestoreDataModule(data_config)
+
+    monkeypatch.setattr(restore_mod, "_build_data_module", _fake_build_data_module)
     monkeypatch.setattr(restore_mod, "tqdm", _fake_tqdm)
     monkeypatch.setattr(
         restore_mod.CuvisPipeline,
@@ -120,18 +51,23 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     pipeline = restore_mod.restore_pipeline(
         pipeline_path=tmp_path / "pipeline.yaml",
         device="cpu",
-        cu3s_file_path=tmp_path / "sample.cu3s",
-        processing_mode="SpectralRadiance",
-        annotation_json_path=tmp_path / "sample.json",
-        measurement_indices=[0, 3],
+        data_module="cu3s",
+        data_args={
+            "cu3s_file_path": str(tmp_path / "sample.cu3s"),
+            "processing_mode": "SpectralRadiance",
+            "annotation_json_path": str(tmp_path / "sample.json"),
+        },
     )
 
     assert pipeline is fake_pipeline
-    assert len(_FakeDataset.instances) == 1
-    dataset = _FakeDataset.instances[0]
-    assert dataset.processing_mode == "SpectralRadiance"
-    assert dataset.annotation_json_path == str(tmp_path / "sample.json")
-    assert dataset.measurement_indices == [0, 3]
+    assert len(FakeRestoreDataModule.instances) == 1
+    datamodule = FakeRestoreDataModule.instances[0]
+    assert datamodule.data_config.data_module == "cu3s"
+    assert datamodule.data_config.params["processing_mode"] == "SpectralRadiance"
+    assert datamodule.data_config.params["annotation_json_path"] == str(
+        tmp_path / "sample.json"
+    )
+    assert datamodule.setup_stages == ["predict"]
 
     assert fake_pipeline.torch_layers[0].eval_calls == 1
     assert fake_pipeline.profiling_enabled == [True]
@@ -143,10 +79,10 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     )
     assert fake_pipeline.summary_calls == [(ExecutionStage.INFERENCE, 2)]
     assert fake_pipeline.video_node.close_calls == 1
-    assert tqdm_calls == [{"total": 2, "desc": "Inference", "unit": "frame"}]
+    assert tqdm_calls == [{"desc": "Inference", "unit": "batch"}]
 
 
-def test_restore_pipeline_cli_parses_measurement_indices_and_annotation_json(
+def test_restore_pipeline_cli_parses_data_module_and_data_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -162,24 +98,26 @@ def test_restore_pipeline_cli_parses_measurement_indices_and_annotation_json(
             "restore-pipeline",
             "--pipeline-path",
             "configs/pipeline.yaml",
-            "--cu3s-file-path",
-            "data/sample.cu3s",
-            "--annotation-json-path",
-            "data/sample.json",
-            "--measurement-indices",
-            "0, 2,5",
-            "--processing-mode",
-            "SpectralRadiance",
+            "--data-module",
+            "cu3s",
+            "--data-arg",
+            "cu3s_file_path=data/sample.cu3s",
+            "--data-arg",
+            "annotation_json_path=data/sample.json",
+            "--data-arg",
+            "processing_mode=SpectralRadiance",
         ],
     )
 
     restore_mod.restore_pipeline_cli()
 
     assert captured["pipeline_path"] == "configs/pipeline.yaml"
-    assert captured["cu3s_file_path"] == "data/sample.cu3s"
-    assert captured["annotation_json_path"] == "data/sample.json"
-    assert captured["measurement_indices"] == [0, 2, 5]
-    assert captured["processing_mode"] == "SpectralRadiance"
+    assert captured["data_module"] == "cu3s"
+    assert captured["data_args"] == {
+        "cu3s_file_path": "data/sample.cu3s",
+        "annotation_json_path": "data/sample.json",
+        "processing_mode": "SpectralRadiance",
+    }
 
 
 def test_restore_pipeline_rejects_removed_plugins_path_kwarg(
@@ -246,22 +184,6 @@ def test_discover_plugins_dirs_walks_up_and_appends_explicit(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-class _SpecPipeline:
-    """Fake pipeline exposing only what info-mode + visualize need."""
-
-    def __init__(self) -> None:
-        self.visualize_calls: list[dict] = []
-
-    def get_input_specs(self):
-        return {"cube": "spec"}
-
-    def get_output_specs(self):
-        return {"out": "spec"}
-
-    def visualize(self, *, format, output_path):
-        self.visualize_calls.append({"format": format, "output_path": output_path})
-
-
 def _write_no_plugin_pipeline(path: Path) -> None:
     path.write_text(
         "metadata:\n"
@@ -283,7 +205,7 @@ def _write_no_plugin_pipeline(path: Path) -> None:
 def test_restore_pipeline_info_mode_no_cu3s(monkeypatch, tmp_path: Path) -> None:
     pipeline_path = tmp_path / "pipe.yaml"
     _write_no_plugin_pipeline(pipeline_path)
-    fake = _SpecPipeline()
+    fake = FakeRestorePipeline()
     monkeypatch.setattr(
         restore_mod.CuvisPipeline,
         "load_pipeline",
@@ -309,7 +231,7 @@ def test_restore_pipeline_exports_visualization(
 ) -> None:
     pipeline_path = tmp_path / "pipe.yaml"
     _write_no_plugin_pipeline(pipeline_path)
-    fake = _SpecPipeline()
+    fake = FakeRestorePipeline()
     monkeypatch.setattr(
         restore_mod.CuvisPipeline,
         "load_pipeline",
@@ -327,13 +249,19 @@ def test_restore_pipeline_exports_visualization(
 # ---------------------------------------------------------------------------
 
 
-def _write_trainrun(tmp_path: Path, mock_experiment_dict: dict) -> Path:
+def _write_trainrun(
+    tmp_path: Path, mock_experiment_dict: dict, mock_pipeline_dict: dict
+) -> Path:
     import yaml
 
     cfg = dict(mock_experiment_dict)
     cfg["output_dir"] = str(tmp_path / "out")
     path = tmp_path / "run.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    # Materialise the pipeline the trainrun references (pipeline: pipeline.yaml).
+    (tmp_path / cfg["pipeline"]).write_text(
+        yaml.safe_dump(mock_pipeline_dict), encoding="utf-8"
+    )
     return path
 
 
@@ -343,48 +271,107 @@ def test_restore_trainrun_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_restore_trainrun_info_mode_builds_and_returns(
-    tmp_path: Path, mock_experiment_dict
+    tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
 ) -> None:
-    path = _write_trainrun(tmp_path, mock_experiment_dict)
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
     # info mode builds the pipeline (device != auto exercises the .to() move)
     # then prints specs and returns without touching data or trainers.
     assert restore_mod.restore_trainrun(path, mode="info", device="cpu") is None
 
 
-class _RecordingTrainer:
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
-        self.calls: list[str] = []
-
-    def fit(self) -> None:
-        self.calls.append("fit")
-
-    def validate(self) -> None:
-        self.calls.append("validate")
-
-    def test(self) -> None:
-        self.calls.append("test")
+_DS = object()  # sentinel: a non-None dataset is available
 
 
-class _FakeDataModule:
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
-
-    def setup(self, stage=None) -> None:
-        pass
-
-
-@pytest.mark.parametrize("mode", ["train", "validate", "test"])
+@pytest.mark.parametrize(
+    "mode,use_gradient,requires_fit,val_ds,test_ds",
+    [
+        # stat-only (no GradientTrainer), requires_initial_fit=True, val+test present
+        ("train", False, True, _DS, _DS),
+        # stat-only, no val or test dataset configured
+        ("train", False, False, None, None),
+        # gradient training with val+test; stat.fit() also runs (requires_fit=True)
+        ("train", True, True, _DS, _DS),
+        # validate mode - stat only
+        ("validate", False, True, None, None),
+        # validate mode - gradient
+        ("validate", True, False, None, None),
+        # test mode - stat only
+        ("test", False, True, None, None),
+        # test mode - gradient
+        ("test", True, False, None, None),
+    ],
+)
 def test_restore_trainrun_execution_modes_with_mocked_trainers(
-    monkeypatch, tmp_path: Path, mock_experiment_dict, mode
+    monkeypatch,
+    tmp_path: Path,
+    mock_experiment_dict,
+    statistical_experiment_dict,
+    mock_pipeline_dict,
+    mode,
+    use_gradient,
+    requires_fit,
+    val_ds,
+    test_ds,
 ) -> None:
-    monkeypatch.setattr(restore_mod, "SingleCu3sDataModule", _FakeDataModule)
-    monkeypatch.setattr(restore_mod, "StatisticalTrainer", _RecordingTrainer)
-    monkeypatch.setattr(restore_mod, "GradientTrainer", _RecordingTrainer)
+    """Dispatch test: proves mode -> which trainer methods fire, and that save_to_file
+    is only called in train mode.  No real training; all heavy components are patched.
+    """
+    exp_dict = mock_experiment_dict if use_gradient else statistical_experiment_dict
+    path = _write_trainrun(tmp_path, exp_dict, mock_pipeline_dict)
 
-    path = _write_trainrun(tmp_path, mock_experiment_dict)
-    # Should run end-to-end against the fake datamodule/trainers (no data).
-    assert restore_mod.restore_trainrun(path, mode=mode, device="cpu") is None
+    fake_pipeline = FakeRestorePipeline(node_fits=(requires_fit,))
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: fake_pipeline,
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=val_ds, test_ds=test_ds),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+
+    restore_mod.restore_trainrun(path, mode=mode, device="cpu")
+
+    # stat_trainer is always the first RecordingTrainer created
+    stat_trainer = RecordingTrainer.all_instances[0]
+    grad_trainer = RecordingTrainer.all_instances[1] if use_gradient else None
+
+    if mode == "train":
+        assert fake_pipeline.save_to_file_calls, "save_to_file must fire in train mode"
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        if use_gradient:
+            assert grad_trainer is not None
+            assert "fit" in grad_trainer.calls
+            if val_ds is not None:
+                assert "validate" in grad_trainer.calls
+            if test_ds is not None:
+                assert "test" in grad_trainer.calls
+        else:
+            if val_ds is not None:
+                assert "validate" in stat_trainer.calls
+            if test_ds is not None:
+                assert "test" in stat_trainer.calls
+    elif mode == "validate":
+        assert not fake_pipeline.save_to_file_calls, (
+            "save_to_file must NOT fire in validate mode"
+        )
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        active = grad_trainer if use_gradient else stat_trainer
+        assert "validate" in active.calls
+    elif mode == "test":
+        assert not fake_pipeline.save_to_file_calls, (
+            "save_to_file must NOT fire in test mode"
+        )
+        if requires_fit:
+            assert "fit" in stat_trainer.calls
+        active = grad_trainer if use_gradient else stat_trainer
+        assert "test" in active.calls
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 import json
 
+from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
+
 from cuvis_ai_core.training.config import (
     DataConfig,
-    PipelineConfig,
     TrainingConfig,
     TrainRunConfig,
 )
@@ -12,17 +13,25 @@ def test_complete_trainrun_serialization():
     """Test complete train run config serialization."""
     trainrun = TrainRunConfig(
         name="test_run",
-        pipeline=PipelineConfig(
-            metadata={"name": "test_pipeline"},
-            nodes=[{"name": "node1", "class_name": "test.TestNode", "hparams": {}}],
-            connections=[
-                {"source": "node1.outputs.data", "target": "node1.inputs.data"}
-            ],
-        ),
+        pipeline="anomaly/adaclip/adaclip_baseline.yaml",
         data=DataConfig(
-            cu3s_file_path="/path/to/data.cu3s",
-            train_ids=[1, 2, 3],
-            val_ids=[4, 5],
+            splits=DataSplitConfig(
+                train=[
+                    Selector(
+                        kind=SelectorKind.FILE_INDICES,
+                        source="/path/to/data.cu3s",
+                        ids=[1, 2, 3],
+                    )
+                ],
+                val=[
+                    Selector(
+                        kind=SelectorKind.FILE_INDICES,
+                        source="/path/to/data.cu3s",
+                        ids=[4, 5],
+                    )
+                ],
+            ),
+            params={"cu3s_file_path": "/path/to/data.cu3s"},
         ),
         training=TrainingConfig(max_epochs=10),
     )
@@ -33,10 +42,10 @@ def test_complete_trainrun_serialization():
     restored = TrainRunConfig.model_validate_json(json_str)
 
     assert restored.name == trainrun.name
-    assert restored.pipeline.metadata is not None
-    assert trainrun.pipeline.metadata is not None
-    assert restored.pipeline.metadata.name == trainrun.pipeline.metadata.name
-    assert restored.data.train_ids == trainrun.data.train_ids
+    assert restored.pipeline == trainrun.pipeline
+    assert restored.data.splits is not None
+    assert trainrun.data.splits is not None
+    assert restored.data.splits.train[0].ids == trainrun.data.splits.train[0].ids
     assert json_dict["training"]["max_epochs"] == 10
 
 

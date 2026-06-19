@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-from cuvis_ai_schemas.plugin import LocalPluginConfig
+from cuvis_ai_schemas.plugin import LocalPluginSource
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline import (
     NodeConfig,
@@ -21,29 +21,27 @@ def _write_manifest(path: Path, body: str) -> None:
 
 @pytest.fixture
 def plugins_dir(tmp_path: Path) -> Path:
-    """A plugins/ dir holding two per-plugin manifests."""
+    """A plugins/ dir holding two bare per-plugin manifests."""
     pdir = tmp_path / "plugins"
     pdir.mkdir()
     _write_manifest(
         pdir / "cuvis_ai_builtin.yaml",
         """
-        plugins:
-          cuvis_ai_builtin:
-            path: "../.."
-            provides:
-              - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
-              - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
+        name: cuvis_ai_builtin
+        path: "../.."
+        capabilities:
+          - class_name: cuvis_ai.node.anomaly.rx_detector.RXGlobal
+          - class_name: cuvis_ai.node.normalization.MinMaxNormalizer
         """,
     )
     _write_manifest(
         pdir / "adaclip.yaml",
         """
-        plugins:
-          adaclip:
-            repo: "https://github.com/example/adaclip.git"
-            tag: "v0.1.2"
-            provides:
-              - class_name: cuvis_ai_adaclip.node.AdaCLIPDetector
+        name: adaclip
+        repo: "https://github.com/example/adaclip.git"
+        tag: "v0.1.2"
+        capabilities:
+          - class_name: cuvis_ai_adaclip.node.AdaCLIPDetector
         """,
     )
     return pdir
@@ -60,19 +58,19 @@ def _pipeline_with(class_names: list[str], plugins=None) -> PipelineConfig:
 
 
 # ---------------------------------------------------------------------------
-# Declared plugins (Phase 1)
+# Declared plugins
 # ---------------------------------------------------------------------------
 
 
 def test_declared_bare_name(plugins_dir: Path):
-    """Bare string in plugins: resolves against the catalog."""
+    """Bare string in plugins: resolves against the catalog by manifest.name."""
     pipeline = _pipeline_with(
         ["cuvis_ai.node.anomaly.rx_detector.RXGlobal"],
         plugins=["cuvis_ai_builtin"],
     )
     resolved = resolve_pipeline_plugins(pipeline, [plugins_dir])
     assert set(resolved) == {"cuvis_ai_builtin"}
-    assert isinstance(resolved["cuvis_ai_builtin"], LocalPluginConfig)
+    assert isinstance(resolved["cuvis_ai_builtin"], LocalPluginSource)
 
 
 def test_declared_unknown_bare_name(plugins_dir: Path):
@@ -85,7 +83,7 @@ def test_declared_unknown_bare_name(plugins_dir: Path):
 
 
 def test_declared_same_name_identical_duplicate_ok(plugins_dir: Path):
-    """Identical duplicates are silently deduped."""
+    """Duplicate references in a pipeline's plugins: list dedupe to one entry."""
     pipeline = _pipeline_with(
         ["cuvis_ai_adaclip.node.AdaCLIPDetector"],
         plugins=["adaclip", "adaclip"],
@@ -108,7 +106,7 @@ def test_declared_missing_class_in_resolved_set(plugins_dir: Path):
 
 
 # ---------------------------------------------------------------------------
-# Auto-resolution (Phase 2)
+# Auto-resolution
 # ---------------------------------------------------------------------------
 
 
@@ -143,21 +141,19 @@ def test_auto_resolve_ambiguous(tmp_path: Path):
     _write_manifest(
         pdir / "a.yaml",
         """
-        plugins:
-          a:
-            path: "."
-            provides:
-              - class_name: pkg.module.Shared
+        name: a
+        path: "."
+        capabilities:
+          - class_name: pkg.module.Shared
         """,
     )
     _write_manifest(
         pdir / "b.yaml",
         """
-        plugins:
-          b:
-            path: "."
-            provides:
-              - class_name: pkg.module.Shared
+        name: b
+        path: "."
+        capabilities:
+          - class_name: pkg.module.Shared
         """,
     )
     pipeline = _pipeline_with(["pkg.module.Shared"])
@@ -177,8 +173,8 @@ def test_auto_resolve_empty_catalog():
 # ---------------------------------------------------------------------------
 
 
-def test_multi_dir_override_logged(tmp_path: Path):
-    """Later plugins dirs override earlier ones on plugin-name collision."""
+def test_multi_dir_duplicate_name_errors(tmp_path: Path):
+    """The same plugin name in two dirs is a hard error (no silent last-wins)."""
     old_target = tmp_path / "old_plugin"
     old_target.mkdir()
     new_target = tmp_path / "new_plugin"
@@ -188,11 +184,10 @@ def test_multi_dir_override_logged(tmp_path: Path):
     _write_manifest(
         dir1 / "p.yaml",
         f"""
-        plugins:
-          p:
-            path: {old_target.as_posix()!r}
-            provides:
-              - class_name: pkg.X
+        name: p
+        path: {old_target.as_posix()!r}
+        capabilities:
+          - class_name: pkg.X
         """,
     )
     dir2 = tmp_path / "dir2"
@@ -200,16 +195,15 @@ def test_multi_dir_override_logged(tmp_path: Path):
     _write_manifest(
         dir2 / "p.yaml",
         f"""
-        plugins:
-          p:
-            path: {new_target.as_posix()!r}
-            provides:
-              - class_name: pkg.X
+        name: p
+        path: {new_target.as_posix()!r}
+        capabilities:
+          - class_name: pkg.X
         """,
     )
     pipeline = _pipeline_with(["pkg.X"], plugins=["p"])
-    resolved = resolve_pipeline_plugins(pipeline, [dir1, dir2])
-    assert Path(resolved["p"].path) == new_target.resolve()
+    with pytest.raises(ValueError, match="Duplicate plugin name 'p'"):
+        resolve_pipeline_plugins(pipeline, [dir1, dir2])
 
 
 def test_nonexistent_dirs_silently_skipped(plugins_dir: Path):

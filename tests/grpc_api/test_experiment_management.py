@@ -4,7 +4,6 @@ Optimized to minimize redundant training by using module-scoped shared fixtures
 and reusing trained sessions across multiple tests where appropriate.
 """
 
-import json
 from pathlib import Path
 
 import grpc
@@ -14,14 +13,9 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import TrainRunConfig
+from tests.fixtures.grpc import pipeline_bytes_from_path as _pipeline_bytes_from_path
 
 DEFAULT_CHANNELS = 61
-
-
-def _pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
-    """Load a pipeline YAML and return JSON-encoded bytes for LoadPipeline RPC."""
-    pipeline_dict = yaml.safe_load(Path(pipeline_path).read_text())
-    return json.dumps(pipeline_dict).encode("utf-8")
 
 
 # ============================================================================
@@ -303,18 +297,22 @@ class TestRestoreTrainRun:
         """Test error when trainrun references invalid pipeline (empty nodes)."""
         bad_trainrun_path = tmp_path / "bad_trainrun.yaml"
         bad_pipeline = mock_pipeline_dict.copy()
-        bad_pipeline["nodes"] = []  # Empty nodes list will cause issues
+        bad_pipeline["nodes"] = []  # Empty nodes + dangling connections -> build fails
+        bad_pipeline_path = tmp_path / "bad_pipeline.yaml"
+        with open(bad_pipeline_path, "w") as f:
+            yaml.dump(bad_pipeline, f)
 
         bad_trainrun = {
             "name": "bad_trainrun",
-            "pipeline": bad_pipeline,
+            "pipeline": "bad_pipeline.yaml",
             "data": {
-                "cu3s_file_path": "/data/test.cu3s",
+                "data_module": "cu3s",
                 "batch_size": 4,
-                "processing_mode": "Reflectance",
-                "train_ids": [],
-                "val_ids": [],
-                "test_ids": [],
+                "splits": {"train": [], "val": [], "test": []},
+                "params": {
+                    "cu3s_file_path": "/data/test.cu3s",
+                    "processing_mode": "Reflectance",
+                },
             },
             "training": {
                 "seed": 42,

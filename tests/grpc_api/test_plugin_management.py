@@ -3,7 +3,7 @@
 import pytest
 
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
-from cuvis_ai_schemas.plugin import PluginManifest, LocalPluginConfig
+from tests.fixtures.grpc import manifest_config_bytes as _manifest_config_bytes
 
 
 @pytest.mark.slow
@@ -39,12 +39,13 @@ class WorkflowTestNode(Node):
         create_plugin_pyproject(plugin_dir)
 
         # Step 3: Load plugin via gRPC
-        manifest = PluginManifest(
-            plugins={
-                "workflow_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "workflow_plugin.node.WorkflowTestNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "workflow_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [
+                    {"class_name": "workflow_plugin.node.WorkflowTestNode"}
+                ],
             }
         )
 
@@ -52,18 +53,16 @@ class WorkflowTestNode(Node):
 
         sys.path.insert(0, str(tmp_path))
         try:
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            load_resp = grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
 
             # Verify plugin loaded successfully
-            assert "workflow_plugin" in load_resp.registered_plugins
-            assert len(load_resp.failed_plugins) == 0
+            assert load_resp.registered_plugin == "workflow_plugin"
+            assert load_resp.error == ""
 
             # Step 4: List loaded plugins
             list_resp = grpc_stub.ListLoadedPlugins(
@@ -81,9 +80,9 @@ class WorkflowTestNode(Node):
             assert info_resp.plugin.name == "workflow_plugin"
             assert info_resp.plugin.type == "local"
 
-            # Step 6: List available nodes — the plugin's inline catalog
-            # (its manifest ``provides`` list) surfaces immediately after
-            # LoadPlugins; no plugin import is needed. The proto NodeInfo
+            # Step 6: List available nodes — the plugin's declared
+            # capabilities (its manifest ``capabilities`` list) surface
+            # immediately after LoadPlugin; no plugin import is needed. The proto NodeInfo
             # carries the short class name plus the FQCN as full_path.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
@@ -91,7 +90,9 @@ class WorkflowTestNode(Node):
             node_names = [node.class_name for node in nodes_resp.nodes]
             assert "WorkflowTestNode" in node_names
             workflow_node = next(
-                node for node in nodes_resp.nodes if node.class_name == "WorkflowTestNode"
+                node
+                for node in nodes_resp.nodes
+                if node.class_name == "WorkflowTestNode"
             )
             assert workflow_node.source == "plugin"
             assert workflow_node.full_path == "workflow_plugin.node.WorkflowTestNode"
@@ -105,7 +106,7 @@ class WorkflowTestNode(Node):
             sys.path.remove(str(tmp_path))
 
     def test_load_multiple_plugins(self, grpc_stub, tmp_path, create_plugin_pyproject):
-        """Test loading multiple plugins in single request."""
+        """Test loading multiple plugins via one LoadPlugin call per manifest."""
         # Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
@@ -147,38 +148,41 @@ class Plugin2Node(Node):
 """)
         create_plugin_pyproject(plugin2_dir)
 
-        # Create manifest with both plugins
-        manifest = PluginManifest(
-            plugins={
-                "plugin1": LocalPluginConfig(
-                    path=str(plugin1_dir),
-                    provides=[{"class_name": "plugin1.node.Plugin1Node"}],
-                ),
-                "plugin2": LocalPluginConfig(
-                    path=str(plugin2_dir),
-                    provides=[{"class_name": "plugin2.node.Plugin2Node"}],
-                ),
-            }
-        )
+        # One manifest per LoadPlugin call.
+        manifests = [
+            {
+                "name": "plugin1",
+                "path": str(plugin1_dir),
+                "capabilities": [{"class_name": "plugin1.node.Plugin1Node"}],
+            },
+            {
+                "name": "plugin2",
+                "path": str(plugin2_dir),
+                "capabilities": [{"class_name": "plugin2.node.Plugin2Node"}],
+            },
+        ]
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            # Load both plugins
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
-                    session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+            # Load both plugins, one LoadPlugin call each.
+            registered = []
+            for manifest in manifests:
+                load_resp = grpc_stub.LoadPlugin(
+                    cuvis_ai_pb2.LoadPluginRequest(
+                        session_id=session_id,
+                        manifest=cuvis_ai_pb2.PluginManifest(
+                            config_bytes=_manifest_config_bytes(manifest)
+                        ),
+                    )
                 )
-            )
+                assert load_resp.error == ""
+                registered.append(load_resp.registered_plugin)
 
             # Verify both loaded
-            assert "plugin1" in load_resp.registered_plugins
-            assert "plugin2" in load_resp.registered_plugins
-            assert len(load_resp.failed_plugins) == 0
+            assert "plugin1" in registered
+            assert "plugin2" in registered
 
             # Verify both in list
             list_resp = grpc_stub.ListLoadedPlugins(
@@ -227,12 +231,11 @@ class IsolatedNode(Node):
         create_plugin_pyproject(plugin_dir)
 
         # Load plugin only in session1
-        manifest = PluginManifest(
-            plugins={
-                "isolated_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "isolated_plugin.node.IsolatedNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "isolated_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [{"class_name": "isolated_plugin.node.IsolatedNode"}],
             }
         )
 
@@ -240,15 +243,13 @@ class IsolatedNode(Node):
 
         sys.path.insert(0, str(tmp_path))
         try:
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            load_resp = grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session1_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
-            assert "isolated_plugin" in load_resp.registered_plugins
+            assert load_resp.registered_plugin == "isolated_plugin"
 
             # Verify session1 has the plugin
             list1_resp = grpc_stub.ListLoadedPlugins(
@@ -263,7 +264,7 @@ class IsolatedNode(Node):
             assert len(list2_resp.plugins) == 0
 
             # Session1's inline catalog surfaces the plugin node in
-            # ListAvailableNodes immediately after LoadPlugins (no import).
+            # ListAvailableNodes immediately after LoadPlugin (no import).
             # Session2 never registered the plugin, so its catalog — and
             # therefore its ListAvailableNodes response — must not include it.
             nodes1_resp = grpc_stub.ListAvailableNodes(
@@ -315,12 +316,11 @@ class CleanupNode(Node):
 """)
         create_plugin_pyproject(plugin_dir)
 
-        manifest = PluginManifest(
-            plugins={
-                "cleanup_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "cleanup_plugin.node.CleanupNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "cleanup_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [{"class_name": "cleanup_plugin.node.CleanupNode"}],
             }
         )
 
@@ -329,15 +329,13 @@ class CleanupNode(Node):
         sys.path.insert(0, str(tmp_path))
         try:
             # Load plugin
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            load_resp = grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
-            assert "cleanup_plugin" in load_resp.registered_plugins
+            assert load_resp.registered_plugin == "cleanup_plugin"
 
             # Close session
             close_resp = grpc_stub.CloseSession(
@@ -400,17 +398,16 @@ class NodeC(Node):
 """)
         create_plugin_pyproject(plugin_dir)
 
-        # Create manifest
-        manifest = PluginManifest(
-            plugins={
-                "multi_node_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[
-                        {"class_name": "multi_node_plugin.nodes.NodeA"},
-                        {"class_name": "multi_node_plugin.nodes.NodeB"},
-                        {"class_name": "multi_node_plugin.nodes.NodeC"},
-                    ],
-                )
+        # Create config
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "multi_node_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [
+                    {"class_name": "multi_node_plugin.nodes.NodeA"},
+                    {"class_name": "multi_node_plugin.nodes.NodeB"},
+                    {"class_name": "multi_node_plugin.nodes.NodeC"},
+                ],
             }
         )
 
@@ -419,15 +416,13 @@ class NodeC(Node):
         sys.path.insert(0, str(tmp_path))
         try:
             # Load plugin
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            load_resp = grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
-            assert "multi_node_plugin" in load_resp.registered_plugins
+            assert load_resp.registered_plugin == "multi_node_plugin"
 
             # Get plugin info
             info_resp = grpc_stub.GetPluginInfo(
@@ -435,14 +430,14 @@ class NodeC(Node):
                     session_id=session_id, plugin_name="multi_node_plugin"
                 )
             )
-            assert len(info_resp.plugin.provides) == 3
-            assert "multi_node_plugin.nodes.NodeA" in info_resp.plugin.provides
-            assert "multi_node_plugin.nodes.NodeB" in info_resp.plugin.provides
-            assert "multi_node_plugin.nodes.NodeC" in info_resp.plugin.provides
+            assert len(info_resp.plugin.capabilities) == 3
+            assert "multi_node_plugin.nodes.NodeA" in info_resp.plugin.capabilities
+            assert "multi_node_plugin.nodes.NodeB" in info_resp.plugin.capabilities
+            assert "multi_node_plugin.nodes.NodeC" in info_resp.plugin.capabilities
 
             # The plugin's inline catalog provides all three classes, so
             # ListAvailableNodes surfaces every one immediately after
-            # LoadPlugins (no import). Proto NodeInfo carries the short
+            # LoadPlugin (no import). Proto NodeInfo carries the short
             # class name; the FQCN lives in full_path.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
@@ -463,36 +458,42 @@ class NodeC(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_error_handling_invalid_plugin_path(self, grpc_stub):
-        """Test error handling when plugin path is invalid."""
+    def test_error_handling_invalid_manifest_entry(self, grpc_stub):
+        """LoadPlugin reports a manifest that fails schema validation.
+
+        LoadPlugin only runs Pydantic validation on the manifest; a
+        nonexistent *path* still validates (it is checked at install time
+        in the LoadPipeline path), so the failure surface here is a manifest
+        that violates the schema. A malformed ``class_name`` (not a
+        fully-qualified dotted path) is rejected in-band via the response
+        ``error`` field.
+        """
         # Create session
         session_resp = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest())
         session_id = session_resp.session_id
 
-        # Create manifest with invalid path
-        manifest = PluginManifest(
-            plugins={
-                "invalid_plugin": LocalPluginConfig(
-                    path="/nonexistent/invalid/path",
-                    provides=[{"class_name": "invalid.node.InvalidNode"}],
-                )
+        # Create config whose capability class_name is malformed (no dot).
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "invalid_plugin",
+                "path": "/nonexistent/invalid/path",
+                "capabilities": [{"class_name": "NotAFullyQualifiedName"}],
             }
         )
 
         try:
             # Try to load plugin
-            load_resp = grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            load_resp = grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
 
-            # Should report failure
-            assert "invalid_plugin" in load_resp.failed_plugins
-            assert len(load_resp.registered_plugins) == 0
+            # Should report failure in-band.
+            assert load_resp.error != ""
+            assert "invalid_plugin" in load_resp.error
+            assert load_resp.registered_plugin == ""
 
             # Cleanup
             grpc_stub.CloseSession(
@@ -551,12 +552,11 @@ class PluginNode(Node):
 """)
         create_plugin_pyproject(plugin_dir)
 
-        manifest = PluginManifest(
-            plugins={
-                "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "test_plugin.node.PluginNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "test_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [{"class_name": "test_plugin.node.PluginNode"}],
             }
         )
 
@@ -565,19 +565,17 @@ class PluginNode(Node):
         sys.path.insert(0, str(tmp_path))
         try:
             # Load plugin
-            grpc_stub.LoadPlugins(
-                cuvis_ai_pb2.LoadPluginsRequest(
+            grpc_stub.LoadPlugin(
+                cuvis_ai_pb2.LoadPluginRequest(
                     session_id=session_id,
-                    manifest=cuvis_ai_pb2.PluginManifest(
-                        config_bytes=manifest.model_dump_json().encode()
-                    ),
+                    manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
                 )
             )
 
             # ListAvailableNodes returns both built-ins and the plugin's
-            # inline-catalog nodes. The plugin entry's ``provides`` list is
-            # the catalog, so LoadPlugins alone is enough for the plugin
-            # node to surface — no import, no LoadPipeline needed.
+            # declared-capability nodes. The plugin entry's ``capabilities``
+            # list is the catalog, so LoadPlugin alone is enough for the
+            # plugin node to surface — no import, no LoadPipeline needed.
             nodes_resp = grpc_stub.ListAvailableNodes(
                 cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
             )
@@ -589,7 +587,7 @@ class PluginNode(Node):
             plugin_nodes = [n for n in nodes_resp.nodes if n.class_name == "PluginNode"]
             assert len(plugin_nodes) == 1, (
                 "The plugin's inline catalog should surface its node in "
-                "ListAvailableNodes immediately after LoadPlugins."
+                "ListAvailableNodes immediately after LoadPlugin."
             )
             assert plugin_nodes[0].source == "plugin"
             assert plugin_nodes[0].full_path == "test_plugin.node.PluginNode"

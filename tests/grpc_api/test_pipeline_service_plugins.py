@@ -6,6 +6,11 @@ the child runs after :func:`InitializeSession` registers plugins. These
 tests drive the parent's ``forward_load_pipeline`` through the in-memory
 orchestrator fixture and assert on the resolver-error surface that lands
 on the gRPC context.
+
+The orchestrator resolves a pipeline's ``plugins:`` against the session's
+client-pushed ``registered_plugins`` (populated by ``LoadPlugin``), not a
+server-side directory scan, so each test registers the manifests it needs
+up front with :func:`_register_plugin`.
 """
 
 from __future__ import annotations
@@ -65,16 +70,27 @@ def _make_plugin_files(
     return f"{plugin_name}.node.{class_name}"
 
 
-def _write_catalog_manifest(plugins_dir: Path, plugin_name: str, plugin_dir: Path, fqcn: str) -> None:
-    """Write a single-plugin manifest YAML into the catalog directory."""
-    plugins_dir.mkdir(parents=True, exist_ok=True)
-    (plugins_dir / f"{plugin_name}.yaml").write_text(
-        f"plugins:\n"
-        f"  {plugin_name}:\n"
-        f"    path: {plugin_dir.as_posix()!r}\n"
-        f"    provides:\n"
-        f"      - class_name: {fqcn}\n"
-    )
+def _register_plugin(
+    session_manager: SessionManager,
+    session_id: str,
+    *,
+    plugin_name: str,
+    fqcn: str,
+    path: str = ".",
+) -> None:
+    """Register one plugin into the session catalog, exactly as ``LoadPlugin`` does.
+
+    The orchestrator resolves a pipeline's ``plugins:`` against the session's
+    client-pushed ``registered_plugins`` (no directory scan), so a test must
+    register the manifest first. Resolution reads only the manifest's
+    ``capabilities`` class names; the in-memory spawner ignores ``path``.
+    """
+    session = session_manager.get_session(session_id)
+    session.registered_plugins[plugin_name] = {
+        "name": plugin_name,
+        "path": path,
+        "capabilities": [{"class_name": fqcn}],
+    }
 
 
 class TestLoadPipelinePluginResolution:
@@ -93,19 +109,10 @@ class TestLoadPipelinePluginResolution:
                 pass
         NodeRegistry.clear()
 
-    def _session_with_search_path(self, search_path: Path) -> str:
-        session_id = self.session_manager.create_session()
-        self.session_manager.set_search_paths(
-            session_id,
-            [str(search_path)],
-            append=False,
-        )
-        return session_id
-
-    def test_declared_plugins_materialise_only_what_is_listed(
+    def test_resolves_only_the_plugins_listed_in_the_pipeline(
         self, tmp_path, create_plugin_pyproject
     ):
-        """plugins: declares one plugin → only that one lands on session.registered_plugins."""
+        """plugins: lists one of two registered plugins → only that one is resolved."""
         wanted_plugin = tmp_path / "wanted_plugin"
         wanted_fqcn = _make_plugin_files(
             plugin_root=wanted_plugin,
@@ -113,23 +120,23 @@ class TestLoadPipelinePluginResolution:
             class_name="WantedNode",
             create_plugin_pyproject=create_plugin_pyproject,
         )
-        other_plugin = tmp_path / "other_plugin"
-        _make_plugin_files(
-            plugin_root=other_plugin,
-            plugin_name="other_plugin",
-            class_name="OtherNode",
-            create_plugin_pyproject=create_plugin_pyproject,
+
+        session_id = self.session_manager.create_session()
+        # The client pushed both plugins to the session catalog via LoadPlugin.
+        _register_plugin(
+            self.session_manager,
+            session_id,
+            plugin_name="wanted_plugin",
+            fqcn=wanted_fqcn,
+            path=wanted_plugin.as_posix(),
         )
-        plugins_dir = tmp_path / "configs" / "plugins"
-        _write_catalog_manifest(plugins_dir, "wanted_plugin", wanted_plugin, wanted_fqcn)
-        _write_catalog_manifest(
-            plugins_dir,
-            "other_plugin",
-            other_plugin,
-            "other_plugin.node.OtherNode",
+        _register_plugin(
+            self.session_manager,
+            session_id,
+            plugin_name="other_plugin",
+            fqcn="other_plugin.node.OtherNode",
         )
 
-        session_id = self._session_with_search_path(tmp_path / "configs")
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
             pipeline=cuvis_ai_pb2.PipelineConfig(
@@ -150,46 +157,36 @@ class TestLoadPipelinePluginResolution:
 
         assert response.success
         session = self.session_manager.get_session(session_id)
-        # Parent-side mirror reflects exactly what the orchestrator resolved.
+        # Both stay registered (the client pushed both); only the plugin the
+        # pipeline listed is resolved/materialised for this run.
         assert "wanted_plugin" in session.registered_plugins
-        assert "other_plugin" not in session.registered_plugins
-        # The orchestrator stashed the resolved plugin dict alongside the
-        # child handle so the same set is forwarded to InitializeSession.
+        assert "other_plugin" in session.registered_plugins
         assert "wanted_plugin" in (session.resolved_plugins or {})
         assert "other_plugin" not in (session.resolved_plugins or {})
 
-    def test_missing_plugins_field_returns_invalid_argument(
-        self, tmp_path, create_plugin_pyproject
-    ):
-        """Pipelines without ``plugins:`` are rejected with INVALID_ARGUMENT
+    def test_missing_plugins_field_returns_invalid_argument(self):
+        """A pipeline that omits ``plugins:`` is rejected with INVALID_ARGUMENT
         and a fix-it message pointing at suggest-plugins-fix."""
-        plugin_dir = tmp_path / "auto_plugin"
-        fqcn = _make_plugin_files(
-            plugin_root=plugin_dir,
+        fqcn = "auto_plugin.node.AutoNode"
+        session_id = self.session_manager.create_session()
+        _register_plugin(
+            self.session_manager,
+            session_id,
             plugin_name="auto_plugin",
-            class_name="AutoNode",
-            create_plugin_pyproject=create_plugin_pyproject,
+            fqcn=fqcn,
         )
-        plugins_dir = tmp_path / "configs" / "plugins"
-        _write_catalog_manifest(plugins_dir, "auto_plugin", plugin_dir, fqcn)
-
-        session_id = self._session_with_search_path(tmp_path / "configs")
 
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
             pipeline=cuvis_ai_pb2.PipelineConfig(
-                # No plugins field — resolver hard-fails.
+                # No plugins field — the resolver hard-fails.
                 config_bytes=_make_pipeline_config_bytes(node_class_name=fqcn),
             ),
         )
 
-        sys.path.insert(0, str(tmp_path))
-        try:
-            response = orchestrator_bridge.forward_load_pipeline(
-                self.session_manager, request, self.context
-            )
-        finally:
-            sys.path.remove(str(tmp_path))
+        response = orchestrator_bridge.forward_load_pipeline(
+            self.session_manager, request, self.context
+        )
 
         assert not response.success
         self.context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
@@ -197,21 +194,15 @@ class TestLoadPipelinePluginResolution:
         assert "mandatory 'plugins:' field" in details_call
         assert "suggest-plugins-fix" in details_call
 
-    def test_missing_class_in_declared_set_raises_invalid_argument(
-        self, tmp_path, create_plugin_pyproject
-    ):
+    def test_missing_class_in_declared_set_raises_invalid_argument(self):
         """plugins: declares a plugin that does not provide the pipeline's class_name."""
-        plugin_dir = tmp_path / "p"
-        fqcn = _make_plugin_files(
-            plugin_root=plugin_dir,
+        session_id = self.session_manager.create_session()
+        _register_plugin(
+            self.session_manager,
+            session_id,
             plugin_name="p",
-            class_name="PNode",
-            create_plugin_pyproject=create_plugin_pyproject,
+            fqcn="p.node.PNode",
         )
-        plugins_dir = tmp_path / "configs" / "plugins"
-        _write_catalog_manifest(plugins_dir, "p", plugin_dir, fqcn)
-
-        session_id = self._session_with_search_path(tmp_path / "configs")
 
         request = cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,

@@ -1,5 +1,6 @@
 """Centralized session management fixtures for gRPC tests."""
 
+import json
 import logging
 import tempfile
 import time
@@ -13,10 +14,44 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import DataConfig, TrainRunConfig
+from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
 
 # Configure logging for session management
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# Bundled per-plugin manifests this repo's own pipelines reference (e.g.
+# cuvis_ai_test_nodes for the mock-node configs under configs/pipeline).
+_PLUGINS_DIR = Path(__file__).resolve().parents[2] / "configs" / "plugins"
+
+
+def _register_pipeline_plugins(
+    grpc_stub: Any, session_id: str, pipeline_config_bytes: bytes
+) -> None:
+    """Register the plugins a pipeline declares, as a real client would.
+
+    ``LoadPipeline`` resolves a pipeline's ``plugins:`` against the session's
+    client-pushed catalog (``LoadPlugin``), not a server-side directory scan,
+    so every declared plugin must be registered first. Each bundled manifest
+    in ``configs/plugins`` is sent with its local ``path`` resolved to absolute
+    (the server rejects a client-relative path over gRPC).
+    """
+    config = json.loads(pipeline_config_bytes)
+    for name in config.get("plugins") or []:
+        manifest_path = _PLUGINS_DIR / f"{name}.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(manifest, dict) and "repo" not in manifest:
+            raw_path = Path(manifest.get("path", "."))
+            if not raw_path.is_absolute():
+                manifest["path"] = str((manifest_path.parent / raw_path).resolve())
+        grpc_stub.LoadPlugin(
+            cuvis_ai_pb2.LoadPluginRequest(
+                session_id=session_id,
+                manifest=cuvis_ai_pb2.PluginManifest(
+                    config_bytes=json.dumps(manifest).encode("utf-8")
+                ),
+            )
+        )
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -178,14 +213,22 @@ def trained_pipeline_session(
         assert load_response.success
 
         # Create data config for statistical training
+        def _fi(ids):
+            return [
+                Selector(kind=SelectorKind.FILE_INDICES, source=str(cu3s_file), ids=ids)
+            ]
+
         data_config = DataConfig(
-            cu3s_file_path=str(cu3s_file),
-            annotation_json_path=str(json_file),
-            train_ids=[0, 1, 2],
-            val_ids=[3, 4],
-            test_ids=[5, 6],
+            data_module="cu3s",
+            splits=DataSplitConfig(
+                train=_fi([0, 1, 2]), val=_fi([3, 4]), test=_fi([5, 6])
+            ),
             batch_size=2,
-            processing_mode="Reflectance",
+            params={
+                "cu3s_file_path": str(cu3s_file),
+                "annotation_json_path": str(json_file),
+                "processing_mode": "Reflectance",
+            },
         ).to_proto()
 
         # Run statistical training
@@ -235,6 +278,9 @@ def session(grpc_stub: Any) -> Generator[Callable[[str], str], None, None]:
                 path=f"pipeline/{pipeline_type}",
             )
         )
+        # Register the pipeline's declared plugins before loading it: the
+        # orchestrator resolves plugins from the session's pushed catalog.
+        _register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,

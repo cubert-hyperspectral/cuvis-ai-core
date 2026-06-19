@@ -1,6 +1,5 @@
 """Integration tests for pipeline management functionality (Task 5.3)."""
 
-import json
 from pathlib import Path
 
 import grpc
@@ -8,14 +7,9 @@ import pytest
 import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
+from tests.fixtures.grpc import pipeline_bytes_from_path as _pipeline_bytes_from_path
 
 DEFAULT_CHANNELS = 61
-
-
-def _pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
-    """Convert a pipeline YAML into JSON bytes for the LoadPipeline RPC."""
-    pipeline_dict = yaml.safe_load(Path(pipeline_path).read_text())
-    return json.dumps(pipeline_dict).encode("utf-8")
 
 
 @pytest.mark.slow
@@ -79,7 +73,6 @@ class TestSavePipeline:
         assert response.success
 
         # Read back the YAML to verify metadata was saved
-        import yaml
 
         with open(response.pipeline_path) as f:
             saved_config = yaml.safe_load(f)
@@ -128,9 +121,6 @@ class TestSavePipeline:
 class TestLoadPipeline:
     """Test the LoadPipeline RPC method."""
 
-    # @pytest.mark.skip(
-    #     reason="Native cuvis library has thread-safety issues causing crashes during weight loading"
-    # )
     def test_load_pipeline_with_weights_default(
         self, grpc_stub, session, saved_pipeline, monkeypatch
     ):

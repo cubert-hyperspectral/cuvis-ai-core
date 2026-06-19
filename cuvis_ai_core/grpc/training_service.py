@@ -25,7 +25,7 @@ from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
 
 if TYPE_CHECKING:  # pragma: no cover - for type hints only
-    from cuvis_ai_core.data.datasets import SingleCu3sDataModule
+    import pytorch_lightning as pl
 
 
 class TrainingService:
@@ -66,8 +66,8 @@ class TrainingService:
             return
 
         try:
-            # Create datamodule from data config
-            datamodule = self._create_single_cu3s_data_module(data_config_py)
+            # Create datamodule from data config via the registry dispatch
+            datamodule = self._create_data_module(session, data_config_py)
             training_config_py: TrainingConfig | None = None
 
             if request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_STATISTICAL:
@@ -340,9 +340,13 @@ class TrainingService:
             unfreeze_nodes = session.trainrun_config.unfreeze_nodes
             freeze_nodes = session.trainrun_config.freeze_nodes
 
+        # The live pipeline is held on the session (``session.pipeline`` /
+        # ``_pipeline_config``); the trainrun's ``pipeline`` field is a disk
+        # reference, materialised by SaveTrainRun (which writes the pipeline to a
+        # sibling YAML), so it stays unset for the in-memory experiment context.
         session.trainrun_config = TrainRunConfig(
             name=str(pipeline_name),
-            pipeline=pipeline_config,
+            pipeline=None,
             data=data_config,
             training=training_config,
             loss_nodes=loss_nodes,
@@ -351,29 +355,25 @@ class TrainingService:
             unfreeze_nodes=unfreeze_nodes,
         )
 
-    def _create_single_cu3s_data_module(
+    def _create_data_module(
         self,
+        session: SessionState,
         data_config: DataConfig,
-    ) -> SingleCu3sDataModule:
-        """Create SingleCu3sDataModule from parsed DataConfig."""
-        from cuvis_ai_core.data.datasets import SingleCu3sDataModule
+    ) -> "pl.LightningDataModule":
+        """Build the DataModule named by ``data_config.data_module`` via the registry.
 
-        annotation_json_path = data_config.annotation_json_path or None
+        The concrete DataModule class comes from a plugin (registered into the
+        session's ``node_registry.data_modules``), so core imports no SDK and no
+        concrete module here.
+        """
+        from cuvis_ai_core.data.datamodule import create_data_module
 
-        return SingleCu3sDataModule(
-            cu3s_file_path=data_config.cu3s_file_path,
-            annotation_json_path=annotation_json_path,
-            train_ids=list(data_config.train_ids),
-            val_ids=list(data_config.val_ids),
-            test_ids=list(data_config.test_ids),
-            batch_size=data_config.batch_size,
-            processing_mode=data_config.processing_mode,
-        )
+        return create_data_module(session.node_registry, data_config)
 
     def _train_statistical(
         self,
         session: SessionState,
-        datamodule: SingleCu3sDataModule,
+        datamodule: "pl.LightningDataModule",
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train with statistical method."""
         # Yield initial status
@@ -415,7 +415,7 @@ class TrainingService:
     def _train_gradient(
         self,
         session: SessionState,
-        datamodule: SingleCu3sDataModule,
+        datamodule: "pl.LightningDataModule",
         data_config: DataConfig,
         training_config: TrainingConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:

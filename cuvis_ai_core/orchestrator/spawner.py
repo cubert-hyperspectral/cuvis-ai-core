@@ -57,6 +57,7 @@ _HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
 _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
 _TERMINATE_KILL_WAIT_SECONDS = 5.0
 _GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
+
 # CUDA device-selection vars dropped from the child env when GPU is not
 # requested. LD_LIBRARY_PATH is deliberately NOT in this set: it is the
 # dynamic-linker search path the child interpreter (and torch's own shared
@@ -184,7 +185,19 @@ class ChildHandle:
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
         if self._channel is None:
-            self._channel = grpc.insecure_channel(self.endpoint)
+            # The parent<->child runtime bridge carries full tensor batches
+            # (cubes, masks) that dwarf gRPC's 4 MB default. It is a trusted
+            # loopback channel and the child server already binds unlimited
+            # (run_runtime/__main__.py), so leave both directions uncapped here
+            # too; the public production_server keeps the only enforced size
+            # limit, at the real trust boundary.
+            self._channel = grpc.insecure_channel(
+                self.endpoint,
+                options=[
+                    ("grpc.max_send_message_length", -1),
+                    ("grpc.max_receive_message_length", -1),
+                ],
+            )
         return cuvis_ai_pb2_grpc.RunRuntimeStub(self._channel)
 
     def terminate(self, grace_s: float = 5.0) -> int | None:

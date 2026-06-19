@@ -19,7 +19,8 @@ from cuvis_ai_core.training.config import (
     TrainerConfig,
     TrainingConfig,
 )
-from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
+from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
 
 # Session-scoped cache for test data files to avoid repeated file system operations
 _test_data_cache = {}
@@ -68,14 +69,31 @@ def _create_cached_data_config(
     test_ids: tuple[int, ...],
 ) -> cuvis_ai_pb2.DataConfig:
     """Cached version of DataConfig creation."""
+
+    def _file_indices(ids: tuple[int, ...]) -> list[Selector]:
+        # Selectors reference the cu3s file by its path, matching SampleRef.source
+        # produced by the cu3s module's enumerate().
+        if not ids:
+            return []
+        return [
+            Selector(
+                kind=SelectorKind.FILE_INDICES, source=cu3s_file_path, ids=list(ids)
+            )
+        ]
+
     return DataConfig(
-        cu3s_file_path=cu3s_file_path,
-        annotation_json_path=json_file_path,
-        train_ids=list(train_ids),
-        val_ids=list(val_ids),
-        test_ids=list(test_ids),
+        data_module="cu3s",
+        splits=DataSplitConfig(
+            train=_file_indices(train_ids),
+            val=_file_indices(val_ids),
+            test=_file_indices(test_ids),
+        ),
         batch_size=batch_size,
-        processing_mode=processing_mode,
+        params={
+            "cu3s_file_path": cu3s_file_path,
+            "annotation_json_path": json_file_path,
+            "processing_mode": processing_mode,
+        },
     ).to_proto()
 
 
@@ -347,7 +365,7 @@ class _SyntheticDictDataset(Dataset):
         return sample
 
 
-class SyntheticAnomalyDataModule(CuvisDataModule):
+class SyntheticAnomalyDataModule(BaseCuvisAIDataModule):
     """Lightweight datamodule that generates deterministic synthetic anomaly data.
 
     This datamodule reuses the create_test_cube logic to ensure consistency

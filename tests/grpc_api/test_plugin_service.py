@@ -1,5 +1,6 @@
 """Tests for PluginService gRPC functionality."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,8 +18,8 @@ from cuvis_ai_core.grpc.plugin_service import (
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_schemas.catalog import CatalogNodeEntry, CatalogPortSpec
-from cuvis_ai_schemas.plugin import PluginManifest, LocalPluginConfig
+from cuvis_ai_schemas.plugin import NodePortSpec, PluginCapabilityEntry
+from tests.fixtures.grpc import manifest_config_bytes as _manifest_config_bytes
 
 
 @pytest.mark.slow
@@ -39,7 +40,7 @@ class TestPluginService:
             self.session_manager.close_session(session_id)
         NodeRegistry.clear()
 
-    def test_load_plugins_success(self, tmp_path, create_plugin_pyproject):
+    def test_load_plugin_success(self, tmp_path, create_plugin_pyproject):
         """Test successful plugin loading."""
         # Create session
         session_id = self.session_manager.create_session()
@@ -63,41 +64,35 @@ class TestPluginNode(Node):
 """)
         create_plugin_pyproject(plugin_dir)
 
-        # Create manifest
-        manifest = PluginManifest(
-            plugins={
-                "test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "test_plugin.node.TestPluginNode"}],
-                )
+        # Create request
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "test_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [{"class_name": "test_plugin.node.TestPluginNode"}],
             }
         )
-
-        # Create request
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session_id,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
 
-        # Load plugins
+        # Load plugin
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            response = self.plugin_service.load_plugins(request, self.mock_context)
+            response = self.plugin_service.load_plugin(request, self.mock_context)
 
             # Verify response
-            assert len(response.registered_plugins) == 1
-            assert "test_plugin" in response.registered_plugins
-            assert len(response.failed_plugins) == 0
+            assert response.registered_plugin == "test_plugin"
+            assert response.error == ""
 
             # Verify session state updated
             session = self.session_manager.get_session(session_id)
             assert "test_plugin" in session.registered_plugins
 
-            # LoadPlugins registers into the catalog only; nothing is
+            # LoadPlugin registers into the catalog only; nothing is
             # imported into loaded_plugin_nodes until LoadPipeline materialises
             # the plugin.
             assert "test_plugin" in session.node_registry.plugin_catalog
@@ -105,13 +100,13 @@ class TestPluginNode(Node):
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_load_plugins_partial_failure(self, tmp_path, create_plugin_pyproject):
-        """Catalog registration only runs Pydantic validation on each manifest
-        entry; install failures move to ``LoadPipeline``. Both a valid manifest
-        entry and a nonexistent-path entry pass Pydantic (LocalPluginConfig
-        does NOT exists-check the path), so both register successfully. The
-        "partial failure" surface this test originally covered (install
-        failures) no longer happens here."""
+    def test_load_plugin_per_manifest(self, tmp_path, create_plugin_pyproject):
+        """Catalog registration only runs Pydantic validation on each manifest;
+        install failures move to ``LoadPipeline``. Both a valid manifest and a
+        nonexistent-path manifest pass Pydantic (LocalPluginSource does NOT
+        exists-check the path), so each ``LoadPlugin`` call registers
+        successfully. The install failure on the nonexistent path would only
+        surface later if a pipeline actually references it."""
         # Create session
         session_id = self.session_manager.create_session()
 
@@ -134,80 +129,106 @@ class ValidNode(Node):
 """)
         create_plugin_pyproject(valid_plugin_dir)
 
-        # Create manifest with two valid Pydantic entries (one of which
-        # points at a nonexistent path that would fail at install time).
-        manifest = PluginManifest(
-            plugins={
-                "valid_plugin": LocalPluginConfig(
-                    path=str(valid_plugin_dir),
-                    provides=[{"class_name": "valid_plugin.node.ValidNode"}],
-                ),
-                "unreachable_plugin": LocalPluginConfig(
-                    path="/nonexistent/path",
-                    provides=[
-                        {"class_name": "unreachable_plugin.node.UnreachableNode"}
-                    ],
-                ),
-            }
-        )
+        # Two valid Pydantic manifests (the second points at an absolute but
+        # nonexistent path that would only fail at install time). The path must
+        # be absolute: load_plugin rejects client-relative local paths in-band.
+        manifests = [
+            {
+                "name": "valid_plugin",
+                "path": str(valid_plugin_dir),
+                "capabilities": [{"class_name": "valid_plugin.node.ValidNode"}],
+            },
+            {
+                "name": "unreachable_plugin",
+                "path": str(tmp_path / "nonexistent_plugin"),
+                "capabilities": [
+                    {"class_name": "unreachable_plugin.node.UnreachableNode"}
+                ],
+            },
+        ]
 
-        # Create request
-        request = cuvis_ai_pb2.LoadPluginsRequest(
-            session_id=session_id,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
-        )
-
-        # Load plugins
+        # Load plugins one manifest per LoadPlugin call.
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            response = self.plugin_service.load_plugins(request, self.mock_context)
+            registered = []
+            for manifest in manifests:
+                request = cuvis_ai_pb2.LoadPluginRequest(
+                    session_id=session_id,
+                    manifest=cuvis_ai_pb2.PluginManifest(
+                        config_bytes=_manifest_config_bytes(manifest)
+                    ),
+                )
+                response = self.plugin_service.load_plugin(request, self.mock_context)
+                assert response.error == ""
+                registered.append(response.registered_plugin)
 
-            # Both entries register cleanly because Pydantic accepts a
-            # nonexistent path string. The install failure on
-            # "unreachable_plugin" will surface later if a pipeline
-            # actually references it.
-            assert "valid_plugin" in response.registered_plugins
-            assert "unreachable_plugin" in response.registered_plugins
-            assert len(response.failed_plugins) == 0
+            # Both manifests register cleanly because Pydantic accepts a
+            # nonexistent path string.
+            assert "valid_plugin" in registered
+            assert "unreachable_plugin" in registered
         finally:
             sys.path.remove(str(tmp_path))
 
-    def test_load_plugins_invalid_manifest(self):
-        """Test loading plugins with invalid manifest JSON."""
+    def test_load_plugin_invalid_manifest(self):
+        """Test loading a plugin with invalid manifest JSON."""
         # Create session
         session_id = self.session_manager.create_session()
 
         # Create request with invalid JSON
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session_id,
             manifest=cuvis_ai_pb2.PluginManifest(config_bytes=b"{ invalid json }"),
         )
 
-        # Service handles error gracefully, returns empty response
-        response = self.plugin_service.load_plugins(request, self.mock_context)
-        assert len(response.registered_plugins) == 0
-        assert len(response.failed_plugins) == 0
+        # Service handles error gracefully, returns empty response with an
+        # INVALID_ARGUMENT context code.
+        response = self.plugin_service.load_plugin(request, self.mock_context)
+        assert response.registered_plugin == ""
+        assert response.error == ""
+        self.mock_context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
-    def test_load_plugins_invalid_session(self):
-        """Test loading plugins with non-existent session."""
-        # Create manifest
-        manifest = PluginManifest(plugins={})
+    def test_load_plugin_rejects_relative_local_path(self):
+        """A local plugin with a relative path is rejected in-band over gRPC.
 
-        # Create request with invalid session_id
-        request = cuvis_ai_pb2.LoadPluginsRequest(
-            session_id="nonexistent_session",
+        The server's working dir is not the client's, so a client-relative
+        path cannot be resolved server-side; load_plugin reports it via the
+        response ``error`` (no context error code, since this is in-band) and
+        does not register the plugin.
+        """
+        session_id = self.session_manager.create_session()
+        request = cuvis_ai_pb2.LoadPluginRequest(
+            session_id=session_id,
             manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
+                config_bytes=_manifest_config_bytes(
+                    {
+                        "name": "rel_plugin",
+                        "path": "../sibling",
+                        "capabilities": [{"class_name": "pkg.mod.Node"}],
+                    }
+                )
             ),
+        )
+        response = self.plugin_service.load_plugin(request, self.mock_context)
+        assert response.registered_plugin == ""
+        assert "absolute" in response.error
+        assert "rel_plugin" in response.error
+        registered = self.session_manager.get_session(session_id).registered_plugins
+        assert "rel_plugin" not in registered
+
+    def test_load_plugin_invalid_session(self):
+        """Test loading a plugin with non-existent session."""
+        # Create request with invalid session_id. The session guard fires
+        # before the manifest is ever parsed, so an empty payload suffices.
+        request = cuvis_ai_pb2.LoadPluginRequest(
+            session_id="nonexistent_session",
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=b""),
         )
 
         # Should not raise - returns empty response with context error
-        response = self.plugin_service.load_plugins(request, self.mock_context)
-        assert len(response.registered_plugins) == 0
+        response = self.plugin_service.load_plugin(request, self.mock_context)
+        assert response.registered_plugin == ""
 
     def test_list_loaded_plugins_invalid_session(self):
         """Test listing plugins with non-existent session."""
@@ -272,27 +293,26 @@ class TestNode(Node):
         create_plugin_pyproject(plugin_dir)
 
         # Load plugin
-        manifest = PluginManifest(
-            plugins={
-                "list_loaded_test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "list_loaded_test_plugin.node.TestNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "list_loaded_test_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [
+                    {"class_name": "list_loaded_test_plugin.node.TestNode"}
+                ],
             }
         )
 
-        load_request = cuvis_ai_pb2.LoadPluginsRequest(
+        load_request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session_id,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            self.plugin_service.load_plugins(load_request, self.mock_context)
+            self.plugin_service.load_plugin(load_request, self.mock_context)
 
             # List plugins
             list_request = cuvis_ai_pb2.ListLoadedPluginsRequest(session_id=session_id)
@@ -306,7 +326,7 @@ class TestNode(Node):
             assert plugin_info.name == "list_loaded_test_plugin"
             assert plugin_info.type == "local"
             assert plugin_info.source == str(plugin_dir)
-            assert "list_loaded_test_plugin.node.TestNode" in plugin_info.provides
+            assert "list_loaded_test_plugin.node.TestNode" in plugin_info.capabilities
         finally:
             sys.path.remove(str(tmp_path))
 
@@ -334,27 +354,24 @@ class TestNode(Node):
 """)
         create_plugin_pyproject(plugin_dir)
 
-        manifest = PluginManifest(
-            plugins={
-                "get_info_test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[{"class_name": "get_info_test_plugin.node.TestNode"}],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "get_info_test_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [{"class_name": "get_info_test_plugin.node.TestNode"}],
             }
         )
 
-        load_request = cuvis_ai_pb2.LoadPluginsRequest(
+        load_request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session_id,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            self.plugin_service.load_plugins(load_request, self.mock_context)
+            self.plugin_service.load_plugin(load_request, self.mock_context)
 
             # Get plugin info
             info_request = cuvis_ai_pb2.GetPluginInfoRequest(
@@ -428,7 +445,7 @@ class TestNode(Node):
 
     def test_list_available_nodes_with_plugins(self, tmp_path, create_plugin_pyproject):
         """``ListAvailableNodes`` populates plugin nodes from each plugin's
-        inline ``provides`` catalog. No plugin module gets imported on the
+        declared ``capabilities``. No plugin module gets imported on the
         parent side — the manifest entry is the only source.
         """
         session_id = self.session_manager.create_session()
@@ -438,32 +455,29 @@ class TestNode(Node):
         (plugin_dir / "__init__.py").write_text("")
         create_plugin_pyproject(plugin_dir)
 
-        manifest = PluginManifest(
-            plugins={
-                "available_nodes_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[
-                        {
-                            "class_name": "available_nodes_plugin.nodes.PluginTestNode",
-                            "category": "unspecified",
-                            "tags": [],
-                            "icon_svg": "<svg/>",
-                            "input_specs": {},
-                            "output_specs": {},
-                            "doc_summary": "",
-                        }
-                    ],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "available_nodes_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [
+                    {
+                        "class_name": "available_nodes_plugin.nodes.PluginTestNode",
+                        "category": "unspecified",
+                        "tags": [],
+                        "icon_svg": "<svg/>",
+                        "input_specs": {},
+                        "output_specs": {},
+                        "doc_summary": "",
+                    }
+                ],
             }
         )
 
-        load_request = cuvis_ai_pb2.LoadPluginsRequest(
+        load_request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session_id,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
-        self.plugin_service.load_plugins(load_request, self.mock_context)
+        self.plugin_service.load_plugin(load_request, self.mock_context)
 
         list_request = cuvis_ai_pb2.ListAvailableNodesRequest(session_id=session_id)
         response = self.plugin_service.list_available_nodes(
@@ -631,29 +645,26 @@ class IsolatedNode(Node):
         create_plugin_pyproject(plugin_dir)
 
         # Load plugin only in session1
-        manifest = PluginManifest(
-            plugins={
-                "isolation_test_plugin": LocalPluginConfig(
-                    path=str(plugin_dir),
-                    provides=[
-                        {"class_name": "isolation_test_plugin.node.IsolatedNode"}
-                    ],
-                )
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "isolation_test_plugin",
+                "path": str(plugin_dir),
+                "capabilities": [
+                    {"class_name": "isolation_test_plugin.node.IsolatedNode"}
+                ],
             }
         )
 
-        load_request = cuvis_ai_pb2.LoadPluginsRequest(
+        load_request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=session1,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
 
         import sys
 
         sys.path.insert(0, str(tmp_path))
         try:
-            self.plugin_service.load_plugins(load_request, self.mock_context)
+            self.plugin_service.load_plugin(load_request, self.mock_context)
 
             # Verify session1 has the plugin
             list1_request = cuvis_ai_pb2.ListLoadedPluginsRequest(session_id=session1)
@@ -956,7 +967,7 @@ def test_convert_port_spec_rejects_non_int_str_dimension():
 
 
 def test_catalog_port_spec_empty_dtype_is_unspecified():
-    spec = CatalogPortSpec(
+    spec = NodePortSpec(
         dtype="", shape=[1, 2], optional=False, description="", variadic=False
     )
     proto = _catalog_port_spec_to_proto("p", spec)
@@ -965,7 +976,7 @@ def test_catalog_port_spec_empty_dtype_is_unspecified():
 
 
 def test_catalog_port_spec_unsupported_dtype_falls_back_to_unspecified():
-    spec = CatalogPortSpec(
+    spec = NodePortSpec(
         dtype="definitely-not-a-dtype",
         shape=[1],
         optional=False,
@@ -977,7 +988,7 @@ def test_catalog_port_spec_unsupported_dtype_falls_back_to_unspecified():
 
 
 def test_catalog_entry_to_node_info_tolerates_bogus_category_and_tags():
-    entry = CatalogNodeEntry(
+    entry = PluginCapabilityEntry(
         class_name="pkg.mod.SomeNode",
         category="bogus-category",
         tags=["not-a-real-tag", "hyperspectral"],
@@ -993,7 +1004,7 @@ def test_catalog_entry_to_node_info_tolerates_bogus_category_and_tags():
 
 
 # ---------------------------------------------------------------------------
-# Fast handler coverage: load_plugins / list_loaded_plugins / get_plugin_info
+# Fast handler coverage: load_plugin / list_loaded_plugins / get_plugin_info
 # guards + the list_available_nodes error-isolation branches. These mirror
 # TestPluginService (which is @slow and deselected in the coverage job).
 # ---------------------------------------------------------------------------
@@ -1013,68 +1024,63 @@ class TestPluginServiceFastHandlers:
             self.session_manager.close_session(session_id)
         NodeRegistry.clear()
 
-    # -- load_plugins -------------------------------------------------------
+    # -- load_plugin --------------------------------------------------------
 
-    def test_load_plugins_unknown_session_returns_empty(self):
-        resp = self.plugin_service.load_plugins(
-            cuvis_ai_pb2.LoadPluginsRequest(session_id="nope"), self.mock_context
+    def test_load_plugin_unknown_session_returns_empty(self):
+        resp = self.plugin_service.load_plugin(
+            cuvis_ai_pb2.LoadPluginRequest(session_id="nope"), self.mock_context
         )
-        assert resp == cuvis_ai_pb2.LoadPluginsResponse()
+        assert resp == cuvis_ai_pb2.LoadPluginResponse()
 
-    def test_load_plugins_missing_config_bytes_is_invalid_argument(self):
+    def test_load_plugin_missing_config_bytes_is_invalid_argument(self):
         sid = self.session_manager.create_session()
-        self.plugin_service.load_plugins(
-            cuvis_ai_pb2.LoadPluginsRequest(session_id=sid), self.mock_context
+        self.plugin_service.load_plugin(
+            cuvis_ai_pb2.LoadPluginRequest(session_id=sid), self.mock_context
         )
         self.mock_context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
-    def test_load_plugins_registers_local_entry(self):
+    def test_load_plugin_registers_local_entry(self):
         sid = self.session_manager.create_session()
-        manifest = PluginManifest(
-            plugins={
-                "p": LocalPluginConfig(
-                    path=".",
-                    provides=[
-                        {"class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer"}
-                    ],
-                )
+        # load_plugin rejects client-relative local paths, so send an absolute
+        # one. The path is not installed/imported here, only recorded.
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "p",
+                "path": str(Path(".").resolve()),
+                "capabilities": [
+                    {"class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer"}
+                ],
             }
         )
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=sid,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
-        resp = self.plugin_service.load_plugins(request, self.mock_context)
-        assert "p" in resp.registered_plugins
+        resp = self.plugin_service.load_plugin(request, self.mock_context)
+        assert resp.registered_plugin == "p"
+        assert resp.error == ""
         assert "p" in self.session_manager.get_session(sid).registered_plugins
 
-    def test_load_plugins_reports_failed_entry(self):
+    def test_load_plugin_reports_invalid_manifest_entry(self):
         sid = self.session_manager.create_session()
-        session = self.session_manager.get_session(sid)
-        session.node_registry.register_catalog_entries = Mock(
-            side_effect=Exception("registration boom")
-        )
-        manifest = PluginManifest(
-            plugins={
-                "p": LocalPluginConfig(
-                    path=".",
-                    provides=[
-                        {"class_name": "tests.fixtures.mock_nodes.MinMaxNormalizer"}
-                    ],
-                )
+        # A capability class_name that is not a fully-qualified dotted path
+        # fails Pydantic validation, which load_plugin reports in-band via the
+        # ``error`` field (no context code set).
+        config_bytes = _manifest_config_bytes(
+            {
+                "name": "p",
+                "path": str(Path(".").resolve()),
+                "capabilities": [{"class_name": "NotAFullyQualifiedName"}],
             }
         )
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id=sid,
-            manifest=cuvis_ai_pb2.PluginManifest(
-                config_bytes=manifest.model_dump_json().encode()
-            ),
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=config_bytes),
         )
-        resp = self.plugin_service.load_plugins(request, self.mock_context)
-        assert "p" in resp.failed_plugins
-        assert resp.registered_plugins == []
+        resp = self.plugin_service.load_plugin(request, self.mock_context)
+        assert resp.registered_plugin == ""
+        assert resp.error != ""
+        assert "p" in resp.error
 
     # -- list_loaded_plugins / get_plugin_info ------------------------------
 
@@ -1088,11 +1094,12 @@ class TestPluginServiceFastHandlers:
         sid = self.session_manager.create_session()
         session = self.session_manager.get_session(sid)
         session.registered_plugins["g"] = {
+            "name": "g",
             "repo": "https://example.com/p.git",
             "tag": "v1.2.3",
-            "provides": [{"class_name": "a.B"}],
+            "capabilities": [{"class_name": "a.B"}],
         }
-        session.registered_plugins["l"] = {"path": ".", "provides": []}
+        session.registered_plugins["l"] = {"name": "l", "path": ".", "capabilities": []}
         resp = self.plugin_service.list_loaded_plugins(
             cuvis_ai_pb2.ListLoadedPluginsRequest(session_id=sid), self.mock_context
         )
@@ -1100,7 +1107,7 @@ class TestPluginServiceFastHandlers:
         assert by_name["g"].type == "git"
         assert by_name["g"].source == "https://example.com/p.git"
         assert by_name["g"].tag == "v1.2.3"
-        assert list(by_name["g"].provides) == ["a.B"]
+        assert list(by_name["g"].capabilities) == ["a.B"]
         assert by_name["l"].type == "local"
         assert by_name["l"].source == "."
 
@@ -1124,9 +1131,10 @@ class TestPluginServiceFastHandlers:
         sid = self.session_manager.create_session()
         session = self.session_manager.get_session(sid)
         session.registered_plugins["g"] = {
+            "name": "g",
             "repo": "https://example.com/p.git",
             "tag": "v2",
-            "provides": [{"class_name": "a.B"}, {"class_name": "a.C"}],
+            "capabilities": [{"class_name": "a.B"}, {"class_name": "a.C"}],
         }
         resp = self.plugin_service.get_plugin_info(
             cuvis_ai_pb2.GetPluginInfoRequest(session_id=sid, plugin_name="g"),
@@ -1134,7 +1142,7 @@ class TestPluginServiceFastHandlers:
         )
         assert resp.plugin.name == "g"
         assert resp.plugin.type == "git"
-        assert list(resp.plugin.provides) == ["a.B", "a.C"]
+        assert list(resp.plugin.capabilities) == ["a.B", "a.C"]
 
     # -- list_available_nodes error isolation -------------------------------
 
@@ -1189,9 +1197,20 @@ class TestPluginServiceFastHandlers:
     def test_list_available_nodes_warns_on_plugin_without_nodes(self):
         sid = self.session_manager.create_session()
         session = self.session_manager.get_session(sid)
-        # A registered plugin whose inline catalog provides nothing → its
-        # entry resolves to None and it contributes no palette nodes.
-        session.registered_plugins["empty"] = {"path": ".", "provides": []}
+        # A registered plugin whose only capability is a data module → no
+        # node-kind entries survive the palette filter, so it contributes
+        # nothing to the node list.
+        session.registered_plugins["empty"] = {
+            "name": "empty",
+            "path": ".",
+            "capabilities": [
+                {
+                    "class_name": "a.b.SomeDataModule",
+                    "kind": "data_module",
+                    "data_module_name": "some_dm",
+                }
+            ],
+        }
         resp = self.plugin_service.list_available_nodes(
             cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
         )
@@ -1203,12 +1222,13 @@ class TestPluginServiceFastHandlers:
         sid = self.session_manager.create_session()
         session = self.session_manager.get_session(sid)
         session.registered_plugins["p"] = {
+            "name": "p",
             "path": ".",
-            "provides": [{"class_name": "a.B"}],
+            "capabilities": [{"class_name": "a.B"}],
         }
         monkeypatch.setattr(
             plugin_service_mod,
-            "load_catalog_entry",
+            "load_capabilities",
             Mock(side_effect=ValueError("bad catalog")),
         )
         resp = self.plugin_service.list_available_nodes(
@@ -1220,8 +1240,9 @@ class TestPluginServiceFastHandlers:
         sid = self.session_manager.create_session()
         session = self.session_manager.get_session(sid)
         session.registered_plugins["p"] = {
+            "name": "p",
             "path": ".",
-            "provides": [{"class_name": "a.B"}],
+            "capabilities": [{"class_name": "a.B"}],
         }
         monkeypatch.setattr(
             plugin_service_mod,
@@ -1232,4 +1253,33 @@ class TestPluginServiceFastHandlers:
             cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
         )
         # The plugin had one node, but conversion failed → it is skipped.
+        assert all(n.plugin_name != "p" for n in resp.nodes)
+
+    def test_load_plugin_non_dict_manifest_is_invalid_argument(self):
+        sid = self.session_manager.create_session()
+        # Valid JSON, but a list rather than a single manifest object.
+        request = cuvis_ai_pb2.LoadPluginRequest(
+            session_id=sid,
+            manifest=cuvis_ai_pb2.PluginManifest(config_bytes=b"[1, 2]"),
+        )
+        resp = self.plugin_service.load_plugin(request, self.mock_context)
+        assert resp.registered_plugin == ""
+        self.mock_context.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_list_available_nodes_skips_plugin_without_metadata(self, monkeypatch):
+        sid = self.session_manager.create_session()
+        session = self.session_manager.get_session(sid)
+        session.registered_plugins["p"] = {
+            "name": "p",
+            "path": ".",
+            "capabilities": [{"class_name": "a.B"}],
+        }
+        # load_capabilities returning None marks the plugin metadata-less: it
+        # contributes no palette nodes and trips the missing-metadata warning.
+        monkeypatch.setattr(
+            plugin_service_mod, "load_capabilities", Mock(return_value=None)
+        )
+        resp = self.plugin_service.list_available_nodes(
+            cuvis_ai_pb2.ListAvailableNodesRequest(session_id=sid), self.mock_context
+        )
         assert all(n.plugin_name != "p" for n in resp.nodes)

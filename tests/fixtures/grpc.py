@@ -127,6 +127,37 @@ def resolve_and_load_pipeline(
     return response
 
 
+def pipeline_bytes_from_path(pipeline_path: str | Path) -> bytes:
+    """Convert a pipeline YAML file into JSON bytes for the LoadPipeline RPC.
+
+    Shared helper — eliminates the identical copies in test_pipeline_management.py,
+    test_experiment_management.py, and this module's load_pipeline_from_file.
+
+    Args:
+        pipeline_path: Path to pipeline YAML file
+
+    Returns:
+        JSON-encoded bytes ready for PipelineConfig.config_bytes
+    """
+    pipeline_dict = yaml.safe_load(Path(pipeline_path).read_text())
+    return json.dumps(pipeline_dict).encode("utf-8")
+
+
+def manifest_config_bytes(manifest: dict) -> bytes:
+    """Encode a bare plugin manifest dict as the LoadPlugin wire payload.
+
+    Shared helper — eliminates the identical copies in test_plugin_management.py
+    and test_plugin_service.py.
+
+    Args:
+        manifest: Bare plugin manifest dict (name + source + capabilities)
+
+    Returns:
+        JSON-encoded bytes ready for manifest.config_bytes
+    """
+    return json.dumps(manifest).encode()
+
+
 def load_pipeline_from_file(
     grpc_stub, session_id: str, pipeline_file: str | Path
 ) -> cuvis_ai_pb2.LoadPipelineResponse:
@@ -145,12 +176,12 @@ def load_pipeline_from_file(
     Raises:
         AssertionError: If the pipeline loading fails
     """
-    pipeline_dict = yaml.safe_load(Path(pipeline_file).read_text())
-    pipeline_bytes = json.dumps(pipeline_dict).encode("utf-8")
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=pipeline_bytes),
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=pipeline_bytes_from_path(pipeline_file)
+            ),
         )
     )
     assert response.success

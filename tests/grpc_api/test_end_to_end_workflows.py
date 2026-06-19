@@ -180,17 +180,37 @@ class TestWorkflow3_ResumeTraining:
         exp_path = exp_dir / "initial_exp.yaml"
         exp_config = {
             "name": "initial_experiment",
-            "pipeline": {
-                "config_path": str(pipeline_path),
-                "weights_path": str(weights_path),
-            },
+            "pipeline": str(pipeline_path),
             "data": {
-                "cu3s_file_path": "/data/lentils.cu3s",
+                "data_module": "cu3s",
                 "batch_size": 4,
-                "processing_mode": "Reflectance",
-                "train_ids": [0, 1, 2],
-                "val_ids": [3],
-                "test_ids": [4],
+                "splits": {
+                    "train": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [0, 1, 2],
+                        }
+                    ],
+                    "val": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [3],
+                        }
+                    ],
+                    "test": [
+                        {
+                            "kind": "file_indices",
+                            "source": "/data/lentils.cu3s",
+                            "ids": [4],
+                        }
+                    ],
+                },
+                "params": {
+                    "cu3s_file_path": "/data/lentils.cu3s",
+                    "processing_mode": "Reflectance",
+                },
             },
             "training": {
                 "seed": 42,
@@ -202,10 +222,11 @@ class TestWorkflow3_ResumeTraining:
         with open(exp_path, "w") as f:
             yaml.dump(exp_config, f)
 
-        # Step 1: RestoreTrainRun
+        # Step 1: RestoreTrainRun (weights ride on the request, not the pipeline ref)
         restore_response = grpc_stub.RestoreTrainRun(
             cuvis_ai_pb2.RestoreTrainRunRequest(
                 trainrun_path=str(exp_path),
+                weights_path=str(weights_path),
             )
         )
         session_id = restore_response.session_id

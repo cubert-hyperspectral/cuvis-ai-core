@@ -2,7 +2,6 @@
 
 This module provides:
 - Training configuration dataclasses with Hydra support
-- GraphDataModule base class for data loading
 - Port-based loss and metric nodes for training
 - Internal Lightning module for training orchestration
 """
@@ -17,7 +16,6 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
     TrainRunConfig,
 )
-from cuvis_ai_core.training.datamodule import CuvisDataModule
 from cuvis_ai_core.training.predictor import Predictor
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_schemas.execution import Context
@@ -32,8 +30,6 @@ __all__ = [
     "DataConfig",
     "PipelineConfig",
     "TrainRunConfig",
-    # Data Module
-    "CuvisDataModule",
     # Context
     "Context",
     # Inference

@@ -1,5 +1,6 @@
 """Configuration factory fixtures for creating pipeline and experiment configs."""
 
+import copy
 import json
 
 import pytest
@@ -193,28 +194,42 @@ def minimal_pipeline_dict():
 
 
 @pytest.fixture
-def mock_experiment_dict(mock_pipeline_dict):
+def mock_experiment_dict():
     """Create a mock experiment configuration dict for testing.
 
-    Returns a complete experiment structure with pipeline, data, and training configs
-    suitable for testing experiment management functionality.
-
-    Args:
-        mock_pipeline_dict: Pipeline configuration fixture
+    Returns a complete experiment structure with a ``pipeline`` *reference*
+    (``"pipeline.yaml"``, resolved relative to the trainrun file), plus data and
+    training configs. The referenced pipeline YAML is written by helpers /
+    fixtures such as ``experiment_file`` from ``mock_pipeline_dict``.
 
     Returns:
         dict: Experiment configuration dictionary
     """
     return {
         "name": "test_experiment",
-        "pipeline": mock_pipeline_dict,
+        "pipeline": "pipeline.yaml",
         "data": {
-            "cu3s_file_path": "/data/test.cu3s",
+            "data_module": "cu3s",
             "batch_size": 4,
-            "processing_mode": "Reflectance",
-            "train_ids": [0, 1, 2],
-            "val_ids": [3, 4],
-            "test_ids": [5, 6],
+            "splits": {
+                "train": [
+                    {
+                        "kind": "file_indices",
+                        "source": "/data/test.cu3s",
+                        "ids": [0, 1, 2],
+                    }
+                ],
+                "val": [
+                    {"kind": "file_indices", "source": "/data/test.cu3s", "ids": [3, 4]}
+                ],
+                "test": [
+                    {"kind": "file_indices", "source": "/data/test.cu3s", "ids": [5, 6]}
+                ],
+            },
+            "params": {
+                "cu3s_file_path": "/data/test.cu3s",
+                "processing_mode": "Reflectance",
+            },
         },
         "training": {
             "seed": 42,
@@ -228,6 +243,20 @@ def mock_experiment_dict(mock_pipeline_dict):
             },
         },
     }
+
+
+@pytest.fixture
+def statistical_experiment_dict(mock_experiment_dict):
+    """Variant of mock_experiment_dict with the entire training block removed.
+
+    Exercises the ``has_gradient_training=False`` branch in ``restore_trainrun``.
+    ``TrainingConfig.trainer`` has a ``default_factory`` so popping the sub-key
+    still yields a non-None ``trainer``; only dropping ``training`` entirely makes
+    ``TrainRunConfig.training is None`` and therefore ``has_gradient_training=False``.
+    """
+    cfg = copy.deepcopy(mock_experiment_dict)
+    cfg.pop("training", None)
+    return cfg
 
 
 @pytest.fixture
@@ -333,16 +362,17 @@ connections:
 
 
 @pytest.fixture
-def experiment_file(tmp_path, mock_experiment_dict):
-    """Create a valid experiment file for testing restoration.
+def experiment_file(tmp_path, mock_experiment_dict, mock_pipeline_dict):
+    """Create a valid experiment file (plus its referenced pipeline) for restoration.
 
-    This fixture creates a properly formatted experiment YAML file
-    with pipeline, data, and training configurations. Useful for testing
-    experiment restoration and validation.
+    Writes the experiment YAML and the ``pipeline.yaml`` it references (from
+    ``mock_pipeline_dict``) into ``tmp_path``, so ``RestoreTrainRun`` resolves
+    the pipeline reference. Useful for testing experiment restoration.
 
     Args:
         tmp_path: Temporary directory fixture
         mock_experiment_dict: Mock experiment config fixture
+        mock_pipeline_dict: Pipeline configuration fixture
 
     Returns:
         str: Path to the experiment YAML file
@@ -351,5 +381,7 @@ def experiment_file(tmp_path, mock_experiment_dict):
 
     with open(exp_path, "w") as f:
         yaml.dump(mock_experiment_dict, f)
+    with open(tmp_path / mock_experiment_dict["pipeline"], "w") as f:
+        yaml.dump(mock_pipeline_dict, f)
 
     return str(exp_path)

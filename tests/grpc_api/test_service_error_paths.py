@@ -129,12 +129,12 @@ class TestPluginServiceErrors:
         for sid in list(self.session_manager._sessions.keys()):
             self.session_manager.close_session(sid)
 
-    def test_load_plugins_invalid_session(self):
-        request = cuvis_ai_pb2.LoadPluginsRequest(
+    def test_load_plugin_invalid_session(self):
+        request = cuvis_ai_pb2.LoadPluginRequest(
             session_id="nonexistent",
         )
-        response = self.service.load_plugins(request, self.ctx)
-        assert len(response.registered_plugins) == 0
+        response = self.service.load_plugin(request, self.ctx)
+        assert response.registered_plugin == ""
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
     def test_list_loaded_plugins_invalid_session(self):
@@ -347,7 +347,7 @@ class TestPipelineServiceValidation:
         trainrun = TrainRunConfig(
             name="test",
             pipeline=None,
-            data=DataConfig(cu3s_file_path=""),
+            data=DataConfig(),
             training=TrainingConfig(),
             loss_nodes=[],
             metric_nodes=[],
@@ -409,7 +409,7 @@ class TestTrainRunServiceValidation:
         session.trainrun_config = TrainRunConfig(
             name="test",
             pipeline=None,
-            data=DataConfig(cu3s_file_path=""),
+            data=DataConfig(),
             training=TrainingConfig(),
             loss_nodes=[],
             metric_nodes=[],
@@ -446,36 +446,28 @@ class TestTrainRunServiceValidation:
         self.service.restore_train_run(request, self.ctx)
         self.ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
-    def test_restore_train_run_invalid_pipeline_config_file(self, tmp_path):
-        """Pipeline config file that isn't a mapping → ValueError (line 159)."""
-        # Create a pipeline config file that is a list, not a dict
-        pipeline_file = tmp_path / "pipeline.yaml"
-        pipeline_file.write_text(yaml.dump(["not", "a", "dict"]))
-
+    def test_restore_train_run_rejects_inline_pipeline(self, tmp_path):
+        """An inline pipeline mapping is rejected at parse → INVALID_ARGUMENT."""
         trainrun_file = tmp_path / "trainrun.yaml"
         trainrun_file.write_text(
             yaml.dump(
                 {
                     "name": "test",
-                    "pipeline": {"config_path": str(pipeline_file)},
-                    "data": {"cu3s_file_path": ""},
+                    "pipeline": {"nodes": [], "connections": []},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
         )
 
-        with patch(
-            "cuvis_ai_core.grpc.trainrun_service.helpers.resolve_pipeline_path",
-            return_value=pipeline_file,
-        ):
-            request = cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=str(trainrun_file),
-            )
-            self.service.restore_train_run(request, self.ctx)
+        request = cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(trainrun_file),
+        )
+        self.service.restore_train_run(request, self.ctx)
         self.ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
     def test_restore_train_run_missing_weights(self, tmp_path):
-        """Weights path that doesn't exist → FileNotFoundError (line 167)."""
+        """A request weights path that doesn't exist → FileNotFoundError → NOT_FOUND."""
         pipeline_file = tmp_path / "pipeline.yaml"
         pipeline_file.write_text(
             yaml.dump(
@@ -492,24 +484,18 @@ class TestTrainRunServiceValidation:
             yaml.dump(
                 {
                     "name": "test",
-                    "pipeline": {
-                        "config_path": str(pipeline_file),
-                        "weights_path": str(tmp_path / "nonexistent.pt"),
-                    },
-                    "data": {"cu3s_file_path": ""},
+                    "pipeline": "pipeline.yaml",
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
         )
 
-        with patch(
-            "cuvis_ai_core.grpc.trainrun_service.helpers.resolve_pipeline_path",
-            return_value=pipeline_file,
-        ):
-            request = cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=str(trainrun_file),
-            )
-            self.service.restore_train_run(request, self.ctx)
+        request = cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(trainrun_file),
+            weights_path=str(tmp_path / "nonexistent.pt"),
+        )
+        self.service.restore_train_run(request, self.ctx)
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
     def test_restore_train_run_missing_pipeline_section(self, tmp_path):
@@ -519,7 +505,7 @@ class TestTrainRunServiceValidation:
             yaml.dump(
                 {
                     "name": "test",
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                 }
             )
@@ -532,7 +518,7 @@ class TestTrainRunServiceValidation:
         self.ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
     def test_restore_train_run_pipeline_yaml_pattern(self, tmp_path):
-        """Detect _pipeline.yaml companion file (line 186)."""
+        """Resolve the pipeline from the ``<name>_pipeline.yaml`` companion (no explicit ref)."""
 
         # Create companion pipeline file
         pipeline_file = tmp_path / "test_pipeline.yaml"
@@ -551,12 +537,7 @@ class TestTrainRunServiceValidation:
             yaml.dump(
                 {
                     "name": "test",
-                    "pipeline": {
-                        "metadata": {"name": "test"},
-                        "nodes": [],
-                        "connections": [],
-                    },
-                    "data": {"cu3s_file_path": ""},
+                    "data": {"data_module": "cu3s"},
                     "training": {},
                     "loss_nodes": [],
                     "metric_nodes": [],

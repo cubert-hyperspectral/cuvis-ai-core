@@ -9,7 +9,6 @@ from cuvis_ai_core.training.config import (
     EarlyStoppingConfig,
     ModelCheckpointConfig,
     OptimizerConfig,
-    PipelineConfig,
     SchedulerConfig,
     TrainingConfig,
     TrainRunConfig,
@@ -103,8 +102,8 @@ class TestProtoSerialization:
     def test_trainrun_proto_roundtrip(self):
         trainrun = TrainRunConfig(
             name="test_run",
-            pipeline=PipelineConfig(nodes=[], connections=[]),
-            data=DataConfig(cu3s_file_path="/tmp/file.cu3s"),
+            pipeline="pipeline.yaml",
+            data=DataConfig(params={"cu3s_file_path": "/tmp/file.cu3s"}),
             training=TrainingConfig(),
             loss_nodes=["loss1"],
             metric_nodes=["metric1"],
@@ -112,15 +111,15 @@ class TestProtoSerialization:
         proto = trainrun.to_proto()
         restored = TrainRunConfig.from_proto(proto)
         assert restored.name == trainrun.name
-        assert restored.data.cu3s_file_path == "/tmp/file.cu3s"
+        assert restored.data.params["cu3s_file_path"] == "/tmp/file.cu3s"
         assert restored.loss_nodes == ["loss1"]
 
 
 def test_trainrun_json_roundtrip():
     trainrun = TrainRunConfig(
         name="json_run",
-        pipeline=PipelineConfig(nodes=[], connections=[]),
-        data=DataConfig(cu3s_file_path="/path/to/data.cu3s"),
+        pipeline="pipeline.yaml",
+        data=DataConfig(params={"cu3s_file_path": "/path/to/data.cu3s"}),
         training=TrainingConfig(max_epochs=10),
         tags={"env": "dev"},
     )

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_schemas.pipeline import PortSpec
-from cuvis_ai_core.training.datamodule import CuvisDataModule
+from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
 from cuvis_ai_core.training.trainers import StatisticalTrainer
 
 from tests.fixtures.mock_nodes import (
@@ -57,7 +57,7 @@ class SimpleDataNode(Node):
         return {"cube": cube}
 
 
-class SyntheticDataModule(CuvisDataModule):
+class SyntheticDataModule(BaseCuvisAIDataModule):
     """DataModule wrapper for synthetic dataset."""
 
     def __init__(self, dataset, batch_size=4, num_workers=0):
@@ -72,6 +72,10 @@ class SyntheticDataModule(CuvisDataModule):
         self.val_dataset = torch.utils.data.Subset(
             dataset, range(n_train, len(dataset))
         )
+
+    def setup(self, stage: str | None = None) -> None:
+        # Datasets are built in __init__; nothing to stage.
+        pass
 
     def train_dataloader(self):
         return DataLoader(
