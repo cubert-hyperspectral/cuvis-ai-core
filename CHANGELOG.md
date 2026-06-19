@@ -2,7 +2,9 @@
 
 ## [Unreleased]
 
-- **Client owns plugin loading; `LoadPlugins` becomes singular `LoadPlugin` (breaking).** The
+## 0.8.0 - 2026-06-19
+
+- **Breaking:** the client now owns plugin loading and `LoadPlugins` collapses to a singular `LoadPlugin`. The
   orchestrator now resolves a pipeline's `plugins:` against the session's client-pushed
   `registered_plugins` (`_resolve_plugins(pipeline_config, session, ...)` builds the catalog from those
   via `parse_plugin_manifest` and calls the new `plugin_resolver.resolve_against_catalog`); the
@@ -10,17 +12,17 @@
   post-compose `_mirror_plugin_catalog` are gone. So `LoadPlugin` is a prerequisite of `LoadPipeline`:
   a pipeline naming an unregistered plugin fails with `FAILED_PRECONDITION` (new
   `PluginsNotRegisteredError`) telling the caller to `LoadPlugin` it first. The plugin RPC is now
-  singular — `plugin_service.load_plugin` parses one manifest from `config_bytes` (not a JSON list),
-  returns `LoadPluginResponse(registered_plugin, error)`, and **rejects a local plugin whose `path` is
-  not absolute** (the server cannot resolve a client-relative path). The in-process CLI path
+  singular: `plugin_service.load_plugin` parses one manifest from `config_bytes` (not a JSON list),
+  returns `LoadPluginResponse(registered_plugin, error)`, and rejects a local plugin whose `path` is
+  not absolute (the server cannot resolve a client-relative path). The in-process CLI path
   (`restore-pipeline --plugins-dir`) is unchanged: `resolve_pipeline_plugins` still scans a directory
   via `_build_catalog`, which now inlines the per-file load + cross-dir duplicate-name guard (schemas'
   `load_plugin_manifests` was removed). The git/local manifest variants are renamed
   `GitPluginManifest`/`LocalPluginManifest` -> `GitPluginSource`/`LocalPluginSource` (the source, not a
   kind of manifest; `PluginManifest` stays the union).
-- **Adapted to the schemas plugin-schema "capabilities" rename (breaking).** Follows cuvis-ai-schemas dropping the multi-plugin manifest wrapper and renaming the catalog/plugin types. `orchestrator/catalog.py` is now `orchestrator/plugin_capabilities.py` (re-exports `NodePortSpec`, `PluginCapabilities`, `PluginCapabilityEntry`; `load_catalog_entry(name, dict)` -> `load_capabilities(config_dict)`). The resolver, node registry, orchestrator bridge, runtime project, composer, run-runtime service, provision, restore, and plugin-fixer consume bare single-plugin manifests (`PluginManifest` union, `.capabilities`) keyed by `manifest.name`; `NodeRegistry.register_plugins(path)` loads one bare manifest. The gRPC plugin service builds `PluginInfo(capabilities=...)` and reads each plugin's `capabilities` for the palette (filtering `data_module` entries). `InitializeSession.resolved_plugins_json` is a JSON list of manifests, decoded back to a `name -> manifest` dict. `scripts/emit_metadata.py` drops the `--plugin` flag and rewrites the bare top-level `capabilities:` list (data-module entries left untouched). The `cuvis_ai_test_nodes` fixture manifest moved to the bare shape. Floors `cuvis-ai-schemas` to the release carrying this change.
-- **Trainrun pipelines are referenced, not inlined.** `TrainRunConfig.pipeline` is now a path string (matching the schemas change). `restore_trainrun` resolves it relative to the trainrun file's directory (`_resolve_pipeline_reference`, trying the trainrun dir, the `configs/` root, and CWD, with an optional `.yaml` suffix) and loads the referenced `PipelineConfig`. The gRPC `RestoreTrainRun` path resolves the reference (with a `<name>_pipeline.yaml` sibling fallback) and builds against the session's `NodeRegistry`; `SaveTrainRun` writes the live pipeline to a `<name>_pipeline.yaml` sibling and stores the reference; the orchestrator loads the referenced pipeline to learn its plugin set. Inline pipelines are rejected at parse with a fix-it hint. The two bundled trainrun configs (`gradient_based`, `statistical_based`) drop their Hydra `@pipeline` group composition for a top-level `pipeline:` reference.
-- **Single import-only plugin-registration path + provisioning helpers.** Dropped the in-process
+- **Breaking:** adapted to the cuvis-ai-schemas plugin-schema "capabilities" rename, which drops the multi-plugin manifest wrapper and renames the catalog/plugin types. `orchestrator/catalog.py` is now `orchestrator/plugin_capabilities.py` (re-exports `NodePortSpec`, `PluginCapabilities`, `PluginCapabilityEntry`; `load_catalog_entry(name, dict)` -> `load_capabilities(config_dict)`). The resolver, node registry, orchestrator bridge, runtime project, composer, run-runtime service, provision, restore, and plugin-fixer consume bare single-plugin manifests (`PluginManifest` union, `.capabilities`) keyed by `manifest.name`; `NodeRegistry.register_plugins(path)` loads one bare manifest. The gRPC plugin service builds `PluginInfo(capabilities=...)` and reads each plugin's `capabilities` for the palette (filtering `data_module` entries). `InitializeSession.resolved_plugins_json` is a JSON list of manifests, decoded back to a `name -> manifest` dict. `scripts/emit_metadata.py` drops the `--plugin` flag and rewrites the bare top-level `capabilities:` list (data-module entries left untouched). The `cuvis_ai_test_nodes` fixture manifest moved to the bare shape. Floors `cuvis-ai-schemas` to the release carrying this change.
+- **Breaking:** trainrun pipelines are referenced, not inlined. `TrainRunConfig.pipeline` is now a path string (matching the schemas change). `restore_trainrun` resolves it relative to the trainrun file's directory (`_resolve_pipeline_reference`, trying the trainrun dir, the `configs/` root, and CWD, with an optional `.yaml` suffix) and loads the referenced `PipelineConfig`. The gRPC `RestoreTrainRun` path resolves the reference (with a `<name>_pipeline.yaml` sibling fallback) and builds against the session's `NodeRegistry`; `SaveTrainRun` writes the live pipeline to a `<name>_pipeline.yaml` sibling and stores the reference; the orchestrator loads the referenced pipeline to learn its plugin set. Inline pipelines are rejected at parse with a fix-it hint. The two bundled trainrun configs (`gradient_based`, `statistical_based`) drop their Hydra `@pipeline` group composition for a top-level `pipeline:` reference.
+- **Breaking:** reworked plugin registration to a single import-only path and added provisioning helpers. Dropped the in-process
   clone / `uv pip install` / `sys.path` plugin loader: `load_plugin` / `load_plugins` and the
   clone/install internals are gone. In-process registration is now `register_plugins(manifest)` /
   `register_plugin(name, config)`, which resolve a manifest and delegate to the same import-only
@@ -32,7 +34,7 @@
   `--pin` for a commit sha), an env file (`--requirements <file>`: `.toml` pyproject-shaped or `.txt`),
   or an in-kernel `%pip install` for notebooks. `_plugin_source_entry` gained a `ref="tag"|"sha"`
   argument (default `sha`, so the composer's child pyproject is unchanged).
-- **Pluggable DataModules; the cuvis SDK leaves core.** Added the SDK-free
+- Added pluggable DataModules and removed the cuvis SDK from core. The SDK-free
   `cuvis_ai_core.data.datamodule.BaseCuvisAIDataModule` (split resolution + the four
   `*_dataloader()` methods + `validate_params`) and `create_data_module(registry, data_config)`. A
   concrete DataModule now ships from a plugin (see `cuvis-ai-dataloader`), registered as a
@@ -40,7 +42,7 @@
   `enumerate(required_attrs)` (the attributed `SampleRef` universe) + `build_dataset_from_refs(refs)`
   for selector splits, or `build_stage_dataset(stage)` for module-owned splits; `DataStage` enum
   names the Lightning setup stages.
-- **Composable selector resolution + leakage guard.** New `data/selectors.py`
+- Added composable selector resolution with a leakage guard. New `data/selectors.py`
   (`resolve_selectors`, full `files/file_indices/dir_indices/stems/glob/tag/categories/all/union/
   except/intersect` algebra, keyed on `SampleRef.uid`, order-preserving, rejects negative/out-of-range
   indices and zero-match selectors; `validate_leakage` raises `SplitLeakageError`) and
@@ -49,28 +51,28 @@
   `enumerate()`, runs the configurable leakage guard (`DataSplitConfig.leakage_check`, default
   `error`), then builds per-stage datasets. `expand_range_selectors` still expands `"a-b"` ranges
   inside `file_indices`/`dir_indices` ids.
-- **Fixed `restore-trainrun --mode train`** reading the nonexistent `data.val_ids`/`.test_ids`
+- Fixed `restore-trainrun --mode train` reading the nonexistent `data.val_ids`/`.test_ids`
   (AttributeError): validation/test are now gated on the resolved `val_ds`/`test_ds`. `restore-trainrun`
   gained `--plugins-dir` (and a `restore_trainrun(plugins_dirs=...)` parameter) to match
   `restore-pipeline`.
-- **`NodeRegistry` gains a `data_modules` registry + kind routing.** `register_preinstalled` (the
+- Added a `data_modules` registry and kind routing to `NodeRegistry`. `register_preinstalled` (the
   shared core) routes each provides entry by its static `kind`: `data_module` entries register into
   `data_modules[DATA_MODULE_NAME]` (globally unique, asserts the class `DATA_MODULE_NAME` matches the
   manifest), `node` entries into `loaded_plugin_nodes` as before. The node palette
   (`ListAvailableNodes`) and the pipeline-plugin resolver coverage now filter to `kind == "node"`, so
   a loader-only plugin emits no palette nodes and does not trip the "provides no nodes" warning.
-- **Registry dispatch at the two construction sites.** `training_service` and `restore.py` no longer
+- Changed the two DataModule construction sites to dispatch through the registry: `training_service` and `restore.py` no longer
   hardcode `SingleCu3sDataModule`; both dispatch via `registry.data_modules[data_config.data_module]`.
   `restore-pipeline` inference is now generic over any DataModule (`--data-module` + repeatable
   `--data-arg key=value`; the legacy `--cu3s-file-path` / `--processing-mode` /
   `--annotation-json-path` / `--measurement-indices` flags are removed). Deleted
   `data/datasets.py` + `data/coco_labels.py` (moved to the `cuvis-ai-dataloader` plugin, refactored
   onto the base); `data/rle.py` stays (sibling consumers).
-- **`grpc/helpers.py` drops `import cuvis`.** `PROCESSING_MODE_MAP` values are plain strings and
+- Removed the last `import cuvis` from `grpc/helpers.py`: `PROCESSING_MODE_MAP` values are plain strings and
   `proto_to_processing_mode` returns a `str`; the cu3s reader coerces to the SDK enum at its own
   boundary. Core now imports no `cuvis` SDK (`pyproject` drops `cuvis`, `scikit-image`,
   `dataclass-wizard`; `pycocotools` stays for `rle.py`).
-- **Orchestrator dep-isolation for data plugins.** The child-env composer emits `pkg[extras]` in
+- Added orchestrator dependency isolation for data plugins. The child-env composer emits `pkg[extras]` in
   `[project].dependencies` (keyed off the activated data module's extras) while keeping the bare
   package name for `[tool.uv.sources]`; the resolver unions the data-module plugin into the compose
   set, and `LoadPipeline` / `RestoreTrainRun` carry the selected `data_module` so extras resolve at
@@ -81,12 +83,12 @@
   `LoadPipelineRequest.data_module` field. `forward_load_pipeline` reads that bare name (not a full
   `DataConfig`) and forwards it to the composer; the child's `load_pipeline` ignores it (the pipeline
   graph never needs a data module, only a run does).
-- **Parent/child runtime bridge runs uncapped.** The orchestrator's gRPC channel to the child runtime
+- Changed the parent/child runtime bridge to run uncapped: the orchestrator's gRPC channel to the child runtime
   drops its 300 MB cap to `-1` (unlimited), matching the child server (which already binds unlimited),
   so large tensor batches no longer risk `RESOURCE_EXHAUSTED` crossing the bridge. The public
   `production_server` keeps the only enforced `GRPC_MAX_MSG_SIZE` limit, at the real trust boundary.
-- **Selecting an unknown data module fails fast.** `plugin_resolver._union_data_module_plugin` now
-  raises `ValueError` (was a silent no-op) when no registered plugin provides the requested data
+- Fixed `plugin_resolver._union_data_module_plugin` silently doing nothing for an unknown data module: it now
+  raises `ValueError` when no registered plugin provides the requested data
   module, mirroring `restore._load_data_module_plugin`; the gRPC `LoadPipeline` path surfaces it as
   `INVALID_ARGUMENT`, with a hint pointing at `--plugins-dir` (CLI) or `LoadPlugin` (gRPC).
 
