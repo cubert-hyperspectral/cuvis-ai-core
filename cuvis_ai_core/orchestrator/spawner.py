@@ -58,11 +58,6 @@ _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
 _TERMINATE_KILL_WAIT_SECONDS = 5.0
 _GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
 
-# Parent<->child runtime messages carry full tensor batches (cubes, masks),
-# which dwarf gRPC's 4 MB default receive cap. Match the public server's limit
-# (same GRPC_MAX_MSG_SIZE env, 300 MB default) so large inference inputs and
-# outputs forward across the bridge instead of failing RESOURCE_EXHAUSTED.
-_GRPC_MAX_MSG_SIZE = int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024))
 # CUDA device-selection vars dropped from the child env when GPU is not
 # requested. LD_LIBRARY_PATH is deliberately NOT in this set: it is the
 # dynamic-linker search path the child interpreter (and torch's own shared
@@ -190,11 +185,17 @@ class ChildHandle:
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
         if self._channel is None:
+            # The parent<->child runtime bridge carries full tensor batches
+            # (cubes, masks) that dwarf gRPC's 4 MB default. It is a trusted
+            # loopback channel and the child server already binds unlimited
+            # (run_runtime/__main__.py), so leave both directions uncapped here
+            # too; the public production_server keeps the only enforced size
+            # limit, at the real trust boundary.
             self._channel = grpc.insecure_channel(
                 self.endpoint,
                 options=[
-                    ("grpc.max_send_message_length", _GRPC_MAX_MSG_SIZE),
-                    ("grpc.max_receive_message_length", _GRPC_MAX_MSG_SIZE),
+                    ("grpc.max_send_message_length", -1),
+                    ("grpc.max_receive_message_length", -1),
                 ],
             )
         return cuvis_ai_pb2_grpc.RunRuntimeStub(self._channel)

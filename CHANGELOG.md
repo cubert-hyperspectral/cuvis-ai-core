@@ -81,6 +81,14 @@
   `LoadPipelineRequest.data_module` field. `forward_load_pipeline` reads that bare name (not a full
   `DataConfig`) and forwards it to the composer; the child's `load_pipeline` ignores it (the pipeline
   graph never needs a data module, only a run does).
+- **Parent/child runtime bridge runs uncapped.** The orchestrator's gRPC channel to the child runtime
+  drops its 300 MB cap to `-1` (unlimited), matching the child server (which already binds unlimited),
+  so large tensor batches no longer risk `RESOURCE_EXHAUSTED` crossing the bridge. The public
+  `production_server` keeps the only enforced `GRPC_MAX_MSG_SIZE` limit, at the real trust boundary.
+- **Selecting an unknown data module fails fast.** `plugin_resolver._union_data_module_plugin` now
+  raises `ValueError` (was a silent no-op) when no registered plugin provides the requested data
+  module, mirroring `restore._load_data_module_plugin`; the gRPC `LoadPipeline` path surfaces it as
+  `INVALID_ARGUMENT`, with a hint pointing at `--plugins-dir` (CLI) or `LoadPlugin` (gRPC).
 
 ## 0.7.1 - 2026-06-10
 

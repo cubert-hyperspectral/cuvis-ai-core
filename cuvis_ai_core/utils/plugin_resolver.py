@@ -166,13 +166,18 @@ def _union_data_module_plugin(
     resolved: dict[str, PluginManifest],
     catalog: dict[str, PluginManifest],
     data_module: str,
+    plugins_dirs: list[Path],
 ) -> None:
     """Add the plugin providing ``data_module`` to ``resolved`` (in place).
 
     A dataloader plugin ships no node classes, so the node-coverage resolver
     never pulls it in; a run selects its data module explicitly (DataConfig /
     --data-module), so we look it up by ``data_module_name`` in the catalog and
-    union its plugin into the compose set. No-op if already present or unfound.
+    union its plugin into the compose set. No-op if already present. Raises
+    ``ValueError`` if no plugin in the catalog provides ``data_module`` (mirrors
+    :func:`cuvis_ai_core.utils.restore._load_data_module_plugin`); a requested
+    data module with no provider should fail loudly here, not drop silently and
+    fault opaquely once the runtime cannot dispatch it.
     """
     for plugin_name, cfg in catalog.items():
         for entry in cfg.capabilities:
@@ -182,6 +187,15 @@ def _union_data_module_plugin(
             ):
                 resolved.setdefault(plugin_name, cfg)
                 return
+    if plugins_dirs:
+        hint = (
+            "Pass the plugin's manifest dir via --plugins-dir (searched: "
+            f"{[str(d) for d in plugins_dirs]})."
+        )
+    else:
+        hint = "Register it with LoadPlugin before loading the pipeline."
+    msg = f"No registered plugin provides data module {data_module!r}. {hint}"
+    raise ValueError(msg)
 
 
 def resolve_against_catalog(
@@ -228,7 +242,7 @@ def resolve_against_catalog(
     # Union the data-module plugin (selected by DataConfig.data_module): it ships
     # no node classes, so coverage never pulls it in on its own.
     if data_module:
-        _union_data_module_plugin(resolved, catalog, data_module)
+        _union_data_module_plugin(resolved, catalog, data_module, plugins_dirs)
     return resolved
 
 

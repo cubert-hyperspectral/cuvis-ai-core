@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from cuvis_ai_schemas.plugin import LocalPluginSource, PluginCapabilityEntry
 
 from cuvis_ai_core.orchestrator.cache_key import (
@@ -115,9 +116,8 @@ def test_plugin_source_entry_ref_default_sha_vs_tag():
 def test_union_data_module_plugin():
     catalog = {"cuvis_ai_dataloader": _dataloader_cfg()}
     resolved: dict = {}
-    _union_data_module_plugin(resolved, catalog, "cu3s")
+    _union_data_module_plugin(resolved, catalog, "cu3s", [])
     assert "cuvis_ai_dataloader" in resolved
-    # unknown module -> no-op
-    other: dict = {}
-    _union_data_module_plugin(other, catalog, "envi")
-    assert other == {}
+    # unknown module -> raises (mirrors restore._load_data_module_plugin)
+    with pytest.raises(ValueError, match="envi"):
+        _union_data_module_plugin({}, catalog, "envi", [])
