@@ -768,7 +768,6 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "click", specifier = ">=8.3.1" },
-    { name = "cuvis", specifier = ">=3.5.0" },
     { name = "cuvis-ai-schemas", extras = ["proto"], git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=feature%2Fsimon%2FALL-5738-add-shared-memory-to-g-rpc-contract" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
@@ -824,8 +823,8 @@ provides-extras = ["hf", "dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.5.2.post2+gecfad671f"
-source = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=feature%2Fsimon%2FALL-5738-add-shared-memory-to-g-rpc-contract#ecfad671fee8bcdec2cb3036ac31dd65ecaf7048" }
+version = "0.6.0.post3+g3573d7fbb"
+source = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git?branch=feature%2Fsimon%2FALL-5738-add-shared-memory-to-g-rpc-contract#3573d7fbb39972bbc45c49446c464011a1bb7959" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
