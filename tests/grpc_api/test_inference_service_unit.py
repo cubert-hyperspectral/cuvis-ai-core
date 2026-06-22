@@ -8,10 +8,10 @@ cube/wavelengths/mask/text_prompt input fields, and the inference() happy path.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from contextlib import ExitStack
 from unittest.mock import Mock
 
+import grpc
 import numpy as np
 import pytest
 import torch
@@ -26,6 +26,7 @@ from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_service() -> InferenceService:
     return InferenceService(SessionManager())
 
@@ -33,6 +34,7 @@ def _make_service() -> InferenceService:
 # ---------------------------------------------------------------------------
 # _format_output_key
 # ---------------------------------------------------------------------------
+
 
 class TestFormatOutputKey:
     def setup_method(self):
@@ -51,6 +53,7 @@ class TestFormatOutputKey:
 # ---------------------------------------------------------------------------
 # _should_return
 # ---------------------------------------------------------------------------
+
 
 class TestShouldReturn:
     def setup_method(self):
@@ -72,6 +75,7 @@ class TestShouldReturn:
 # ---------------------------------------------------------------------------
 # _to_tensor
 # ---------------------------------------------------------------------------
+
 
 class TestToTensor:
     def setup_method(self):
@@ -101,6 +105,7 @@ class TestToTensor:
 # ---------------------------------------------------------------------------
 # _get_pipeline_device
 # ---------------------------------------------------------------------------
+
 
 class TestGetPipelineDevice:
     def setup_method(self):
@@ -134,6 +139,7 @@ class TestGetPipelineDevice:
 # _move_batch_to_pipeline_device
 # ---------------------------------------------------------------------------
 
+
 class TestMoveBatchToPipelineDevice:
     def setup_method(self):
         self.service = _make_service()
@@ -166,6 +172,7 @@ class TestMoveBatchToPipelineDevice:
 # ---------------------------------------------------------------------------
 # _parse_input_batch — additional fields not covered by existing tests
 # ---------------------------------------------------------------------------
+
 
 class TestParseInputBatchAdditional:
     def setup_method(self):
@@ -212,6 +219,7 @@ class TestParseInputBatchAdditional:
 # _parse_points
 # ---------------------------------------------------------------------------
 
+
 class TestParsePoints:
     def setup_method(self):
         self.service = _make_service()
@@ -257,13 +265,24 @@ class TestParsePoints:
         )
         result = self.service._parse_points(points_proto)
         assert len(result) == 2
-        assert result[0] == {"element_id": 0, "x": pytest.approx(0.1), "y": pytest.approx(0.2), "type": "positive"}
-        assert result[1] == {"element_id": 1, "x": pytest.approx(0.3), "y": pytest.approx(0.4), "type": "negative"}
+        assert result[0] == {
+            "element_id": 0,
+            "x": pytest.approx(0.1),
+            "y": pytest.approx(0.2),
+            "type": "positive",
+        }
+        assert result[1] == {
+            "element_id": 1,
+            "x": pytest.approx(0.3),
+            "y": pytest.approx(0.4),
+            "type": "negative",
+        }
 
 
 # ---------------------------------------------------------------------------
 # inference() happy path
 # ---------------------------------------------------------------------------
+
 
 class TestInferenceHappyPath:
     """Test inference() with a mock pipeline injected into a real session."""
@@ -370,3 +389,16 @@ class TestInferenceHappyPath:
         response = self._infer()
         assert len(response.outputs) == 0
         assert len(response.metrics) == 0
+
+    def test_inference_requested_unserializable_tensor_errors(self):
+        """A requested array-like output that cannot be serialized fails the RPC
+        instead of silently substituting unrelated outputs."""
+        self.mock_pipeline.forward.return_value = {
+            ("detector", "scores"): torch.ones(4, dtype=torch.complex64),
+            ("rgb_selector", "rgb_image"): torch.zeros(2, 3),
+        }
+        response = self._infer(output_specs=["detector.scores"])
+        self.ctx.set_code.assert_called_once_with(grpc.StatusCode.INTERNAL)
+        # The unrequested output must not be substituted under a success response.
+        assert "rgb_selector.rgb_image" not in response.outputs
+        assert len(response.outputs) == 0

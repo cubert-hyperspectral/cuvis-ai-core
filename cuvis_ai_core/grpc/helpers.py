@@ -64,6 +64,24 @@ class ShmBufferOwner:
         self.close()
 
 
+def _validate_shm_name(name: str) -> None:
+    """Reject SHM segment names that could escape the shared-memory namespace.
+
+    The name arrives from the producer over the wire. On POSIX it is appended to
+    ``/dev/shm/`` after stripping a leading '/', so a value containing ``..`` or an
+    embedded separator could make the reader ``open()``/``mmap()`` an arbitrary file
+    outside the SHM namespace. Reject those for both platforms; ``_map_shm_posix``
+    does an additional single-segment check after stripping the leading slash.
+
+    Raises:
+        ValueError: If the name is empty or contains a ``..`` path component.
+    """
+    if not name:
+        raise ValueError("SHM name must not be empty")
+    if ".." in name:
+        raise ValueError(f"SHM name must not contain '..': {name!r}")
+
+
 def _map_shm_windows(name: str, byte_size: int) -> ShmBufferOwner:
     """Map a Windows named file-mapping for the given SHM segment.
 
@@ -98,7 +116,10 @@ def _map_shm_posix(name: str, byte_size: int) -> ShmBufferOwner:
         file handle. The caller owns the returned object and must call
         ``close()`` (or use it as a context manager) when done.
     """
-    shm_path = f"/dev/shm/{name.lstrip('/')}"
+    segment = name.lstrip("/")
+    if not segment or "/" in segment or "\\" in segment:
+        raise ValueError(f"SHM name must be a single segment: {name!r}")
+    shm_path = f"/dev/shm/{segment}"
     file_obj = open(shm_path, "rb")
     try:
         mm = mmap.mmap(file_obj.fileno(), byte_size, access=mmap.ACCESS_READ)
@@ -125,6 +146,7 @@ def _map_shm(name: str, byte_size: int) -> ShmBufferOwner:
             with _map_shm(name, size) as owner:
                 arr = np.frombuffer(owner.buffer, ...)
     """
+    _validate_shm_name(name)
     if sys.platform == "win32":
         return _map_shm_windows(name, byte_size)
     return _map_shm_posix(name, byte_size)
@@ -211,6 +233,7 @@ _DTYPE_STR_TO_PROTO: dict[str, int] = {
     "uint8": cuvis_ai_pb2.D_TYPE_UINT8,
     "bool": cuvis_ai_pb2.D_TYPE_BOOL,
     "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
+    "uint16": cuvis_ai_pb2.D_TYPE_UINT16,
 }
 
 
@@ -334,15 +357,40 @@ def proto_to_numpy(
 
     if payload == "shm_ref":
         ref = tensor_proto.shm_ref
-        map_size = ref.byte_offset + ref.byte_size
-        if ref.byte_size % np.dtype(dtype).itemsize != 0:
+        itemsize = np.dtype(dtype).itemsize
+
+        if ref.byte_size % itemsize != 0:
             raise ValueError(
                 f"SHM byte_size {ref.byte_size} is not divisible by dtype {dtype}"
             )
+        if ref.byte_offset % itemsize != 0:
+            raise ValueError(
+                f"SHM byte_offset {ref.byte_offset} is not divisible by dtype {dtype}"
+            )
+        # Cross-check the producer-declared size against the shape so a malformed or
+        # hostile ShmRef cannot drive an over-large mapping or a view that misreads
+        # the segment. byte_size/byte_offset are untrusted uint64 from the wire.
+        if shape:
+            expected = int(np.prod(shape)) * itemsize
+            if ref.byte_size != expected:
+                raise ValueError(
+                    f"SHM byte_size {ref.byte_size} does not match shape {shape} "
+                    f"x dtype {dtype} ({expected} bytes)"
+                )
 
+        # An empty tensor needs no mapping (mmap rejects a zero-length segment:
+        # WinError 87 on Windows, ValueError on POSIX).
+        if ref.byte_size == 0:
+            arr = np.empty(0, dtype=dtype)
+            if shape:
+                arr = arr.reshape(shape)
+            yield arr
+            return
+
+        map_size = ref.byte_offset + ref.byte_size
         owner = _map_shm(ref.name, map_size)
         try:
-            count = ref.byte_size // np.dtype(dtype).itemsize
+            count = ref.byte_size // itemsize
             arr = np.frombuffer(
                 owner.buffer,
                 dtype=dtype,

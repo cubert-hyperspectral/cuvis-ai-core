@@ -42,19 +42,22 @@ class InferenceService:
             return cuvis_ai_pb2.InferenceResponse()
 
         with ExitStack() as stack:
-            # With copy_tensors=False the parse only builds views into the input
-            # buffers; the real read cost lands in the device move below.
+            # copy_tensors=False yields zero-copy views into the input buffers; the
+            # cube may be a read-only shared-memory mapping held open by `stack`.
+            # Inputs are read-only: nodes must not mutate them in place, and no view
+            # may outlive this block, where the SHM mappings are released.
             batch = self._parse_input_batch(
                 request.inputs,
                 copy_tensors=False,
                 stack=stack,
             )
-            # Register clear() last so it fires first on exit (LIFO), releasing
-            # tensor refs before the SHM mappings are closed.
-            stack.callback(batch.clear)
-
-            # Ensure all tensor inputs are on the same device as the pipeline
+            # Move to the pipeline device, then register clear() on the post-move
+            # dict so the batch's tensor refs drop before the SHM mappings close.
+            # This must run after the reassignment: on a CPU pipeline `.to('cpu')`
+            # returns the same objects, so clearing the original dict would leave
+            # them referenced and `owner.close()` would hit BufferError and leak.
             batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
+            stack.callback(batch.clear)
 
             outputs = session.pipeline.forward(
                 batch=batch, stage=ExecutionStage.INFERENCE
@@ -68,18 +71,33 @@ class InferenceService:
                 f"{sorted(output_specs) or '[] (all)'}"
             )
 
-            tensor_outputs, metrics = self._build_outputs(outputs, output_specs)
+            tensor_outputs, metrics, dropped = self._build_outputs(
+                outputs, output_specs
+            )
 
-            # If the requested specs matched only non-serializable outputs
-            # (e.g. dict metadata like 'band_info'), don't hand back an empty
-            # response — fall back to every serializable output the pipeline
-            # produced so the client reliably gets the rest.
+            # A specifically requested, array-like output that failed to serialize
+            # is a real error. Fail loudly instead of silently substituting unrelated
+            # outputs under an OK status.
+            if dropped:
+                msg = (
+                    f"Requested output(s) {sorted(dropped)} could not be serialized "
+                    f"(unsupported dtype or value). Available: {sorted(available)}."
+                )
+                logger.error(msg)
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details(msg)
+                return cuvis_ai_pb2.InferenceResponse()
+
+            # If the requested specs matched only non-serializable metadata
+            # (e.g. a dict like 'band_info'), don't hand back an empty response —
+            # fall back to every serializable output the pipeline produced so the
+            # client reliably gets the rest.
             if output_specs and available and not tensor_outputs and not metrics:
                 logger.warning(
                     f"output_specs={sorted(output_specs)} produced no serializable "
                     f"output; returning all serializable outputs instead."
                 )
-                tensor_outputs, metrics = self._build_outputs(outputs, set())
+                tensor_outputs, metrics, _ = self._build_outputs(outputs, set())
 
             if available and not tensor_outputs and not metrics:
                 logger.warning(
@@ -95,7 +113,7 @@ class InferenceService:
         self,
         outputs: dict[Any, Any],
         specs: set[str],
-    ) -> tuple[dict[str, cuvis_ai_pb2.Tensor], dict[str, float]]:
+    ) -> tuple[dict[str, cuvis_ai_pb2.Tensor], dict[str, float], list[str]]:
         """Filter and serialize pipeline outputs into the response maps.
 
         Applies ``output_specs`` filtering, routes scalars to ``metrics``, and
@@ -103,9 +121,16 @@ class InferenceService:
         (non-tensor metadata, artifacts, unsupported dtypes) are skipped with a
         warning rather than failing the whole response. An empty ``specs`` set
         means "return everything serializable".
+
+        Returns a third value, ``dropped``: the names of *explicitly requested*
+        outputs that were array-like (tensor/ndarray) but failed to serialize.
+        Those are real errors the caller must surface, not silently mask — unlike
+        non-array metadata (dicts, custom objects), which is expected to be
+        unserializable and is simply skipped.
         """
         tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
         metrics: dict[str, float] = {}
+        dropped: list[str] = []
 
         for raw_key, value in outputs.items():
             output_name = self._format_output_key(raw_key)
@@ -131,8 +156,14 @@ class InferenceService:
                     f"Dropping output {output_name!r} "
                     f"(type={type(value).__name__}): {exc}"
                 )
+                # An array-like output (tensor/ndarray) that failed to serialize is
+                # a real error when the client explicitly requested it; record it so
+                # inference() can fail loudly instead of substituting unrelated
+                # outputs. Non-array metadata stays a silent skip.
+                if specs and isinstance(value, (torch.Tensor, np.ndarray)):
+                    dropped.append(output_name)
 
-        return tensor_outputs, metrics
+        return tensor_outputs, metrics, dropped
 
     def _parse_input_batch(
         self,

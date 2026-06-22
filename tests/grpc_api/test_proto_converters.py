@@ -203,6 +203,7 @@ class TestTorchConversion:
         tensor_proto = helpers.numpy_to_proto(arr)
 
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             with helpers.proto_to_tensor(tensor_proto, copy=False) as tensor:
@@ -420,7 +421,9 @@ class TestShmBufferOwner:
 class TestProtoToNumpyShmRef:
     """Test proto_to_numpy with shm_ref payload (SHM path)."""
 
-    def _make_tensor_proto(self, arr: np.ndarray, byte_offset: int = 0) -> cuvis_ai_pb2.Tensor:
+    def _make_tensor_proto(
+        self, arr: np.ndarray, byte_offset: int = 0
+    ) -> cuvis_ai_pb2.Tensor:
         data = arr.tobytes()
         return cuvis_ai_pb2.Tensor(
             shape=list(arr.shape),
@@ -435,7 +438,10 @@ class TestProtoToNumpyShmRef:
     def test_shm_ref_copy_true(self):
         arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
         tensor_proto = self._make_tensor_proto(arr)
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm",
+            return_value=_make_owner(arr.tobytes()),
+        ):
             with helpers.proto_to_numpy(tensor_proto, copy=True) as result:
                 assert isinstance(result, np.ndarray)
                 assert result.flags.writeable
@@ -444,7 +450,10 @@ class TestProtoToNumpyShmRef:
     def test_shm_ref_copy_false(self):
         arr = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
         tensor_proto = self._make_tensor_proto(arr)
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm",
+            return_value=_make_owner(arr.tobytes()),
+        ):
             with helpers.proto_to_numpy(tensor_proto, copy=False) as result:
                 np.testing.assert_array_equal(result, arr)
 
@@ -457,7 +466,9 @@ class TestProtoToNumpyShmRef:
             dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
             shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=8, byte_size=8),
         )
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(raw)):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(raw)
+        ):
             with helpers.proto_to_numpy(tensor_proto) as result:
                 np.testing.assert_array_equal(result, arr)
 
@@ -467,7 +478,9 @@ class TestProtoToNumpyShmRef:
             dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
             shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=5),
         )
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(b"\x00" * 5)):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(b"\x00" * 5)
+        ):
             with pytest.raises(ValueError, match="not divisible"):
                 with helpers.proto_to_numpy(tensor_proto) as _:
                     pass
@@ -498,7 +511,10 @@ class TestProtoToTensorShmRef:
             dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
             shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=16),
         )
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm",
+            return_value=_make_owner(arr.tobytes()),
+        ):
             with helpers.proto_to_tensor(tensor_proto) as tensor:
                 assert isinstance(tensor, torch.Tensor)
                 assert tensor.shape == torch.Size([2, 2])
@@ -512,7 +528,10 @@ class TestProtoToTensorShmRef:
             dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
             shm_ref=cuvis_ai_pb2.ShmRef(name="/test_seg", byte_offset=0, byte_size=12),
         )
-        with patch("cuvis_ai_core.grpc.helpers._map_shm", return_value=_make_owner(arr.tobytes())):
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm",
+            return_value=_make_owner(arr.tobytes()),
+        ):
             with helpers.proto_to_tensor(tensor_proto, copy=True) as tensor:
                 tensor[0] = 99.0  # must not raise
                 assert tensor[0].item() == 99.0
@@ -548,7 +567,9 @@ class TestMapShmDispatch:
 
     def test_dispatches_to_windows_on_win32(self):
         mock_owner = MagicMock()
-        with patch("cuvis_ai_core.grpc.helpers._map_shm_windows", return_value=mock_owner) as mock_win:
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm_windows", return_value=mock_owner
+        ) as mock_win:
             with patch("sys.platform", "win32"):
                 result = helpers._map_shm("test_name", 16)
         mock_win.assert_called_once_with("test_name", 16)
@@ -556,7 +577,66 @@ class TestMapShmDispatch:
 
     def test_dispatches_to_posix_on_linux(self):
         mock_owner = MagicMock()
-        with patch("cuvis_ai_core.grpc.helpers._map_shm_posix", return_value=mock_owner) as mock_posix:
+        with patch(
+            "cuvis_ai_core.grpc.helpers._map_shm_posix", return_value=mock_owner
+        ) as mock_posix:
             with patch("sys.platform", "linux"):
                 result = helpers._map_shm("test_name", 16)
         mock_posix.assert_called_once_with("test_name", 16)
+        assert result is mock_owner
+
+
+class TestShmNameValidation:
+    """SHM names from the wire must not escape the shared-memory namespace."""
+
+    @pytest.mark.parametrize("bad", ["", "../etc/passwd", "a/../../b", "foo/..", ".."])
+    def test_map_shm_rejects_traversal_or_empty(self, bad):
+        with pytest.raises(ValueError):
+            helpers._map_shm(bad, 16)
+
+    @pytest.mark.parametrize("bad", ["foo/bar", "a\\b", "", "with/sep"])
+    def test_map_shm_posix_rejects_embedded_separator(self, bad):
+        # The single-segment check runs before any open(), so it raises on every
+        # platform without touching the filesystem.
+        with pytest.raises(ValueError):
+            helpers._map_shm_posix(bad, 16)
+
+    def test_map_shm_posix_accepts_leading_slash_name(self):
+        # The legitimate POSIX form "/cuvis_<pid>_<n>" must pass validation; it only
+        # fails later at open() because no such segment exists here.
+        with pytest.raises((FileNotFoundError, OSError)):
+            helpers._map_shm_posix("/cuvis_123_0", 16)
+
+
+class TestProtoToNumpyShmValidation:
+    """proto_to_numpy validates untrusted ShmRef sizes before mapping."""
+
+    def test_byte_size_shape_mismatch_raises(self):
+        proto = cuvis_ai_pb2.Tensor(
+            shape=[2, 2],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="cuvis_1_0", byte_offset=0, byte_size=8),
+        )
+        with pytest.raises(ValueError):
+            with helpers.proto_to_numpy(proto):
+                pass
+
+    def test_byte_size_not_divisible_raises(self):
+        proto = cuvis_ai_pb2.Tensor(
+            shape=[],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="cuvis_1_0", byte_offset=0, byte_size=7),
+        )
+        with pytest.raises(ValueError):
+            with helpers.proto_to_numpy(proto):
+                pass
+
+    def test_zero_byte_size_yields_empty_without_mapping(self):
+        proto = cuvis_ai_pb2.Tensor(
+            shape=[0],
+            dtype=cuvis_ai_pb2.D_TYPE_FLOAT32,
+            shm_ref=cuvis_ai_pb2.ShmRef(name="cuvis_1_0", byte_offset=0, byte_size=0),
+        )
+        with helpers.proto_to_numpy(proto) as arr:
+            assert arr.shape == (0,)
+            assert arr.dtype == np.float32
