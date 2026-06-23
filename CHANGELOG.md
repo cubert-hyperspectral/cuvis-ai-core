@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- **Breaking:** collapsed the `NodeRegistry` plugin-registration API. `register_plugins(path)` ->
+  `register_plugin(path)` (now returns `None`); the redundant `register_plugin(name, config)` and
+  its `_parse_config_dict` helper are removed (a caller holding a manifest dict parses it via
+  `parse_plugin_manifest` first). The dict entry points are renamed `register_preinstalled` ->
+  `register_plugins_installed` and `register_catalog_entries` -> `register_plugins_catalog`;
+  `register_plugins_installed` is now atomic (a failed import mid-set rolls back the whole call).
+
 ## 0.9.0 - 2026-06-23
 
 - **Breaking:** `proto_to_numpy` / `proto_to_tensor` are now context managers. They yield the array/tensor and release the backing shared-memory block on exit, so callers must use them in a `with` block (`with proto_to_numpy(tensor) as arr: ...`) instead of calling them as plain functions. The lifetime contract is what makes zero-copy shared-memory reads safe.

@@ -253,7 +253,7 @@ class PluginService:
 
         This RPC does not install or import the plugin. It parses and validates
         the single manifest in ``request.manifest.config_bytes`` and records it
-        via ``session.node_registry.register_catalog_entries(...)``. Callers
+        via ``session.node_registry.register_plugins_catalog(...)``. Callers
         loop to register several. Actual materialisation (clone, install,
         import) happens lazily when ``LoadPipeline`` references the registered
         plugin through the pipeline yaml's ``plugins:`` field, so every plugin a
@@ -309,7 +309,7 @@ class PluginService:
             logger.error(msg)
             return cuvis_ai_pb2.LoadPluginResponse(error=msg)
 
-        session.node_registry.register_catalog_entries({manifest.name: manifest})
+        session.node_registry.register_plugins_catalog({manifest.name: manifest})
         session.registered_plugins[manifest.name] = manifest.model_dump()
         logger.info(
             f"Registered plugin '{manifest.name}' in session "

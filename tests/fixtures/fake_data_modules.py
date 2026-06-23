@@ -1,6 +1,6 @@
 """Fake DataModule classes for registry-dispatch + base-class tests.
 
-Importable by FQCN so ``register_preinstalled`` can resolve them like a real plugin's
+Importable by FQCN so ``register_plugins_installed`` can resolve them like a real plugin's
 provides entries, without any SDK or plugin install.
 """
 

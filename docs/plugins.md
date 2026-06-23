@@ -79,11 +79,7 @@ from cuvis_ai_core.utils.node_registry import NodeRegistry
 registry = NodeRegistry()
 
 # Register one bare manifest (one plugin) by path.
-registry.register_plugins("configs/plugins/adaclip.yaml")
-
-# Or register a single plugin by name + explicit config dict.
-registry.register_plugin("my_plugin", {"path": "../my-plugin",
-                                       "capabilities": [{"class_name": "my_plugin.node.MyNode"}]})
+registry.register_plugin("configs/plugins/adaclip.yaml")
 ```
 
 A plugin whose package is not installed raises a guided `ModuleNotFoundError` pointing at the
