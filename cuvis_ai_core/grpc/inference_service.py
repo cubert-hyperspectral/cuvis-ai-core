@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import ExitStack
 from typing import Any
 
 import grpc
 import numpy as np
 import torch
+from loguru import logger
 
 from cuvis_ai_schemas.enums import ExecutionStage
 
@@ -39,19 +41,101 @@ class InferenceService:
         if not require_pipeline(session, context):
             return cuvis_ai_pb2.InferenceResponse()
 
-        batch = self._parse_input_batch(request.inputs)
-        # Ensure all tensor inputs are on the same device as the pipeline
-        batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
+        with ExitStack() as stack:
+            # copy_tensors=False yields zero-copy views into the input buffers; the
+            # cube may be a read-only shared-memory mapping held open by `stack`.
+            # Inputs are read-only: nodes must not mutate them in place, and no view
+            # may outlive this block, where the SHM mappings are released.
+            batch = self._parse_input_batch(
+                request.inputs,
+                copy_tensors=False,
+                stack=stack,
+            )
+            # Move to the pipeline device, then register clear() on the post-move
+            # dict so the batch's tensor refs drop before the SHM mappings close.
+            # This must run after the reassignment: on a CPU pipeline `.to('cpu')`
+            # returns the same objects, so clearing the original dict would leave
+            # them referenced and `owner.close()` would hit BufferError and leak.
+            batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
+            stack.callback(batch.clear)
 
-        outputs = session.pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
+            outputs = session.pipeline.forward(
+                batch=batch, stage=ExecutionStage.INFERENCE
+            )
 
-        output_specs = set(request.output_specs)
+            output_specs = set(request.output_specs)
+            available = [self._format_output_key(k) for k in outputs]
+            logger.info(
+                f"Inference produced {len(available)} pipeline outputs "
+                f"{sorted(available)}; requested output_specs="
+                f"{sorted(output_specs) or '[] (all)'}"
+            )
+
+            tensor_outputs, metrics, dropped = self._build_outputs(
+                outputs, output_specs
+            )
+
+            # A specifically requested, array-like output that failed to serialize
+            # is a real error. Fail loudly instead of silently substituting unrelated
+            # outputs under an OK status.
+            if dropped:
+                msg = (
+                    f"Requested output(s) {sorted(dropped)} could not be serialized "
+                    f"(unsupported dtype or value). Available: {sorted(available)}."
+                )
+                logger.error(msg)
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details(msg)
+                return cuvis_ai_pb2.InferenceResponse()
+
+            # If the requested specs matched only non-serializable metadata
+            # (e.g. a dict like 'band_info'), don't hand back an empty response —
+            # fall back to every serializable output the pipeline produced so the
+            # client reliably gets the rest.
+            if output_specs and available and not tensor_outputs and not metrics:
+                logger.warning(
+                    f"output_specs={sorted(output_specs)} produced no serializable "
+                    f"output; returning all serializable outputs instead."
+                )
+                tensor_outputs, metrics, _ = self._build_outputs(outputs, set())
+
+            if available and not tensor_outputs and not metrics:
+                logger.warning(
+                    f"No serializable outputs for session {request.session_id}; "
+                    f"returning an empty response. Available: {sorted(available)}"
+                )
+
+            return cuvis_ai_pb2.InferenceResponse(
+                outputs=tensor_outputs, metrics=metrics
+            )
+
+    def _build_outputs(
+        self,
+        outputs: dict[Any, Any],
+        specs: set[str],
+    ) -> tuple[dict[str, cuvis_ai_pb2.Tensor], dict[str, float], list[str]]:
+        """Filter and serialize pipeline outputs into the response maps.
+
+        Applies ``output_specs`` filtering, routes scalars to ``metrics``, and
+        serializes the rest to tensors. Outputs that cannot be serialized
+        (non-tensor metadata, artifacts, unsupported dtypes) are skipped with a
+        warning rather than failing the whole response. An empty ``specs`` set
+        means "return everything serializable".
+
+        Returns a third value, ``dropped``: the names of *explicitly requested*
+        outputs that were array-like (tensor/ndarray) but failed to serialize.
+        Those are real errors the caller must surface, not silently mask — unlike
+        non-array metadata (dicts, custom objects), which is expected to be
+        unserializable and is simply skipped.
+        """
         tensor_outputs: dict[str, cuvis_ai_pb2.Tensor] = {}
         metrics: dict[str, float] = {}
+        dropped: list[str] = []
 
         for raw_key, value in outputs.items():
             output_name = self._format_output_key(raw_key)
-            if not self._should_return(output_name, output_specs):
+            if not self._should_return(output_name, specs):
+                logger.debug(f"Skipping output {output_name!r}: not in output_specs")
                 continue
 
             # Metrics: plain scalars
@@ -63,14 +147,30 @@ class InferenceService:
 
             try:
                 tensor = self._to_tensor(value)
-            except Exception:
-                # Skip non-tensorizable outputs (e.g., artifacts or custom objects)
-                continue
-            tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
+                tensor_outputs[output_name] = helpers.tensor_to_proto(tensor)
+            except Exception as exc:
+                # Non-serializable outputs (artifacts/custom objects/metadata)
+                # are dropped — but loudly, so an empty response is never a
+                # silent mystery.
+                logger.warning(
+                    f"Dropping output {output_name!r} "
+                    f"(type={type(value).__name__}): {exc}"
+                )
+                # An array-like output (tensor/ndarray) that failed to serialize is
+                # a real error when the client explicitly requested it; record it so
+                # inference() can fail loudly instead of substituting unrelated
+                # outputs. Non-array metadata stays a silent skip.
+                if specs and isinstance(value, (torch.Tensor, np.ndarray)):
+                    dropped.append(output_name)
 
-        return cuvis_ai_pb2.InferenceResponse(outputs=tensor_outputs, metrics=metrics)
+        return tensor_outputs, metrics, dropped
 
-    def _parse_input_batch(self, inputs: cuvis_ai_pb2.InputBatch) -> dict[str, Any]:
+    def _parse_input_batch(
+        self,
+        inputs: cuvis_ai_pb2.InputBatch,
+        copy_tensors: bool = True,
+        stack: ExitStack | None = None,
+    ) -> dict[str, Any]:
         """Convert InputBatch proto to dict for CuvisPipeline.
 
         Converts proto messages to Python types. The pipeline determines
@@ -78,26 +178,34 @@ class InferenceService:
         """
         batch: dict[str, Any] = {}
 
+        def parse_tensor(tensor_proto: cuvis_ai_pb2.Tensor) -> torch.Tensor:
+            if stack is not None:
+                return stack.enter_context(
+                    helpers.proto_to_tensor(tensor_proto, copy=copy_tensors)
+                )
+            with helpers.proto_to_tensor(tensor_proto, copy=True) as t:
+                return t.clone()
+
         # Parse tensor inputs (if provided)
         if inputs.HasField("cube"):
-            batch["cube"] = helpers.proto_to_tensor(inputs.cube)
+            batch["cube"] = parse_tensor(inputs.cube)
 
         if inputs.HasField("wavelengths"):
-            batch["wavelengths"] = helpers.proto_to_tensor(inputs.wavelengths)
+            batch["wavelengths"] = parse_tensor(inputs.wavelengths)
 
         if inputs.HasField("mask"):
-            batch["mask"] = helpers.proto_to_tensor(inputs.mask)
+            batch["mask"] = parse_tensor(inputs.mask)
 
         if inputs.HasField("rgb_image"):
-            batch["rgb_image"] = helpers.proto_to_tensor(inputs.rgb_image)
+            batch["rgb_image"] = parse_tensor(inputs.rgb_image)
 
         if inputs.HasField("frame_id"):
-            frame_id = helpers.proto_to_tensor(inputs.frame_id)
+            frame_id = parse_tensor(inputs.frame_id)
             if frame_id.numel() > 0:
                 batch["frame_id"] = frame_id
 
         if inputs.HasField("mesu_index"):
-            mesu_index = helpers.proto_to_tensor(inputs.mesu_index)
+            mesu_index = parse_tensor(inputs.mesu_index)
             if mesu_index.numel() > 0:
                 batch["mesu_index"] = mesu_index
 
@@ -113,7 +221,7 @@ class InferenceService:
 
         # Parse extra tensor inputs (node-specific dynamic inputs).
         for key, tensor_proto in inputs.extra_inputs.items():
-            batch[key] = helpers.proto_to_tensor(tensor_proto)
+            batch[key] = parse_tensor(tensor_proto)
 
         return batch
 

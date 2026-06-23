@@ -104,8 +104,8 @@ class TestInference:
         selected_key = "SoftChannelSelector.selected"
 
         assert selected_key in response.outputs
-        selected = helpers.proto_to_numpy(response.outputs[selected_key])
-        assert selected.shape == cube.shape
+        with helpers.proto_to_numpy(response.outputs[selected_key]) as selected:
+            assert selected.shape == cube.shape
 
         # Expect deterministic key formatting (node.port)
         assert all("." in key for key in response.outputs)
