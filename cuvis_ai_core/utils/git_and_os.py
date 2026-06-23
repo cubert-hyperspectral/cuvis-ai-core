@@ -7,10 +7,10 @@ helper, or the orchestrator's composed child venv). Registration is a plain
 ``importlib.import_module`` of each provided class; nothing here clones a
 repo, installs dependencies, or mutates ``sys.path``.
 
-Both the in-process front doors
-(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_plugins` /
-``register_plugin``) and the orchestrator's child runtime
-(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_preinstalled`)
+Both the in-process front door
+(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_plugin`)
+and the dict entry point
+(:meth:`cuvis_ai_core.utils.node_registry.NodeRegistry.register_plugins_installed`)
 funnel through :func:`import_plugin_nodes`.
 """
 

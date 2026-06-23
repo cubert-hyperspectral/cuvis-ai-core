@@ -9,10 +9,8 @@ from loguru import logger
 
 import cuvis_ai_core.utils.git_and_os as git_os
 from cuvis_ai_schemas.plugin import (
-    LocalPluginSource,
     PluginManifest,
     load_plugin_manifest,
-    parse_plugin_manifest,
 )
 
 
@@ -25,7 +23,7 @@ class NodeRegistry:
 
     INSTANCE MODE (built-ins + plugins):
         registry = NodeRegistry()
-        registry.register_plugin("adaclip", config)
+        registry.register_plugin("configs/plugins/adaclip.yaml")
         registry.get("AdaCLIPDetector")  # Access both built-ins and plugins
 
     Built-in nodes are registered via @register decorator for O(1) lookup.
@@ -40,7 +38,8 @@ class NodeRegistry:
         """Create instance for plugin support."""
         # Every known plugin's config (registered or loaded) — the single
         # source of plugin config. Anything that needs a config reads it here;
-        # `register_plugin(name)` with no explicit config materialises this entry.
+        # `register_plugins_catalog` records entries; `register_plugins_installed`
+        # records and imports them.
         self.plugin_catalog: Dict[str, PluginManifest] = {}
         # Loaded node classes, keyed by class name. Membership here *is* the
         # loaded state: a plugin is loaded iff its provided classes are present.
@@ -164,7 +163,7 @@ class NodeRegistry:
 
             # Plugin node (instance call)
             registry = NodeRegistry()
-            registry.register_plugin("adaclip", config)
+            registry.register_plugin("configs/plugins/adaclip.yaml")
             cls = registry.get("AdaCLIPDetector")
 
             # Custom node with full path
@@ -209,7 +208,7 @@ class NodeRegistry:
                 "     uv run restore-pipeline --pipeline-path <path> --plugins-dir configs/plugins\n\n"
                 "   For Python usage:\n"
                 "     registry = NodeRegistry()\n"
-                "     registry.register_plugins('path/to/plugins.yaml')\n"
+                "     registry.register_plugin('path/to/plugin.yaml')\n"
                 "     pipeline = CuvisPipeline.load_pipeline(..., node_registry=registry)\n\n"
             )
         elif (
@@ -220,7 +219,7 @@ class NodeRegistry:
             error_msg += (
                 "\n⚠️  This appears to be an external plugin node, but no plugins are loaded!\n"
                 "   Load plugins before building pipeline:\n"
-                "     registry.register_plugins('path/to/plugins.yaml')\n\n"
+                "     registry.register_plugin('path/to/plugin.yaml')\n\n"
             )
         else:
             error_msg += "For custom nodes, provide full import path (e.g., 'my_package.MyNode').\n"
@@ -350,13 +349,13 @@ class NodeRegistry:
 
         return registered_count
 
-    def register_plugins(self, manifest_path: Union[str, Path]) -> int:
+    def register_plugin(self, manifest_path: Union[str, Path]) -> None:
         """Register the plugin declared in a bare manifest YAML into THIS INSTANCE.
 
         Import-only front door for in-process use (CLI, notebooks, cookbook).
         One yaml file is one plugin: it loads the bare manifest (resolving a
         local plugin's relative path), keys it by ``manifest.name``, and hands
-        it to :meth:`register_preinstalled`. The plugin must already be
+        it to :meth:`register_plugins_installed`. The plugin must already be
         importable in the active environment (an editable ``[tool.uv.sources]``
         entry in dev, or ``uv pip install`` / the ``provision`` helper
         otherwise); this never clones or installs.
@@ -364,49 +363,9 @@ class NodeRegistry:
         Args:
             manifest_path: Path to a single-plugin manifest YAML.
 
-        Returns:
-            Number of plugins registered (always 1).
-
         Example:
             registry = NodeRegistry()
-            count = registry.register_plugins("configs/plugins/sam3.yaml")
-        """
-        if not hasattr(self, "loaded_plugin_nodes"):
-            raise RuntimeError(
-                "register_plugins() requires an instance. "
-                "Create instance first: registry = NodeRegistry()"
-            )
-
-        manifest_path = Path(manifest_path)
-        manifest = load_plugin_manifest(manifest_path)
-
-        self.register_preinstalled({manifest.name: manifest})
-        logger.info(f"Registered plugin '{manifest.name}' from {manifest_path}")
-        return 1
-
-    def register_plugin(
-        self,
-        name: str,
-        config: Optional[dict] = None,
-        manifest_dir: Optional[Path] = None,
-    ) -> None:
-        """Register a single already-installed plugin into THIS INSTANCE.
-
-        Import-only single-plugin front door (the singular of
-        :meth:`register_plugins`). Resolves ``config`` (an explicit
-        ``repo``+``tag`` or ``path`` dict) or, when ``config is None``, the
-        registered ``self.plugin_catalog[name]`` entry, then delegates to
-        :meth:`register_preinstalled`. The plugin package must already be
-        importable in the active environment; this never clones or installs.
-
-        Args:
-            name: Plugin identifier (e.g., "adaclip").
-            config: Optional manifest dict (repo+tag+capabilities for Git,
-                path+capabilities for local). When ``None``, the catalog entry
-                for ``name`` is used. A missing ``name`` key is filled from this
-                argument.
-            manifest_dir: Optional base directory for resolving a local
-                plugin's relative path.
+            registry.register_plugin("configs/plugins/sam3.yaml")
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
@@ -414,38 +373,13 @@ class NodeRegistry:
                 "Create instance first: registry = NodeRegistry()"
             )
 
-        if config is None:
-            if name not in self.plugin_catalog:
-                raise KeyError(
-                    f"Plugin '{name}' is neither registered in the catalog "
-                    f"nor passed as an explicit config. Call "
-                    f"register_catalog_entries() first, or pass config=..."
-                )
-            cfg = self.plugin_catalog[name]
-        else:
-            cfg = self._parse_config_dict(name, config, manifest_dir)
+        manifest_path = Path(manifest_path)
+        manifest = load_plugin_manifest(manifest_path)
 
-        self.register_preinstalled({name: cfg})
+        self.register_plugins_installed({manifest.name: manifest})
+        logger.info(f"Registered plugin '{manifest.name}' from {manifest_path}")
 
-    @staticmethod
-    def _parse_config_dict(
-        name: str, config: dict, manifest_dir: Optional[Path]
-    ) -> PluginManifest:
-        """Validate a manifest dict into a typed manifest (no clone/install)."""
-        if "repo" not in config and "path" not in config:
-            raise ValueError(
-                f"Plugin '{name}' config must have either 'repo' (Git) or 'path' (local)."
-            )
-        data = dict(config)
-        data.setdefault("name", name)
-        manifest = parse_plugin_manifest(data)
-        if isinstance(manifest, LocalPluginSource) and manifest_dir is not None:
-            manifest = manifest.model_copy(
-                update={"path": str(manifest.resolve_path(manifest_dir))}
-            )
-        return manifest
-
-    def register_catalog_entries(
+    def register_plugins_catalog(
         self,
         configs: Dict[str, PluginManifest],
     ) -> None:
@@ -455,9 +389,8 @@ class NodeRegistry:
         A catalog entry is "this plugin is known and the session can
         materialise it on demand". Calling this does NOT clone, install
         dependencies, mutate sys.path, or import any modules — those side
-        effects are deferred to ``register_plugin(name)`` (called by the
-        ``LoadPipeline`` resolver path when a pipeline actually references
-        the plugin).
+        effects are deferred to :meth:`register_plugins_installed`, which the
+        child runtime calls once the resolved packages are installed.
 
         Idempotent re-registration with a different config logs an override
         and replaces the catalog entry. A loaded plugin's entry is *not*
@@ -475,13 +408,13 @@ class NodeRegistry:
             from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
             resolved = resolve_pipeline_plugins(pipeline_cfg, [Path("configs/plugins")])
             registry = NodeRegistry()
-            registry.register_catalog_entries(resolved)
+            registry.register_plugins_catalog(resolved)
             # registry.plugin_catalog["adaclip"] now holds the metadata.
-            # Nothing is imported until registry.register_plugin("adaclip") is called.
+            # Nothing is imported until register_plugins_installed materialises it.
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
-                "register_catalog_entries() requires an instance. "
+                "register_plugins_catalog() requires an instance. "
                 "Create instance first: registry = NodeRegistry()"
             )
 
@@ -512,9 +445,9 @@ class NodeRegistry:
     ) -> None:
         """Import a plugin's provided classes into ``loaded_plugin_nodes``.
 
-        The shared registration core: both the in-process front doors
-        (:meth:`register_plugins` / :meth:`register_plugin`) and the orchestrator
-        child runtime (:meth:`register_preinstalled`) funnel through here. It
+        The shared registration core: the in-process front door
+        (:meth:`register_plugin`) and the dict entry point
+        (:meth:`register_plugins_installed`) funnel through here. It
         imports the FQCNs via ``importlib`` only; it never clones, installs, or
         mutates ``sys.path``. The plugin package must already be importable, so a
         missing one is re-raised with a hint pointing at the ``provision`` helper.
@@ -572,27 +505,44 @@ class NodeRegistry:
         self.data_modules[dm_name] = cls
         logger.debug(f"Registered data module '{dm_name}' ({class_name}) from '{name}'")
 
-    def register_preinstalled(
+    def register_plugins_installed(
         self,
         resolved_plugins: Mapping[str, PluginManifest],
     ) -> None:
-        """Register classes from already-installed plugin packages.
+        """Register + import classes from already-installed plugin packages.
 
-        When the orchestrator runs a pipeline inside a child runtime, every
-        plugin in the child's venv is already a real installed package (uv put
-        it there during ``compose_env``). This registers each plugin's classes
-        via a plain ``importlib.import_module`` (no clone / install / ``sys.path``
-        step) and records the config in the catalog. It is the shared
-        registration core: the in-process front doors
-        (:meth:`register_plugins` / :meth:`register_plugin`) and this child path
-        all funnel through :meth:`_register_node_classes`.
+        Records each plugin's config in the catalog and imports its classes via
+        a plain ``importlib.import_module`` (no clone / install / ``sys.path``
+        step). Used by the in-process file-path front door
+        (:meth:`register_plugin`) and the orchestrator child runtime, where every
+        plugin in the child's venv is already a real installed package (uv put it
+        there during ``compose_env``). The sibling :meth:`register_plugins_catalog`
+        records metadata only, without importing.
+
+        Atomic across the set: if any plugin fails to import, every change made to
+        ``plugin_catalog`` / ``loaded_plugin_nodes`` / ``data_modules`` during this
+        call is rolled back before the error propagates, so a partially-registered
+        set never leaks into the registry.
         """
-        for name, config in resolved_plugins.items():
-            self.plugin_catalog[name] = config
-            self._register_node_classes(name, config, clear_cache=False)
-            logger.info(
-                f"Loaded preinstalled plugin '{name}' with {len(config.capabilities)} nodes"
-            )
+        catalog_snapshot = dict(self.plugin_catalog)
+        nodes_snapshot = dict(self.loaded_plugin_nodes)
+        modules_snapshot = dict(self.data_modules)
+        try:
+            for name, config in resolved_plugins.items():
+                self.plugin_catalog[name] = config
+                self._register_node_classes(name, config, clear_cache=False)
+                logger.info(
+                    f"Loaded preinstalled plugin '{name}' with "
+                    f"{len(config.capabilities)} nodes"
+                )
+        except Exception:
+            self.plugin_catalog.clear()
+            self.plugin_catalog.update(catalog_snapshot)
+            self.loaded_plugin_nodes.clear()
+            self.loaded_plugin_nodes.update(nodes_snapshot)
+            self.data_modules.clear()
+            self.data_modules.update(modules_snapshot)
+            raise
 
     def unload_plugin(self, name: str) -> None:
         """

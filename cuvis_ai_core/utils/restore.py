@@ -109,7 +109,7 @@ def _load_data_module_plugin(
                 getattr(entry, "kind", "node") == "data_module"
                 and entry.data_module_name == data_module_name
             ):
-                registry.register_plugin(plugin_name, cfg.model_dump())
+                registry.register_plugins_installed({plugin_name: cfg})
                 return
     raise ValueError(
         f"No plugin in {[str(d) for d in candidate_dirs]} provides data module "
@@ -211,8 +211,7 @@ def restore_pipeline(
             resolved_plugins = resolve_pipeline_plugins(pipeline_cfg, candidate_dirs)
             if resolved_plugins:
                 registry = NodeRegistry()
-                for name, cfg in resolved_plugins.items():
-                    registry.register_plugin(name, cfg.model_dump())
+                registry.register_plugins_installed(resolved_plugins)
                 logger.info(
                     f"Materialised plugins from pipeline declaration: {sorted(resolved_plugins)}"
                 )

@@ -20,7 +20,7 @@ def _cfg(name: str, entry: PluginCapabilityEntry) -> LocalPluginSource:
 
 def test_data_module_entry_registers_into_data_modules():
     reg = NodeRegistry()
-    reg.register_preinstalled(
+    reg.register_plugins_installed(
         {
             "fake": _cfg(
                 "fake",
@@ -39,7 +39,7 @@ def test_data_module_entry_registers_into_data_modules():
 def test_data_module_name_mismatch_raises():
     reg = NodeRegistry()
     with pytest.raises(ValueError, match="DATA_MODULE_NAME"):
-        reg.register_preinstalled(
+        reg.register_plugins_installed(
             {
                 "fake": _cfg(
                     "fake",
@@ -54,7 +54,7 @@ def test_data_module_name_mismatch_raises():
 def test_non_datamodule_class_raises():
     reg = NodeRegistry()
     with pytest.raises(TypeError, match="BaseCuvisAIDataModule"):
-        reg.register_preinstalled(
+        reg.register_plugins_installed(
             {
                 "fake": _cfg(
                     "fake",
@@ -68,7 +68,7 @@ def test_non_datamodule_class_raises():
 
 def test_duplicate_data_module_name_raises():
     reg = NodeRegistry()
-    reg.register_preinstalled(
+    reg.register_plugins_installed(
         {
             "a": _cfg(
                 "a",
@@ -79,7 +79,7 @@ def test_duplicate_data_module_name_raises():
         }
     )
     # Re-registering the SAME class under the same name is idempotent (no raise).
-    reg.register_preinstalled(
+    reg.register_plugins_installed(
         {
             "a2": _cfg(
                 "a2",

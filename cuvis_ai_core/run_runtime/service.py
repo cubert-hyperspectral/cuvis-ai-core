@@ -4,7 +4,7 @@ Inside a composed venv every plugin is already an installed Python
 package, so the child does NOT re-run the manifest-driven plugin
 install path. ``InitializeSession`` instead receives the resolved
 plugin dict the parent already computed and registers each plugin's
-classes via :meth:`NodeRegistry.register_preinstalled`. ``LoadPipeline``
+classes via :meth:`NodeRegistry.register_plugins_installed`. ``LoadPipeline``
 builds the pipeline from the request bytes using the session's
 already-populated ``NodeRegistry``; everything downstream
 (``Inference`` / ``Train``) delegates to the existing service
@@ -91,7 +91,7 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
             return cuvis_ai_pb2.InitializeSessionResponse(ok=False)
 
         session.search_paths = list(request.search_paths)
-        session.node_registry.register_preinstalled(resolved_plugins)
+        session.node_registry.register_plugins_installed(resolved_plugins)
         # Record per-plugin catalog metadata for ListLoadedPlugins / GetPluginInfo.
         for name, cfg in resolved_plugins.items():
             session.registered_plugins[name] = cfg.model_dump()

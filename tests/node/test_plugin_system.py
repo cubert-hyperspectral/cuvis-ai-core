@@ -151,12 +151,14 @@ def test_local_plugin_loading(tmp_path: Path, create_plugin_pyproject, provision
     provision_local(plugin_root)
     registry = NodeRegistry()
 
-    registry.register_plugin(
-        "simple_test",
+    registry.register_plugins_installed(
         {
-            "path": str(plugin_root),
-            "capabilities": [{"class_name": "simple_node.SimpleTestNode"}],
-        },
+            "simple_test": LocalPluginSource(
+                name="simple_test",
+                path=str(plugin_root),
+                capabilities=[{"class_name": "simple_node.SimpleTestNode"}],
+            )
+        }
     )
 
     assert "simple_test" in registry.list_plugins()
@@ -185,15 +187,14 @@ def test_manifest_relative_path_resolution(
     write_plugin_manifest(manifest, manifest_file)
 
     registry = NodeRegistry()
-    loaded_count = registry.register_plugins(manifest_file)
-    assert loaded_count == 1
+    registry.register_plugin(manifest_file)
     assert "SimpleTestNode" in registry.loaded_plugin_nodes
 
 
-def test_register_plugins_is_import_only(
+def test_register_plugin_is_import_only(
     tmp_path: Path, create_plugin_pyproject, provision_local
 ):
-    """Regression: register_plugins imports a preinstalled plugin and never
+    """Regression: register_plugin imports a preinstalled plugin and never
     clones / installs (the dropped in-process path) or mutates sys.path itself."""
     plugin_root = _write_local_plugin(tmp_path / "io_plugin", create_plugin_pyproject)
     provision_local(plugin_root)
@@ -207,7 +208,7 @@ def test_register_plugins_is_import_only(
 
     registry = NodeRegistry()
     sys_path_before = list(sys.path)
-    registry.register_plugins(manifest_file)
+    registry.register_plugin(manifest_file)
 
     assert "SimpleTestNode" in registry.loaded_plugin_nodes
     # Import-only: registration adds nothing to sys.path on its own.
@@ -217,7 +218,7 @@ def test_register_plugins_is_import_only(
     assert not hasattr(NodeRegistry, "_install_plugin_dependencies")
 
 
-def test_register_plugins_missing_plugin_hints_provision(tmp_path: Path):
+def test_register_plugin_missing_plugin_hints_provision(tmp_path: Path):
     """An un-provisioned plugin raises a guided error pointing at provision."""
     manifest = LocalPluginSource(
         name="absent",
@@ -229,7 +230,7 @@ def test_register_plugins_missing_plugin_hints_provision(tmp_path: Path):
 
     registry = NodeRegistry()
     with pytest.raises(ModuleNotFoundError, match="provision"):
-        registry.register_plugins(manifest_file)
+        registry.register_plugin(manifest_file)
 
 
 def test_pipeline_integration_with_plugin(
@@ -241,12 +242,14 @@ def test_pipeline_integration_with_plugin(
     provision_local(plugin_root)
     registry = NodeRegistry()
 
-    registry.register_plugin(
-        "simple_test",
+    registry.register_plugins_installed(
         {
-            "path": str(plugin_root),
-            "capabilities": [{"class_name": "simple_node.SimpleTestNode"}],
-        },
+            "simple_test": LocalPluginSource(
+                name="simple_test",
+                path=str(plugin_root),
+                capabilities=[{"class_name": "simple_node.SimpleTestNode"}],
+            )
+        }
     )
     config = {
         "metadata": {"name": "plugin_pipeline"},

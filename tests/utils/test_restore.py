@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
 import cuvis_ai_core.utils.restore as restore_mod
+from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_schemas.enums import ExecutionStage
 from tests.fixtures.restore_doubles import (
     FakeRestoreDataModule,
@@ -177,6 +179,109 @@ def test_discover_plugins_dirs_walks_up_and_appends_explicit(tmp_path: Path) -> 
     found = restore_mod._discover_plugins_dirs(pipeline_path, [str(extra)])
     assert plugins.resolve() in found
     assert extra in found
+
+
+# ---------------------------------------------------------------------------
+# Plugin materialisation: _load_data_module_plugin + declared pipeline plugins
+# ---------------------------------------------------------------------------
+
+
+def _write_plugins_dir(tmp_path: Path, name: str, body: str) -> Path:
+    pdir = tmp_path / "plugins"
+    pdir.mkdir(exist_ok=True)
+    (pdir / f"{name}.yaml").write_text(dedent(body), encoding="utf-8")
+    return pdir
+
+
+def test_load_data_module_plugin_registers_from_catalog(tmp_path: Path) -> None:
+    """A data_module capability in the plugins-dir catalog is materialised by name."""
+    plugins_dir = _write_plugins_dir(
+        tmp_path,
+        "fake_dataloader",
+        """
+        name: fake_dataloader
+        path: "."
+        package_name: fake_pkg
+        capabilities:
+          - class_name: tests.fixtures.fake_data_modules.FakeDataModule
+            kind: data_module
+            data_module_name: fake
+        """,
+    )
+    registry = NodeRegistry()
+    restore_mod._load_data_module_plugin(registry, "fake", [plugins_dir])
+    assert "fake" in registry.data_modules
+    assert registry.data_modules["fake"].DATA_MODULE_NAME == "fake"
+
+
+def test_load_data_module_plugin_unknown_name_raises(tmp_path: Path) -> None:
+    """A data module not provided by any catalog plugin fails loudly."""
+    plugins_dir = _write_plugins_dir(
+        tmp_path,
+        "fake_dataloader",
+        """
+        name: fake_dataloader
+        path: "."
+        package_name: fake_pkg
+        capabilities:
+          - class_name: tests.fixtures.fake_data_modules.FakeDataModule
+            kind: data_module
+            data_module_name: fake
+        """,
+    )
+    registry = NodeRegistry()
+    with pytest.raises(ValueError, match="provides data module 'absent'"):
+        restore_mod._load_data_module_plugin(registry, "absent", [plugins_dir])
+
+
+def test_restore_pipeline_materialises_declared_plugins(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A pipeline that declares a plugin gets a NodeRegistry with it installed."""
+    plugins_dir = _write_plugins_dir(
+        tmp_path,
+        "fake_nodes",
+        """
+        name: fake_nodes
+        path: "."
+        package_name: fake_pkg
+        capabilities:
+          - class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode
+        """,
+    )
+    pipeline_path = tmp_path / "pipe.yaml"
+    pipeline_path.write_text(
+        "metadata:\n"
+        "  name: T\n"
+        "  description: d\n"
+        "  created: '2024-01-01'\n"
+        "  tags: []\n"
+        "plugins: [fake_nodes]\n"
+        "nodes:\n"
+        "  - name: data\n"
+        "    class_name: tests.fixtures.mock_nodes.LentilsAnomalyDataNode\n"
+        "    hparams:\n"
+        "      normal_class_ids: [0, 1]\n"
+        "connections: []\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+    fake = FakeRestorePipeline()
+
+    def _fake_load(_path, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(
+        restore_mod.CuvisPipeline, "load_pipeline", staticmethod(_fake_load)
+    )
+    result = restore_mod.restore_pipeline(
+        pipeline_path=pipeline_path, device="cpu", plugins_dirs=[str(plugins_dir)]
+    )
+    assert result is fake
+    registry = captured["node_registry"]
+    assert registry is not None
+    assert "fake_nodes" in registry.list_plugins()
 
 
 # ---------------------------------------------------------------------------
