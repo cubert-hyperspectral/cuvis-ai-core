@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.10.0 - 2026-06-23
 
 - **Breaking:** collapsed the `NodeRegistry` plugin-registration API. `register_plugins(path)` ->
   `register_plugin(path)` (now returns `None`); the redundant `register_plugin(name, config)` and
