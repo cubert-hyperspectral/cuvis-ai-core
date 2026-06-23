@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## 0.9.0 - 2026-06-23
+
+- **Breaking:** `proto_to_numpy` / `proto_to_tensor` are now context managers. They yield the array/tensor and release the backing shared-memory block on exit, so callers must use them in a `with` block (`with proto_to_numpy(tensor) as arr: ...`) instead of calling them as plain functions. The lifetime contract is what makes zero-copy shared-memory reads safe.
+- Added shared-memory tensor support to the gRPC server, consuming the schemas `Tensor.shm_ref` / `ShmRef` contract: when a tensor carries a shared-memory reference the server maps it instead of copying the bytes through the channel, with a transparent fallback to inline `raw_data`. Wired through the inference and introspection services and the orchestrator spawner.
+- Floors `cuvis-ai-schemas[proto]>=0.7.0` (the release carrying the shared-memory contract).
+
 ## 0.8.0 - 2026-06-19
 
 - **Breaking:** the client now owns plugin loading and `LoadPlugins` collapses to a singular `LoadPlugin`. The

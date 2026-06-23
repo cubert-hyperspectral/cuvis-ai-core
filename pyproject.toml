@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "cuvis-ai-schemas[proto]>=0.6.0",
+    "cuvis-ai-schemas[proto]>=0.7.0",
     # Core framework dependencies
     "torch>=2.11.0",
     "torchvision>=0.26.0",
@@ -199,5 +199,3 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-# cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }
-cuvis-ai-schemas = { git = "https://github.com/cubert-hyperspectral/cuvis-ai-schemas.git", branch = "feature/simon/ALL-5738-add-shared-memory-to-g-rpc-contract" }
