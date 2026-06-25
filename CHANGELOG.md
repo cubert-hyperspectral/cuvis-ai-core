@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+- **Epoch-accumulating metrics now log their true epoch value.** A metric node may expose
+  `epoch_metrics() -> dict[str, float]` (computed from state accumulated across the epoch, e.g. a
+  confusion matrix); `GradientTrainer` logs those once at `on_validation_epoch_end` /
+  `on_test_epoch_end` and skips the node's per-step logging. Lightning reduces per-step scalars by
+  mean, which is wrong for an epoch-cumulative metric. Opt-in and backward compatible: nodes without
+  `epoch_metrics()` keep the per-step path unchanged.
+
 ## 0.10.0 - 2026-06-23
 
 - **Breaking:** collapsed the `NodeRegistry` plugin-registration API. `register_plugins(path)` ->

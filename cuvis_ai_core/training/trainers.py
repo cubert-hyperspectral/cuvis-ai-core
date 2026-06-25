@@ -317,6 +317,11 @@ class GradientTrainer(pl.LightningModule):
         metric_name_counter: dict[str, int] = {}  # Track duplicate names
 
         for metric_node in self.metric_nodes:
+            # Nodes that accumulate state across an epoch (e.g. a confusion matrix) expose
+            # epoch_metrics() and are logged once at epoch end instead — Lightning reduces
+            # per-step scalars by mean, which is wrong for a running cumulative metric.
+            if callable(getattr(metric_node, "epoch_metrics", None)):
+                continue
             # O(1) lookup instead of O(n_outputs) iteration
             metric_outputs = node_outputs.get(metric_node.name, {}).get("metrics", [])
 
@@ -416,6 +421,31 @@ class GradientTrainer(pl.LightningModule):
         self._collect_metrics(node_outputs)
 
         return total_loss
+
+    def _log_epoch_metrics(self) -> None:
+        """Log authoritative epoch-level metrics from nodes that accumulate across an epoch.
+
+        Lightning aggregates per-step logged scalars by mean over the epoch, which is wrong
+        for a metric that accumulates state across batches (e.g. a confusion matrix, where the
+        epoch value is computed from the full matrix, not the mean of per-batch values). A metric
+        node may opt out of per-step logging by exposing ``epoch_metrics() -> dict[str, float]``,
+        returning the true epoch values from its accumulated state; those are logged once here.
+        Nodes without ``epoch_metrics`` keep the per-step path in ``_collect_metrics`` unchanged.
+        """
+        for metric_node in self.metric_nodes:
+            compute = getattr(metric_node, "epoch_metrics", None)
+            if not callable(compute):
+                continue
+            for name, value in compute().items():
+                self.log(f"{metric_node.name}/{name}", value, prog_bar=True)
+
+    def on_validation_epoch_end(self) -> None:
+        """Log epoch-accumulating metrics with their true epoch value (see _log_epoch_metrics)."""
+        self._log_epoch_metrics()
+
+    def on_test_epoch_end(self) -> None:
+        """Log epoch-accumulating metrics with their true epoch value (see _log_epoch_metrics)."""
+        self._log_epoch_metrics()
 
     def configure_optimizers(self) -> Optimizer | dict:
         """Configure optimizer and optional scheduler via the OptimizerConfig.

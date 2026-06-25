@@ -383,6 +383,130 @@ class TestGradientTrainer:
 
         assert params_changed, "Parameters did not change during training"
 
+    def test_epoch_metrics_logged_from_accumulated_state(self):
+        """A metric node exposing epoch_metrics() is logged once at epoch end, not per-batch mean.
+
+        The node returns a different per-batch value each step (whose mean would be non-trivial)
+        but exposes epoch_metrics() returning the accumulated epoch state. The trainer must skip
+        the per-batch path for it and log the epoch_metrics() values instead.
+        """
+        from cuvis_ai_schemas.enums import NodeCategory
+        from cuvis_ai_schemas.execution import Metric
+
+        class TrainableProjection(Node):
+            INPUT_SPECS = {
+                "features": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
+            OUTPUT_SPECS = {
+                "projected": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
+
+            def __init__(self):
+                super().__init__()
+                self.projection = torch.nn.Linear(4, 4)
+
+            @property
+            def is_trainable(self) -> bool:
+                return True
+
+            def forward(self, features, **kwargs):
+                return {"projected": self.projection(features)}
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
+        class CountingMetric(Node):
+            _category = NodeCategory.METRIC
+            INPUT_SPECS = {
+                "value": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, -1))
+            }
+            OUTPUT_SPECS = {"metrics": PortSpec(dtype=list, shape=())}
+
+            def __init__(self, **kwargs):
+                name, stages = Node.consume_base_kwargs(
+                    kwargs, {ExecutionStage.VAL, ExecutionStage.TEST}
+                )
+                super().__init__(name=name, execution_stages=stages, **kwargs)
+                self._count = 0
+                self._last_key = None
+
+            def forward(self, value, context, **_):
+                key = (context.stage, context.epoch)
+                if self._last_key != key:
+                    self._count = 0
+                    self._last_key = key
+                self._count += 1
+                # A per-batch value that would be mean-reduced if this node were NOT skipped.
+                return {
+                    "metrics": [
+                        Metric(
+                            name="perbatch",
+                            value=float(context.batch_idx),
+                            stage=context.stage,
+                            epoch=context.epoch,
+                        )
+                    ]
+                }
+
+            def epoch_metrics(self) -> dict[str, float]:
+                return {"num_batches": float(self._count)}
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
+        def _collate(batch):
+            feats, tgts = zip(*batch, strict=True)
+            return {"features": torch.stack(feats), "targets": torch.stack(tgts)}
+
+        class TestDataModule(pl.LightningDataModule):
+            # No val_dataloader -> fit runs train-only (no sanity-val contaminating the count);
+            # the test split has exactly 3 batches, so epoch_metrics() must report num_batches == 3.
+            def setup(self, stage: str | None = None):
+                xt = torch.randn(40, 1, 1, 4)
+                self.train_dataset = TensorDataset(xt, xt.clone())
+                xtest = torch.randn(30, 1, 1, 4)  # 3 test batches of 10
+                self.test_dataset = TensorDataset(xtest, xtest.clone())
+
+            def train_dataloader(self):
+                return DataLoader(
+                    self.train_dataset, batch_size=10, collate_fn=_collate
+                )
+
+            def test_dataloader(self):
+                return DataLoader(self.test_dataset, batch_size=10, collate_fn=_collate)
+
+        pipeline = CuvisPipeline("epoch_metrics_test")
+        projection = TrainableProjection()
+        loss_node = SimpleLossNode(name="mse_loss", weight=1.0)
+        loss_node.execution_stages = {ExecutionStage.TRAIN}
+        metric_node = CountingMetric(name="counter")
+        pipeline.connect(
+            (projection.outputs.projected, loss_node.predictions),
+            (projection.outputs.projected, loss_node.targets),
+            (projection.outputs.projected, metric_node.value),
+        )
+
+        grad_trainer = GradientTrainer(
+            pipeline=pipeline,
+            datamodule=TestDataModule(),
+            trainer_config=TrainerConfig(
+                max_epochs=1,
+                enable_progress_bar=False,
+                enable_checkpointing=False,
+            ),
+            optimizer_config=OptimizerConfig(name="adam", lr=0.01),
+            loss_nodes=[loss_node],
+            metric_nodes=[metric_node],
+        )
+        grad_trainer.fit()
+        results = grad_trainer.test(ckpt_path=None)[0]
+
+        # The accumulated epoch value (3 test batches) is logged once at epoch end ...
+        assert "counter/num_batches" in results
+        assert float(results["counter/num_batches"]) == 3.0
+        # ... and the per-batch metric is NOT logged (the node opted into epoch logging).
+        assert "counter/perbatch" not in results
+
 
 class TestStatisticalTrainer:
     """Test StatisticalTrainer implementation."""
