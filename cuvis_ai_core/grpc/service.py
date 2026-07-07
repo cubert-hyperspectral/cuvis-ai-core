@@ -120,6 +120,13 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def GetPipelineVisualization(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
+        # Sessionless config preview: render the supplied pipeline YAML directly (no session,
+        # no load, no plugin env) so a client can show a pipeline's graph on selection.
+        if request.config_content:
+            return self.discovery_service.get_pipeline_visualization_for_config(
+                request, context
+            )
+
         from . import orchestrator_bridge
 
         return orchestrator_bridge.forward_get_pipeline_visualization(

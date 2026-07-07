@@ -73,5 +73,26 @@ class DiscoveryService:
 
         return cuvis_ai_pb2.GetPipelineInfoResponse(pipeline_info=pipeline_info)
 
+    @grpc_handler("Failed to visualize pipeline config")
+    def get_pipeline_visualization_for_config(
+        self,
+        request: cuvis_ai_pb2.GetPipelineVisualizationRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
+        """Render a pipeline's graph straight from its YAML config, without loading it.
+
+        Sessionless: builds the graph from the config's declared nodes and connections and
+        renders it with graphviz, so a client can preview a pipeline's structure the moment
+        it is selected. Falls back to DOT bytes when the graphviz binary is unavailable.
+        """
+        from cuvis_ai_core.pipeline.config_visualizer import render_pipeline_config
+
+        image_data, actual_format = render_pipeline_config(
+            request.config_content, request.format or "png"
+        )
+        return cuvis_ai_pb2.GetPipelineVisualizationResponse(
+            image_data=image_data, format=actual_format
+        )
+
 
 __all__ = ["DiscoveryService"]

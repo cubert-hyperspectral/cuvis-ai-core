@@ -88,17 +88,6 @@ class InferenceService:
                 context.set_details(msg)
                 return cuvis_ai_pb2.InferenceResponse()
 
-            # If the requested specs matched only non-serializable metadata
-            # (e.g. a dict like 'band_info'), don't hand back an empty response —
-            # fall back to every serializable output the pipeline produced so the
-            # client reliably gets the rest.
-            if output_specs and available and not tensor_outputs and not metrics:
-                logger.warning(
-                    f"output_specs={sorted(output_specs)} produced no serializable "
-                    f"output; returning all serializable outputs instead."
-                )
-                tensor_outputs, metrics, _ = self._build_outputs(outputs, set())
-
             if available and not tensor_outputs and not metrics:
                 logger.warning(
                     f"No serializable outputs for session {request.session_id}; "
