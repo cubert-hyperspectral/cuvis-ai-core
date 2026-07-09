@@ -317,11 +317,21 @@ class GradientTrainer(pl.LightningModule):
         metric_name_counter: dict[str, int] = {}  # Track duplicate names
 
         for metric_node in self.metric_nodes:
+            # Metrics that pool over the whole epoch (e.g. AUROC, average
+            # precision) are logged once at epoch end from the node's
+            # accumulated state (see _log_epoch_metrics). Logging their per-batch
+            # running value here would let Lightning epoch-reduce it by the mean,
+            # which is batch-size-sensitive and wrong, so skip those names.
+            pooled_names = getattr(metric_node, "POOLED_METRIC_NAMES", frozenset())
+
             # O(1) lookup instead of O(n_outputs) iteration
             metric_outputs = node_outputs.get(metric_node.name, {}).get("metrics", [])
 
             # Each metric node outputs a list of Metric dataclass objects
             for metric in metric_outputs:  # list[Metric] objects
+                if metric.name in pooled_names:
+                    continue
+
                 # Generate base log name: NodeName_metric_name
                 base_name = f"{metric_node.name}/{metric.name}"
 
@@ -334,6 +344,31 @@ class GradientTrainer(pl.LightningModule):
                     log_name = base_name
 
                 self.log(log_name, metric.value, prog_bar=True)
+
+    def _log_epoch_metrics(self) -> None:
+        """Log epoch-pooled metrics once, from each node's accumulated state.
+
+        Streaming metrics such as AUROC and average precision must be reduced by
+        a single pooled ``compute()`` over the whole epoch, not by averaging the
+        per-batch running values. The per-batch mean is batch-size-sensitive and,
+        at ``batch_size=1`` where early single-class batches make the running
+        metric undefined (torchmetrics returns ``0.0``), badly biased. A metric
+        node opts in by implementing ``compute_epoch_metrics() -> list[Metric]``
+        and naming the affected metrics in ``POOLED_METRIC_NAMES`` so they are
+        skipped in the per-batch path. Nodes without the method are unaffected.
+        """
+        for metric_node in self.metric_nodes:
+            compute_epoch_metrics = getattr(metric_node, "compute_epoch_metrics", None)
+            if compute_epoch_metrics is None:
+                continue
+            for metric in compute_epoch_metrics():
+                self.log(
+                    f"{metric_node.name}/{metric.name}",
+                    metric.value,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                )
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses for training."""
@@ -416,6 +451,14 @@ class GradientTrainer(pl.LightningModule):
         self._collect_metrics(node_outputs)
 
         return total_loss
+
+    def on_validation_epoch_end(self) -> None:
+        """Log epoch-pooled validation metrics (exact, batch-size-invariant)."""
+        self._log_epoch_metrics()
+
+    def on_test_epoch_end(self) -> None:
+        """Log epoch-pooled test metrics (exact, batch-size-invariant)."""
+        self._log_epoch_metrics()
 
     def configure_optimizers(self) -> Optimizer | dict:
         """Configure optimizer and optional scheduler via the OptimizerConfig.

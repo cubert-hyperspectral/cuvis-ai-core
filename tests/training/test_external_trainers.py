@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_schemas.enums import ExecutionStage
-from cuvis_ai_schemas.execution import Context
+from cuvis_ai_schemas.execution import Context, Metric
 from cuvis_ai_schemas.pipeline import PortSpec
 
 from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
@@ -487,6 +487,150 @@ class TestTrainerValidation:
         # Test that providing no loss_nodes raises TypeError
         with pytest.raises(TypeError, match="loss_nodes"):
             GradientTrainer(pipeline, MockDataModule())
+
+
+class TestEpochPooledMetrics:
+    """Streaming val/test metrics reduce by a single pooled compute(), not by
+    Lightning's per-batch epoch-mean (which is batch-size-sensitive).
+
+    Regression for the streaming-AUROC epoch-reduction bug: on perfectly
+    separable data (true AUROC = 1.0) the per-batch mean gave ~0.79 / 0.83 / 1.00
+    at batch_size 1 / 4 / 12 (early single-class batches make the running metric
+    undefined -> torchmetrics returns 0.0, dragging the mean). The pooled value
+    must be exactly 1.0 at every batch size.
+    """
+
+    @staticmethod
+    def _build(batch_size):
+        from torchmetrics.classification import BinaryAUROC
+
+        class ScoreSource(Node):
+            INPUT_SPECS = {
+                "scores": PortSpec(dtype=torch.float32, shape=(-1,)),
+                "targets": PortSpec(dtype=torch.float32, shape=(-1,)),
+            }
+            OUTPUT_SPECS = {
+                "scores": PortSpec(dtype=torch.float32, shape=(-1,)),
+                "targets": PortSpec(dtype=torch.float32, shape=(-1,)),
+            }
+
+            def forward(self, scores, targets, **kwargs):
+                return {"scores": scores, "targets": targets}
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
+        class StreamingAUROC(Node):
+            """Minimal streaming metric node opting into epoch pooling."""
+
+            INPUT_SPECS = {
+                "scores": PortSpec(dtype=torch.float32, shape=(-1,)),
+                "targets": PortSpec(dtype=torch.float32, shape=(-1,)),
+            }
+            OUTPUT_SPECS = {"metrics": PortSpec(dtype=list, shape=())}
+            POOLED_METRIC_NAMES = frozenset({"auroc"})
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.auroc = BinaryAUROC()  # thresholds=None -> exact
+                self._key = None
+
+            def _accumulate(self, scores, targets, context):
+                key = (context.stage, context.epoch)
+                if self._key != key:  # reset only at the (stage, epoch) boundary
+                    self.auroc.reset()
+                    self._key = key
+                self.auroc.update(scores.flatten(), targets.flatten().int())
+
+            def forward(self, scores, targets, context, **kwargs):
+                self._accumulate(scores, targets, context)
+                return {
+                    "metrics": [
+                        Metric(
+                            name="auroc",
+                            value=float(self.auroc.compute()),
+                            stage=context.stage,
+                            epoch=context.epoch,
+                        )
+                    ]
+                }
+
+            def compute_epoch_metrics(self):
+                return [Metric(name="auroc", value=float(self.auroc.compute()))]
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
+        class MeanLoss(Node):
+            INPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
+
+            def forward(self, scores, **kwargs):
+                return {"loss": scores.mean()}
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
+        # Perfectly separable: every anomaly score exceeds every normal score,
+        # so the pooled AUROC is 1.0 no matter how the batches are split.
+        scores = torch.tensor(
+            [0.10, 0.20, 0.30, 0.40, 0.45, 0.49, 0.51, 0.60, 0.70, 0.80, 0.90, 0.95]
+        )
+        targets = torch.tensor([0.0] * 6 + [1.0] * 6)
+
+        class SeparableDataModule(BaseCuvisAIDataModule):
+            def setup(self, stage=None):
+                self.val_dataset = TensorDataset(scores, targets)
+
+            def val_dataloader(self):
+                return DataLoader(
+                    self.val_dataset,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    collate_fn=self.collate_batch,
+                )
+
+            def collate_batch(self, batch):
+                s, t = zip(*batch, strict=True)
+                return {"scores": torch.stack(s), "targets": torch.stack(t)}
+
+        pipeline = CuvisPipeline("epoch_pooled_metrics")
+        source = ScoreSource()
+        auroc = StreamingAUROC(name="auroc_node")
+        loss = MeanLoss(name="mean_loss")
+        for node in (auroc, loss):
+            node.execution_stages = {ExecutionStage.VAL, ExecutionStage.TEST}
+        pipeline.connect(
+            (source.outputs.scores, auroc.scores),
+            (source.outputs.targets, auroc.targets),
+            (source.outputs.scores, loss.scores),
+        )
+
+        datamodule = SeparableDataModule()
+        trainer = GradientTrainer(
+            pipeline=pipeline,
+            datamodule=datamodule,
+            loss_nodes=[loss],
+            metric_nodes=[auroc],
+        )
+        return trainer, datamodule
+
+    @pytest.mark.parametrize("batch_size", [1, 4, 12])
+    def test_pooled_auroc_is_batch_size_invariant(self, batch_size):
+        """Pooled epoch AUROC == 1.0 for every batch size on separable data."""
+        trainer, datamodule = self._build(batch_size)
+        pl_trainer = pl.Trainer(
+            max_epochs=1,
+            enable_checkpointing=False,
+            enable_progress_bar=False,
+            logger=False,
+        )
+        pl_trainer.validate(model=trainer, datamodule=datamodule)
+
+        value = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+        assert value == pytest.approx(1.0, abs=1e-6), (
+            f"pooled AUROC at batch_size={batch_size} was {value}, expected 1.0"
+        )
 
 
 class TestGraphInputValidation:
