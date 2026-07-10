@@ -180,11 +180,13 @@ def test_list_datasets_verbose_and_canonical_names(
     assert canonical == [
         "Lentils",
         "Demo_Industrial_FOD_Lentils",
+        "Industrial_FOD_Lentils",
         "Blood_Perfusion",
         "Demo_Object_Tracking",
     ]
     assert "(alias: lentils)" in out
     assert "(alias: demo_industrial_fod_lentils)" in out
+    assert "(alias: industrial_fod_lentils)" in out
     assert "(alias: blood_perfusion)" in out
     assert "alias: demo_object_tracking" in out
     assert "repo:" in out
