@@ -199,6 +199,50 @@ class CuvisPipeline:
         res += "Use `pipeline.visualize()` for Graphviz/Mermaid output.\n"
         return res
 
+    def _repr_html_(self) -> str | None:
+        """Rich Jupyter representation: a collapsible, inline SVG of the graph.
+
+        Jupyter calls this automatically when a pipeline is the last expression
+        in a cell. The Graphviz DAG is rendered to SVG in memory (no temp file)
+        and embedded inside a ``<details>`` element, collapsed by default so the
+        graph expands on click. Degrades to a Mermaid source block when the
+        Graphviz ``dot`` binary is unavailable, and returns ``None`` (so Jupyter
+        falls back to the plain-text ``__repr__``) if even that fails, rather
+        than raising a traceback into the cell.
+        """
+        from html import escape
+
+        from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
+
+        visualizer = PipelineVisualizer(self)
+        summary = escape(
+            f"Pipeline: {self.name} ({self._graph.number_of_nodes()} nodes)"
+        )
+
+        try:
+            import graphviz
+
+            svg = (
+                graphviz.Source(visualizer.to_graphviz())
+                .pipe(format="svg")
+                .decode("utf-8")
+            )
+            # Drop the XML prolog / DOCTYPE / comment so the markup embeds cleanly.
+            start = svg.find("<svg")
+            if start != -1:
+                svg = svg[start:]
+            body = f'<div style="max-width:100%;overflow:auto">{svg}</div>'
+        except Exception as exc:  # graphviz binary missing or render failure
+            logger.debug(
+                "HTML repr SVG render failed ({}); falling back to Mermaid.", exc
+            )
+            try:
+                body = f"<pre>{escape(visualizer.to_mermaid())}</pre>"
+            except Exception:
+                return None
+
+        return f"<details><summary>{summary}</summary>{body}</details>"
+
     def visualize(
         self,
         *,
