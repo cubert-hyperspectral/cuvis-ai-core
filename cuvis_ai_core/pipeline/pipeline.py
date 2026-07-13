@@ -237,8 +237,9 @@ class CuvisPipeline:
         Jupyter calls this automatically when a pipeline is the last expression in a
         cell. The Graphviz DAG is rendered to SVG in memory (no temp file) and shown
         at native size inside a scrollable viewport, wrapped in a ``<details>``
-        element (collapsed; expands on click). A large graph is NOT scaled down to the
-        cell width, so it stays readable: drag or scroll to pan, Ctrl+scroll to zoom,
+        element (expanded by default; click the summary to collapse). A large graph is
+        NOT scaled down to the cell width, so it stays readable: drag or scroll to pan,
+        Ctrl+scroll to zoom,
         double-click to reset. The drag/zoom needs the output's JS to run (trusted
         Jupyter, VS Code); where scripts are stripped the viewport still scrolls.
         Degrades to a Mermaid source block when the Graphviz ``dot`` binary is
@@ -291,7 +292,7 @@ class CuvisPipeline:
             except Exception:
                 return None
 
-        return f"<details><summary>{summary}</summary>{body}</details>"
+        return f"<details open><summary>{summary}</summary>{body}</details>"
 
     def visualize(
         self,
