@@ -44,7 +44,7 @@ class TestTrainingConfig:
             max_epochs=100,
         )
         assert config.optimizer.lr == 0.001
-        assert config.trainer.max_epochs == 100
+        assert config.max_epochs == 100
 
     def test_max_epochs_constraint(self):
         with pytest.raises(ValidationError):

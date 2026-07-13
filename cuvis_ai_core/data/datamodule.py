@@ -215,6 +215,36 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
             self._refs = self.enumerate(wanted)
         return self._refs
 
+    def _effective_splits(self) -> DataSplitConfig:
+        """Resolve ``splits_path`` into a concrete ``DataSplitConfig``.
+
+        When ``splits.splits_path`` is set, that ``splits.json`` is loaded as the base
+        config and each **non-empty** inline stage (``train``/``val``/``test``/``predict``)
+        overrides the file's stage. Empty inline stages keep their defined meaning
+        (predict-empty -> whole universe; train/val-empty -> no fit), so "intentionally
+        empty" needs no special marker. ``splits_path`` is used as given: an absolute path,
+        or one relative to the current working directory for direct programmatic use. The
+        restore layer rewrites a trainrun-relative path to absolute before construction, so
+        resolution never depends on Hydra's runtime CWD.
+        """
+        from cuvis_ai_core.data.splits_io import load_splits
+
+        splits = self.splits
+        assert splits is not None
+        if not splits.splits_path:
+            return splits
+
+        base = load_splits(splits.splits_path)
+        return type(splits)(
+            splits_path=splits.splits_path,
+            leakage_check=base.leakage_check,
+            universe_hash=base.universe_hash,
+            train=splits.train or base.train,
+            val=splits.val or base.val,
+            test=splits.test or base.test,
+            predict=splits.predict or base.predict,
+        )
+
     def _setup_from_selectors(self, stage: str | None) -> None:
         from cuvis_ai_core.data.selectors import (
             required_attrs,
@@ -223,7 +253,7 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         )
         from cuvis_ai_core.data.splits_io import verify_universe
 
-        splits = self.splits
+        splits = self._effective_splits()
         assert splits is not None
         refs = self._enumerate_once(required_attrs(splits))
         verify_universe(splits, refs)

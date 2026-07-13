@@ -316,7 +316,8 @@ class TestRestoreTrainRun:
             },
             "training": {
                 "seed": 42,
-                "trainer": {"max_epochs": 10, "accelerator": "auto"},
+                "max_epochs": 10,
+                "accelerator": "auto",
                 "optimizer": {"name": "adamw", "lr": 0.001},
             },
         }
@@ -653,7 +654,7 @@ class TestExperimentWorkflow:
 
         # Verify the config has expected fields for reproducibility
         training_config = trainrun.training.model_dump()
-        assert "seed" in training_config or "trainer" in training_config
+        assert "seed" in training_config or "max_epochs" in training_config
 
         # Cleanup
         grpc_stub.CloseSession(cuvis_ai_pb2.CloseSessionRequest(session_id=session_id))

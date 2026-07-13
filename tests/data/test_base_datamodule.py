@@ -147,6 +147,44 @@ def test_validate_params_default_is_noop():
     FakeDataModule.validate_params({})
 
 
+def test_splits_path_loads_selectors_from_file(tmp_path):
+    from cuvis_ai_core.data.splits_io import save_splits
+
+    save_splits(
+        DataSplitConfig(train=[_fi([0, 1, 2])], test=[_fi([4, 5])]),
+        tmp_path / "splits.json",
+    )
+    dm = FakeDataModule(
+        splits=DataSplitConfig(splits_path=str(tmp_path / "splits.json")),
+        batch_size=1,
+    )
+    dm.setup(stage="fit")
+    dm.setup(stage="test")
+    assert len(dm._train_ds) == 3  # loaded from file, not empty
+    assert len(dm._test_ds) == 2
+
+
+def test_splits_path_inline_stage_overrides_file(tmp_path):
+    from cuvis_ai_core.data.splits_io import save_splits
+
+    # File assigns train; inline adds val and must not lose the file's train.
+    save_splits(DataSplitConfig(train=[_fi([0, 1, 2])]), tmp_path / "splits.json")
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            splits_path=str(tmp_path / "splits.json"), val=[_fi([3])]
+        ),
+    )
+    dm.setup(stage="fit")
+    assert len(dm._train_ds) == 3  # from the file
+    assert len(dm._val_ds) == 1  # from the inline override
+
+
+def test_effective_splits_without_path_is_identity():
+    splits = DataSplitConfig(train=[_fi([0])])
+    dm = FakeDataModule(splits=splits)
+    assert dm._effective_splits() is splits  # no file load when splits_path unset
+
+
 def test_create_data_module_dispatch():
     class _Reg:
         data_modules = {"fake": FakeDataModule}

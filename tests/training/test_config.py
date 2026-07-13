@@ -7,15 +7,14 @@ from omegaconf import DictConfig, OmegaConf
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import (
     OptimizerConfig,
-    TrainerConfig,
     TrainingConfig,
 )
 from tests.fixtures import MockStatisticalTrainableNode, SoftChannelSelector
 
 
-def test_trainer_config_defaults():
-    """Test TrainerConfig default values."""
-    config = TrainerConfig()
+def test_training_config_lightning_defaults():
+    """Test TrainingConfig Lightning-trainer default values."""
+    config = TrainingConfig()
     assert config.max_epochs == 100
     assert config.accelerator == "auto"
     assert config.devices is None
@@ -39,19 +38,21 @@ def test_training_config_defaults():
     """Test TrainingConfig default values."""
     config = TrainingConfig()
     assert config.seed == 42
-    assert isinstance(config.trainer, TrainerConfig)
+    assert config.max_epochs == 100
+    assert not hasattr(config, "trainer")
     assert isinstance(config.optimizer, OptimizerConfig)
 
 
 def test_training_config_custom():
     """Test TrainingConfig with custom values."""
-    trainer = TrainerConfig(max_epochs=10, accelerator="gpu")
     optimizer = OptimizerConfig(name="adamw", lr=0.001)
-    config = TrainingConfig(seed=123, trainer=trainer, optimizer=optimizer)
+    config = TrainingConfig(
+        seed=123, max_epochs=10, accelerator="gpu", optimizer=optimizer
+    )
 
     assert config.seed == 123
-    assert config.trainer.max_epochs == 10
-    assert config.trainer.accelerator == "gpu"
+    assert config.max_epochs == 10
+    assert config.accelerator == "gpu"
     assert config.optimizer.name == "adamw"
     assert config.optimizer.lr == 0.001
 
@@ -59,13 +60,13 @@ def test_training_config_custom():
 def test_to_dict():
     """Test to_dict conversion."""
     config = TrainingConfig(
-        seed=42, trainer=TrainerConfig(max_epochs=5), optimizer=OptimizerConfig(lr=0.01)
+        seed=42, max_epochs=5, optimizer=OptimizerConfig(lr=0.01)
     )
 
     result = config.to_dict()
 
     assert result["seed"] == 42
-    assert result["trainer"]["max_epochs"] == 5
+    assert result["max_epochs"] == 5
     assert result["optimizer"]["lr"] == 0.01
 
 
@@ -76,7 +77,7 @@ def test_to_dict_config():
 
     assert isinstance(dict_config, DictConfig)
     assert dict_config.seed == 99
-    assert dict_config.trainer.max_epochs == 100
+    assert dict_config.max_epochs == 100
 
 
 def test_from_dict_config():
@@ -84,7 +85,8 @@ def test_from_dict_config():
     dict_config = OmegaConf.create(
         {
             "seed": 77,
-            "trainer": {"max_epochs": 20, "accelerator": "gpu"},
+            "max_epochs": 20,
+            "accelerator": "gpu",
             "optimizer": {"name": "sgd", "lr": 0.1},
         }
     )
@@ -93,8 +95,8 @@ def test_from_dict_config():
 
     assert isinstance(config, TrainingConfig)
     assert config.seed == 77
-    assert config.trainer.max_epochs == 20
-    assert config.trainer.accelerator == "gpu"
+    assert config.max_epochs == 20
+    assert config.accelerator == "gpu"
     assert config.optimizer.name == "sgd"
     assert config.optimizer.lr == 0.1
 
@@ -103,7 +105,9 @@ def test_roundtrip_serialization():
     """Test serialization roundtrip: config -> dict -> config."""
     original = TrainingConfig(
         seed=42,
-        trainer=TrainerConfig(max_epochs=15, accelerator="gpu", devices=2),
+        max_epochs=15,
+        accelerator="gpu",
+        devices=2,
         optimizer=OptimizerConfig(name="adam", lr=0.003, weight_decay=0.01),
     )
 
@@ -115,9 +119,9 @@ def test_roundtrip_serialization():
 
     # Verify all fields match
     assert restored.seed == original.seed
-    assert restored.trainer.max_epochs == original.trainer.max_epochs
-    assert restored.trainer.accelerator == original.trainer.accelerator
-    assert restored.trainer.devices == original.trainer.devices
+    assert restored.max_epochs == original.max_epochs
+    assert restored.accelerator == original.accelerator
+    assert restored.devices == original.devices
     assert restored.optimizer.name == original.optimizer.name
     assert restored.optimizer.lr == original.optimizer.lr
     assert restored.optimizer.weight_decay == original.optimizer.weight_decay

@@ -4,7 +4,7 @@ import grpc
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig, TrainingConfig
+from cuvis_ai_core.training.config import OptimizerConfig, TrainingConfig
 
 
 class TestCheckpointManagement:
@@ -54,7 +54,8 @@ class TestConfigValidation:
 
     def test_validate_valid_config(self, grpc_stub):
         config = TrainingConfig(
-            trainer=TrainerConfig(max_epochs=5, accelerator="cpu"),
+            max_epochs=5,
+            accelerator="cpu",
             optimizer=OptimizerConfig(name="adam", lr=0.001),
         )
 
@@ -69,7 +70,7 @@ class TestConfigValidation:
 
     def test_validate_invalid_optimizer(self, grpc_stub):
         config = TrainingConfig(
-            trainer=TrainerConfig(max_epochs=5),
+            max_epochs=5,
             optimizer=OptimizerConfig(name="not_an_optimizer", lr=0.001),
         )
 
@@ -85,7 +86,7 @@ class TestConfigValidation:
     def test_validate_invalid_learning_rate(self, grpc_stub):
         # Test validation with invalid learning rate via raw JSON
         invalid_config_json = json.dumps(
-            {"optimizer": {"name": "adam", "lr": -0.5}, "trainer": {"max_epochs": 5}}
+            {"optimizer": {"name": "adam", "lr": -0.5}, "max_epochs": 5}
         )
 
         response = grpc_stub.ValidateConfig(

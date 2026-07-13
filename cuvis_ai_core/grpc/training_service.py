@@ -420,6 +420,12 @@ class TrainingService:
         training_config: TrainingConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train with gradient-based method and stream progress."""
+        # Seed as early as the Train RPC allows so training-time randomness
+        # (shuffling, dropout, augmentation) is reproducible.
+        import pytorch_lightning as pl
+
+        pl.seed_everything(training_config.seed, workers=True)
+
         loss_nodes, metric_nodes = self._configure_gradient_components(
             session, data_config, training_config
         )
@@ -440,16 +446,12 @@ class TrainingService:
             )
 
         callback_list = [ProgressStreamCallback(progress_handler)]
-        callback_list.extend(
-            create_callbacks_from_config(training_config.trainer.callbacks)
-        )
+        callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
         trainer = GradientTrainer(
             pipeline=session.pipeline,
             datamodule=datamodule,
-            trainer_config=training_config.trainer,
-            optimizer_config=training_config.optimizer,
-            scheduler_config=training_config.scheduler,
+            training_config=training_config,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             callbacks=callback_list,
@@ -484,7 +486,7 @@ class TrainingService:
 
         final_context = Context(
             stage=ExecutionStage.TRAIN,
-            epoch=training_config.trainer.max_epochs,
+            epoch=training_config.max_epochs,
             batch_idx=0,
             global_step=getattr(getattr(trainer, "trainer", None), "global_step", 0),
         )

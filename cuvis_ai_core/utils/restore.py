@@ -4,6 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+import pytorch_lightning as pl
 import torch
 import yaml
 from loguru import logger
@@ -124,6 +125,26 @@ def _build_data_module(
     if data_config.data_module not in registry.data_modules:
         _load_data_module_plugin(registry, data_config.data_module, candidate_dirs)
     return create_data_module(registry, data_config)
+
+
+def _resolve_splits_path_in_config(
+    data_config: DataConfig, base_dir: Path | None
+) -> DataConfig:
+    """Rewrite a relative ``splits.splits_path`` to an absolute path under ``base_dir``.
+
+    ``base_dir`` is the trainrun file's directory. Resolving here (not in the base
+    datamodule) means the module only ever sees an absolute ``splits_path``, so split
+    loading never depends on the process CWD -- which Hydra rewrites at runtime. Absolute
+    paths and configs without a ``splits_path`` pass through unchanged.
+    """
+    splits = data_config.splits
+    if base_dir is None or splits is None or not splits.splits_path:
+        return data_config
+    splits_path = Path(splits.splits_path)
+    if splits_path.is_absolute():
+        return data_config
+    resolved = splits.model_copy(update={"splits_path": str(base_dir / splits_path)})
+    return data_config.model_copy(update={"splits": resolved})
 
 
 class PipelineVisFormat(str, Enum):
@@ -337,6 +358,7 @@ def _build_pipeline_from_config(
 def _create_datamodule_from_config(
     trainrun_config: TrainRunConfig,
     candidate_dirs: list[Path] | None = None,
+    base_dir: Path | None = None,
 ):
     """Build the trainrun's DataModule via the registry dispatch and setup('fit').
 
@@ -346,6 +368,11 @@ def _create_datamodule_from_config(
         Trainrun configuration object (its ``data`` is a polymorphic DataConfig).
     candidate_dirs : list[Path] | None
         Plugins directories to resolve the ``data_module``'s providing plugin from.
+    base_dir : Path | None
+        Directory a relative ``splits.splits_path`` is resolved against (the trainrun
+        file's directory). Rewritten to an absolute path before construction so the base
+        datamodule never depends on the runtime CWD (which Hydra changes). Absolute
+        ``splits_path`` values are left untouched.
 
     Returns
     -------
@@ -353,9 +380,8 @@ def _create_datamodule_from_config(
         Configured datamodule, already ``setup(stage="fit")``.
     """
     registry = NodeRegistry()
-    datamodule = _build_data_module(
-        registry, trainrun_config.data, candidate_dirs or []
-    )
+    data_config = _resolve_splits_path_in_config(trainrun_config.data, base_dir)
+    datamodule = _build_data_module(registry, data_config, candidate_dirs or [])
     datamodule.setup(stage="fit")
     return datamodule
 
@@ -426,6 +452,11 @@ def restore_trainrun(
         # Config is already resolved - load directly
         trainrun_config: TrainRunConfig = TrainRunConfig.load_from_file(trainrun_path)
 
+    # Seed before building the pipeline and datamodule so weight initialization
+    # and dataset splitting are reproducible (a later seed would be too late).
+    if trainrun_config.training is not None:
+        pl.seed_everything(trainrun_config.training.seed, workers=True)
+
     # Build pipeline (its `pipeline:` reference resolves relative to the trainrun dir)
     pipeline = _build_pipeline_from_config(
         trainrun_config, device=device, base_dir=trainrun_path.parent
@@ -449,14 +480,13 @@ def restore_trainrun(
 
     # Create datamodule (resolve the data_module's plugin from discovered + explicit dirs)
     candidate_dirs = _discover_plugins_dirs(trainrun_path, plugins_dirs)
-    datamodule = _create_datamodule_from_config(trainrun_config, candidate_dirs)
+    datamodule = _create_datamodule_from_config(
+        trainrun_config, candidate_dirs, base_dir=trainrun_path.parent
+    )
     output_dir = Path(trainrun_config.output_dir)
 
-    # Detect training type: check if we have training config with trainer
-    has_gradient_training = (
-        trainrun_config.training is not None
-        and trainrun_config.training.trainer is not None
-    )
+    # Detect training type: a training block means a gradient run.
+    has_gradient_training = trainrun_config.training is not None
 
     # Check if statistical initialization is needed
     # Skip if weights are already loaded (indicates pre-trained pipeline)
@@ -483,11 +513,8 @@ def restore_trainrun(
         if training_config is None:
             raise ValueError("Training configuration is missing in trainrun config.")
 
-        if (
-            training_config.trainer.callbacks
-            and training_config.trainer.callbacks.checkpoint
-        ):
-            training_config.trainer.callbacks.checkpoint.dirpath = str(
+        if training_config.callbacks and training_config.callbacks.checkpoint:
+            training_config.callbacks.checkpoint.dirpath = str(
                 output_dir / "checkpoints"
             )
 
@@ -496,8 +523,7 @@ def restore_trainrun(
             datamodule=datamodule,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
-            trainer_config=training_config.trainer,
-            optimizer_config=training_config.optimizer,
+            training_config=training_config,
         )
     else:
         logger.info("Detected statistical-only training configuration")
@@ -524,7 +550,7 @@ def restore_trainrun(
                 logger.warning(
                     f"Checkpoint path provided: {checkpoint_path}. "
                     "Automatic checkpoint resumption is not yet implemented. "
-                    "Please configure checkpoint resumption in trainer_config."
+                    "Please configure checkpoint resumption in the training config."
                 )
 
             grad_trainer.fit()

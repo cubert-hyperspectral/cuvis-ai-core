@@ -89,7 +89,7 @@ def test_config_resolution_complex_performance(benchmark, grpc_service):
             overrides=[
                 "training.optimizer.lr=0.01",
                 "training.optimizer.weight_decay=0.05",
-                "training.trainer.max_epochs=20",
+                "training.max_epochs=20",
                 "data.batch_size=16",
                 "data.params.processing_mode=Reflectance",
             ],

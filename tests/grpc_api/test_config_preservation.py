@@ -45,7 +45,7 @@ class TestConfigPreservationThroughTraining:
         # Verify the resolved trainrun file has max_epochs=20 (Hydra-composed config)
         with open(resolved_path) as f:
             trainrun_config_dict = yaml.safe_load(f)
-        assert trainrun_config_dict["training"]["trainer"]["max_epochs"] == 20
+        assert trainrun_config_dict["training"]["max_epochs"] == 20
 
         # Restore train run (loads config with max_epochs=20)
         restore_response = grpc_stub.RestoreTrainRun(
@@ -83,7 +83,7 @@ class TestConfigPreservationThroughTraining:
                 saved_config = yaml.safe_load(f)
 
             # BUG CHECK: max_epochs should still be 20, not reverted to 100
-            assert saved_config["training"]["trainer"]["max_epochs"] == 20, (
+            assert saved_config["training"]["max_epochs"] == 20, (
                 "Statistical training should preserve max_epochs from loaded config"
             )
 
@@ -182,12 +182,12 @@ class TestConfigPreservationThroughTraining:
 
             assert saved_training["seed"] == original_training["seed"]
             assert (
-                saved_training["trainer"]["max_epochs"]
-                == original_training["trainer"]["max_epochs"]
+                saved_training["max_epochs"]
+                == original_training["max_epochs"]
             )
             assert (
-                saved_training["trainer"]["accelerator"]
-                == original_training["trainer"]["accelerator"]
+                saved_training["accelerator"]
+                == original_training["accelerator"]
             )
             assert (
                 saved_training["optimizer"]["name"]
@@ -216,10 +216,8 @@ class TestTrainingConfigFromDictConfig:
         # Provide only partial config (should merge with defaults)
         dict_config = OmegaConf.create(
             {
-                "trainer": {
-                    "max_epochs": 50,
-                    # accelerator, devices, etc. should use defaults
-                },
+                "max_epochs": 50,
+                # accelerator, devices, etc. should use defaults
                 # optimizer should use all defaults
             }
         )
@@ -227,11 +225,11 @@ class TestTrainingConfigFromDictConfig:
         config = TrainingConfig.from_dict_config(dict_config)
 
         # Custom value
-        assert config.trainer.max_epochs == 50
+        assert config.max_epochs == 50
 
         # Default values
         assert config.seed == 42  # default
-        assert config.trainer.accelerator == "auto"  # default
+        assert config.accelerator == "auto"  # default
         assert config.optimizer.name == "adamw"  # default
         assert config.optimizer.lr == 1e-3  # default
 
@@ -241,14 +239,14 @@ class TestTrainingConfigFromDictConfig:
         """
         plain_dict = {
             "seed": 99,
-            "trainer": {"max_epochs": 15},
+            "max_epochs": 15,
             "optimizer": {"lr": 0.005},
         }
 
         config = TrainingConfig.from_dict_config(plain_dict)
 
         assert config.seed == 99
-        assert config.trainer.max_epochs == 15
+        assert config.max_epochs == 15
         assert config.optimizer.lr == 0.005
 
     def test_from_dict_config_roundtrip_preserves_data(self):
@@ -257,16 +255,14 @@ class TestTrainingConfigFromDictConfig:
 
         This verifies the refactored implementation is lossless.
         """
-        from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
+        from cuvis_ai_core.training.config import OptimizerConfig
 
         original = TrainingConfig(
             seed=123,
-            trainer=TrainerConfig(
-                max_epochs=25,
-                accelerator="gpu",
-                devices=1,
-                precision="16-mixed",
-            ),
+            max_epochs=25,
+            accelerator="gpu",
+            devices=1,
+            precision="16-mixed",
             optimizer=OptimizerConfig(
                 name="adam",
                 lr=0.002,
@@ -280,10 +276,10 @@ class TestTrainingConfigFromDictConfig:
 
         # Verify all fields match
         assert restored.seed == original.seed
-        assert restored.trainer.max_epochs == original.trainer.max_epochs
-        assert restored.trainer.accelerator == original.trainer.accelerator
-        assert restored.trainer.devices == original.trainer.devices
-        assert restored.trainer.precision == original.trainer.precision
+        assert restored.max_epochs == original.max_epochs
+        assert restored.accelerator == original.accelerator
+        assert restored.devices == original.devices
+        assert restored.precision == original.precision
         assert restored.optimizer.name == original.optimizer.name
         assert restored.optimizer.lr == original.optimizer.lr
         assert restored.optimizer.weight_decay == original.optimizer.weight_decay

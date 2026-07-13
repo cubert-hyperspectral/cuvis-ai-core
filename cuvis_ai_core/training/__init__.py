@@ -12,7 +12,6 @@ from cuvis_ai_core.training.config import (
     OptimizerConfig,
     PipelineConfig,
     SchedulerConfig,
-    TrainerConfig,
     TrainingConfig,
     TrainRunConfig,
 )
@@ -22,7 +21,6 @@ from cuvis_ai_schemas.execution import Context
 
 __all__ = [
     # Configuration
-    "TrainerConfig",
     "OptimizerConfig",
     "TrainingConfig",
     "SchedulerConfig",

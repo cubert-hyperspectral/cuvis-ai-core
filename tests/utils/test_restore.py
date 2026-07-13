@@ -504,6 +504,48 @@ def test_restore_pipeline_cli_passes_vis_ext(monkeypatch) -> None:
     assert captured["pipeline_vis_ext"] == restore_mod.PipelineVisFormat.MD
 
 
+def test_resolve_splits_path_rewrites_relative_to_base_dir(tmp_path: Path) -> None:
+    """A relative splits_path resolves against the trainrun dir, not the CWD Hydra sets."""
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    cfg = DataConfig(
+        data_module="npz_multi",
+        splits=DataSplitConfig(splits_path="splits.json"),
+        params={"index_csv": "x.csv"},
+    )
+    out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=tmp_path)
+    assert out.splits.splits_path == str(tmp_path / "splits.json")
+    assert Path(out.splits.splits_path).is_absolute()
+
+
+def test_resolve_splits_path_absolute_and_none_pass_through(tmp_path: Path) -> None:
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    abs_path = str(tmp_path / "splits.json")
+    cfg_abs = DataConfig(
+        data_module="npz_multi", splits=DataSplitConfig(splits_path=abs_path)
+    )
+    assert (
+        restore_mod._resolve_splits_path_in_config(
+            cfg_abs, base_dir=tmp_path
+        ).splits.splits_path
+        == abs_path
+    )  # absolute untouched
+
+    cfg_inline = DataConfig(data_module="fake", splits=DataSplitConfig(train=[]))
+    assert (
+        restore_mod._resolve_splits_path_in_config(cfg_inline, base_dir=tmp_path)
+        is cfg_inline
+    )  # no splits_path -> identity
+
+    cfg_rel = DataConfig(
+        data_module="npz_multi", splits=DataSplitConfig(splits_path="splits.json")
+    )
+    assert (
+        restore_mod._resolve_splits_path_in_config(cfg_rel, base_dir=None) is cfg_rel
+    )  # no base_dir -> identity
+
+
 def test_restore_trainrun_cli_forwards_args(monkeypatch) -> None:
     captured: dict = {}
     monkeypatch.setattr(
