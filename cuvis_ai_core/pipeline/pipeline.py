@@ -232,19 +232,18 @@ class CuvisPipeline:
         return res
 
     def _repr_html_(self) -> str | None:
-        """Rich Jupyter representation: an expandable, pannable inline SVG of the graph.
+        """Rich Jupyter representation: a pannable inline SVG of the graph.
 
         Jupyter calls this automatically when a pipeline is the last expression in a
         cell. The Graphviz DAG is rendered to SVG in memory (no temp file) and shown
-        at native size inside a scrollable viewport, wrapped in a ``<details>``
-        element (expanded by default; click the summary to collapse). A large graph is
-        NOT scaled down to the cell width, so it stays readable: drag or scroll to pan,
-        Ctrl+scroll to zoom,
-        double-click to reset. The drag/zoom needs the output's JS to run (trusted
-        Jupyter, VS Code); where scripts are stripped the viewport still scrolls.
-        Degrades to a Mermaid source block when the Graphviz ``dot`` binary is
-        unavailable, and returns ``None`` (falling back to ``__repr__``) if even that
-        fails, rather than raising a traceback into the cell.
+        at native size inside a scrollable viewport, under a small caption naming the
+        pipeline. A large graph is NOT scaled down to the cell width, so it stays
+        readable: drag or scroll to pan, Ctrl+scroll to zoom, double-click to reset.
+        The drag/zoom needs the output's JS to run (trusted Jupyter, VS Code); where
+        scripts are stripped the viewport still scrolls. Degrades to a Mermaid source
+        block when the Graphviz ``dot`` binary is unavailable, and returns ``None``
+        (falling back to ``__repr__``) if even that fails, rather than raising a
+        traceback into the cell.
         """
         import uuid
         from html import escape
@@ -292,7 +291,10 @@ class CuvisPipeline:
             except Exception:
                 return None
 
-        return f"<details open><summary>{summary}</summary>{body}</details>"
+        return (
+            f'<div style="font:12px sans-serif;color:#555;margin:0 0 4px">{summary}</div>'
+            f"{body}"
+        )
 
     def visualize(
         self,
