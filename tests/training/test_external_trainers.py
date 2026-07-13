@@ -544,19 +544,29 @@ class TestEpochPooledMetrics:
 
             def forward(self, scores, targets, context, **kwargs):
                 self._accumulate(scores, targets, context)
+                running = float(self.auroc.compute())
+                # "auroc" is pooled (skipped in the per-batch path, logged as the live
+                # object at epoch end); "auroc_running" is a plain per-batch metric kept
+                # on the mean path, so the two logging paths use distinct callback keys.
                 return {
                     "metrics": [
                         Metric(
                             name="auroc",
-                            value=float(self.auroc.compute()),
+                            value=running,
                             stage=context.stage,
                             epoch=context.epoch,
-                        )
+                        ),
+                        Metric(
+                            name="auroc_running",
+                            value=running,
+                            stage=context.stage,
+                            epoch=context.epoch,
+                        ),
                     ]
                 }
 
-            def compute_epoch_metrics(self):
-                return [Metric(name="auroc", value=float(self.auroc.compute()))]
+            def pooled_metrics(self):
+                return {"auroc": self.auroc}
 
             def load(self, params: dict, serial_dir: str) -> None:
                 pass
@@ -627,10 +637,15 @@ class TestEpochPooledMetrics:
         )
         pl_trainer.validate(model=trainer, datamodule=datamodule)
 
+        # Pooled name: written only by the object path (the per-batch "auroc" is skipped),
+        # so an exact 1.0 attributes the value to the pooled compute, not a per-batch mean.
         value = pl_trainer.callback_metrics["auroc_node/auroc"].item()
         assert value == pytest.approx(1.0, abs=1e-6), (
             f"pooled AUROC at batch_size={batch_size} was {value}, expected 1.0"
         )
+        # The non-pooled per-batch metric is still logged: the per-batch float path runs,
+        # and the pooled name was skipped there rather than never reaching the trainer.
+        assert "auroc_node/auroc_running" in pl_trainer.callback_metrics
 
 
 class TestGraphInputValidation:
