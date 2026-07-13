@@ -42,7 +42,9 @@ _PIPELINE_PANZOOM_JS = (
     'var c=document.getElementById("__UID__");'
     'var b=document.getElementById("__UID__-btn");'
     'var h=document.getElementById("__UID__-hint");'
-    'if(!c||!b||c.dataset.pz)return;c.dataset.pz="1";'
+    'var ei=document.getElementById("__UID__-ei");'
+    'var ci=document.getElementById("__UID__-ci");'
+    'if(!c||!b||!ei||!ci||c.dataset.pz)return;c.dataset.pz="1";'
     'var s=c.querySelector("svg");if(!s)return;'
     'var mw=(s.getAttribute("width")||"").match(/([0-9.]+)([a-z%]*)/);'
     'var mh=(s.getAttribute("height")||"").match(/([0-9.]+)([a-z%]*)/);'
@@ -53,11 +55,13 @@ _PIPELINE_PANZOOM_JS = (
     "function render(){if(ex){"
     's.style.maxWidth="none";s.style.height="";ap();'
     'c.style.overflow="auto";c.style.maxHeight="70vh";c.style.cursor="grab";'
-    'h.style.display="";b.textContent="\\u2715 Collapse to overview";'
+    'h.style.display="";ei.style.display="none";ci.style.display="flex";'
+    'b.title="Collapse to overview";'
     "}else{"
     'z=1;ap();s.style.maxWidth="100%";s.style.height="auto";'
     'c.style.overflow="hidden";c.style.maxHeight="";c.style.cursor="default";'
-    'h.style.display="none";b.textContent="\\u2922 Expand to pan & zoom";}}'
+    'h.style.display="none";ei.style.display="flex";ci.style.display="none";'
+    'b.title="Expand to pan & zoom";}}'
     'b.addEventListener("click",function(){ex=!ex;render();});'
     "var d=false,sx=0,sy=0,sl=0,st=0;"
     'c.addEventListener("mousedown",function(e){if(!ex)return;'
@@ -73,6 +77,30 @@ _PIPELINE_PANZOOM_JS = (
     'c.addEventListener("dblclick",function(){if(!ex)return;z=1;ap();});'
     "render();"
     "})();"
+)
+
+# Overlay button glyphs: four diagonal arrows radiating outward (expand / fullscreen)
+# and pointing inward (collapse). Inline SVG so they render identically across Jupyter
+# and VS Code, unlike unicode/emoji glyphs.
+_ICON_SVG_ATTRS = (
+    'viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
+)
+_EXPAND_ICON_SVG = (
+    f"<svg {_ICON_SVG_ATTRS}>"
+    '<polyline points="3 8 3 3 8 3"/><line x1="3" y1="3" x2="10" y2="10"/>'
+    '<polyline points="16 3 21 3 21 8"/><line x1="21" y1="3" x2="14" y2="10"/>'
+    '<polyline points="3 16 3 21 8 21"/><line x1="3" y1="21" x2="10" y2="14"/>'
+    '<polyline points="21 16 21 21 16 21"/><line x1="21" y1="21" x2="14" y2="14"/>'
+    "</svg>"
+)
+_COLLAPSE_ICON_SVG = (
+    f"<svg {_ICON_SVG_ATTRS}>"
+    '<polyline points="9 4 9 9 4 9"/><line x1="3" y1="3" x2="9" y2="9"/>'
+    '<polyline points="15 4 15 9 20 9"/><line x1="21" y1="3" x2="15" y2="9"/>'
+    '<polyline points="9 20 9 15 4 15"/><line x1="3" y1="21" x2="9" y2="15"/>'
+    '<polyline points="15 20 15 15 20 15"/><line x1="21" y1="21" x2="15" y2="15"/>'
+    "</svg>"
 )
 
 
@@ -248,10 +276,11 @@ class CuvisPipeline:
         Jupyter calls this automatically when a pipeline is the last expression in a
         cell. The Graphviz DAG is rendered to SVG in memory (no temp file). By default
         it shows a small overview fit to the cell width (the whole graph at a glance),
-        under a caption naming the pipeline and an *Expand* button. Clicking *Expand*
-        switches the SVG to native size inside a scrollable viewport, where a large
-        graph stays readable: drag or scroll to pan, Ctrl+scroll to zoom, double-click
-        to reset; clicking again collapses back to the overview. The button and
+        under a caption naming the pipeline, with a fullscreen (four-arrows) icon button
+        in the graph's top-right corner. Clicking it switches the SVG to native size
+        inside a scrollable viewport, where a large graph stays readable: drag or scroll
+        to pan, Ctrl+scroll to zoom, double-click to reset; the icon flips to a collapse
+        (arrows-inward) glyph and clicking again returns to the overview. The button and
         drag/zoom need the output's JS to run (trusted Jupyter, VS Code); where scripts
         are stripped the overview still renders (the button is inert). Degrades to a
         Mermaid source block when the Graphviz ``dot`` binary is unavailable, and
@@ -285,12 +314,22 @@ class CuvisPipeline:
             svg = svg.replace("<svg ", '<svg style="max-width:100%;height:auto" ', 1)
             uid = "cuvis-pz-" + uuid.uuid4().hex[:10]
             js = _PIPELINE_PANZOOM_JS.replace("__UID__", uid)
+            # An icon-only fullscreen toggle overlaid on the top-right corner of the
+            # graph. It sits in the positioned wrapper (a sibling of the scroll box),
+            # not inside it, so it stays pinned to the corner while the viewport scrolls.
             body = (
-                f'<button id="{uid}-btn" type="button" style="font:11px sans-serif;'
-                "margin:0 0 4px;padding:2px 8px;border:1px solid #bbb;border-radius:4px;"
-                'background:#f5f5f5;cursor:pointer">Expand to pan &amp; zoom</button>'
-                f'<div id="{uid}" style="position:relative;overflow:hidden;'
+                '<div style="position:relative">'
+                f'<button id="{uid}-btn" type="button" title="Expand to pan &amp; zoom" '
+                'style="position:absolute;top:6px;right:6px;z-index:2;display:flex;'
+                "align-items:center;justify-content:center;width:26px;height:26px;padding:0;"
+                "border:1px solid #bbb;border-radius:4px;background:rgba(255,255,255,.85);"
+                'cursor:pointer;color:#333">'
+                f'<span id="{uid}-ei" style="display:flex">{_EXPAND_ICON_SVG}</span>'
+                f'<span id="{uid}-ci" style="display:none">{_COLLAPSE_ICON_SVG}</span>'
+                "</button>"
+                f'<div id="{uid}" style="position:relative;overflow:hidden;width:100%;'
                 f'border:1px solid #bbb;border-radius:6px;background:#fff">{svg}</div>'
+                "</div>"
                 f'<div id="{uid}-hint" style="display:none;font:11px sans-serif;'
                 'color:#888;margin:3px 2px 0">'
                 "drag or scroll to pan &middot; Ctrl+scroll to zoom &middot; "
