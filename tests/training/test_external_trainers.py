@@ -490,18 +490,25 @@ class TestTrainerValidation:
 
 
 class TestEpochPooledMetrics:
-    """Streaming val/test metrics reduce by a single pooled compute(), not by
-    Lightning's per-batch epoch-mean (which is batch-size-sensitive).
+    """Streaming val/test metrics are reduced by a single pooled compute() over
+    the epoch — the trainer logs the torchmetrics *object* and Lightning pools +
+    resets it — not by Lightning's per-batch epoch-mean.
 
-    Regression for the streaming-AUROC epoch-reduction bug: on perfectly
-    separable data (true AUROC = 1.0) the per-batch mean gave ~0.79 / 0.83 / 1.00
-    at batch_size 1 / 4 / 12 (early single-class batches make the running metric
-    undefined -> torchmetrics returns 0.0, dragging the mean). The pooled value
-    must be exactly 1.0 at every batch size.
+    Covers the streaming-AUROC epoch-reduction bug: on separable data (true
+    AUROC 1.0) the per-batch mean gave ~0.79 / 0.83 / 1.00 at batch_size
+    1 / 4 / 12 (early single-class batches make the running metric undefined ->
+    torchmetrics returns 0.0, dragging the mean). Also covers reset between runs:
+    the object must be reset at each validation/test epoch end so repeated
+    validate()/test() calls, and successive fit epochs, never pool onto each
+    other.
     """
 
+    SCORES = [0.10, 0.20, 0.30, 0.40, 0.45, 0.49, 0.51, 0.60, 0.70, 0.80, 0.90, 0.95]
+    SEPARABLE = [0.0] * 6 + [1.0] * 6  # anomaly scores all exceed normal -> AUROC 1.0
+    INVERTED = [1.0] * 6 + [0.0] * 6  # same scores, flipped labels        -> AUROC 0.0
+
     @staticmethod
-    def _build(batch_size):
+    def _nodes():
         from torchmetrics.classification import BinaryAUROC
 
         class ScoreSource(Node):
@@ -521,7 +528,14 @@ class TestEpochPooledMetrics:
                 pass
 
         class StreamingAUROC(Node):
-            """Minimal streaming metric node opting into epoch pooling."""
+            """Minimal streaming metric node exposing its torchmetrics object.
+
+            Deliberately does NOT self-reset, so the tests exercise Lightning's
+            epoch-end reset of the logged object rather than any node-side logic.
+            It also emits a per-batch running float under a *different* name
+            ("auroc_running") so the plain per-batch path is exercised alongside
+            the pooled object path without colliding on a log key.
+            """
 
             INPUT_SPECS = {
                 "scores": PortSpec(dtype=torch.float32, shape=(-1,)),
@@ -533,21 +547,10 @@ class TestEpochPooledMetrics:
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
                 self.auroc = BinaryAUROC()  # thresholds=None -> exact
-                self._key = None
-
-            def _accumulate(self, scores, targets, context):
-                key = (context.stage, context.epoch)
-                if self._key != key:  # reset only at the (stage, epoch) boundary
-                    self.auroc.reset()
-                    self._key = key
-                self.auroc.update(scores.flatten(), targets.flatten().int())
 
             def forward(self, scores, targets, context, **kwargs):
-                self._accumulate(scores, targets, context)
+                self.auroc.update(scores.flatten(), targets.flatten().int())
                 running = float(self.auroc.compute())
-                # "auroc" is pooled (skipped in the per-batch path, logged as the live
-                # object at epoch end); "auroc_running" is a plain per-batch metric kept
-                # on the mean path, so the two logging paths use distinct callback keys.
                 return {
                     "metrics": [
                         Metric(
@@ -571,81 +574,195 @@ class TestEpochPooledMetrics:
             def load(self, params: dict, serial_dir: str) -> None:
                 pass
 
+        class Scaler(Node):
+            """Trainable passthrough so fit() has a parameter to optimize."""
+
+            INPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.w = torch.nn.Parameter(torch.tensor(1.0))
+
+            @property
+            def is_trainable(self) -> bool:
+                return True
+
+            def forward(self, scores, **kwargs):
+                return {"scores": scores * self.w}
+
+            def load(self, params: dict, serial_dir: str) -> None:
+                pass
+
         class MeanLoss(Node):
             INPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
             OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
 
             def forward(self, scores, **kwargs):
-                return {"loss": scores.mean()}
+                return {"loss": scores.mean() ** 2}
 
             def load(self, params: dict, serial_dir: str) -> None:
                 pass
 
-        # Perfectly separable: every anomaly score exceeds every normal score,
-        # so the pooled AUROC is 1.0 no matter how the batches are split.
-        scores = torch.tensor(
-            [0.10, 0.20, 0.30, 0.40, 0.45, 0.49, 0.51, 0.60, 0.70, 0.80, 0.90, 0.95]
+        return ScoreSource, StreamingAUROC, Scaler, MeanLoss
+
+    @classmethod
+    def _build(cls, batch_size, *, train=None, val=None, test=None):
+        ScoreSource, StreamingAUROC, Scaler, MeanLoss = cls._nodes()
+
+        pipeline = CuvisPipeline("epoch_pooled_metrics")
+        source = ScoreSource()
+        auroc = StreamingAUROC(name="auroc_node")
+        scaler = Scaler(name="scaler")
+        loss = MeanLoss(name="mean_loss")
+        auroc.execution_stages = {ExecutionStage.VAL, ExecutionStage.TEST}
+        for node in (scaler, loss):
+            node.execution_stages = {
+                ExecutionStage.TRAIN,
+                ExecutionStage.VAL,
+                ExecutionStage.TEST,
+            }
+        # Metric reads the RAW source scores (so AUROC is decided purely by the
+        # labels); the loss goes through the trainable scaler.
+        pipeline.connect(
+            (source.outputs.scores, auroc.scores),
+            (source.outputs.targets, auroc.targets),
+            (source.outputs.scores, scaler.inputs.scores),
+            (scaler.outputs.scores, loss.scores),
         )
-        targets = torch.tensor([0.0] * 6 + [1.0] * 6)
 
-        class SeparableDataModule(BaseCuvisAIDataModule):
+        data = {"train": train, "val": val, "test": test}
+
+        class _DataModule(BaseCuvisAIDataModule):
             def setup(self, stage=None):
-                self.val_dataset = TensorDataset(scores, targets)
+                self.train_dataset = self._ds("train")
+                self.val_dataset = self._ds("val")
+                self.test_dataset = self._ds("test")
 
-            def val_dataloader(self):
+            def _ds(self, split):
+                spec = data.get(split)
+                if spec is None:
+                    return None
+                scores, labels = spec
+                return TensorDataset(torch.tensor(scores), torch.tensor(labels))
+
+            def _dl(self, dataset):
                 return DataLoader(
-                    self.val_dataset,
+                    dataset,
                     batch_size=batch_size,
                     shuffle=False,
                     collate_fn=self.collate_batch,
                 )
 
+            def train_dataloader(self):
+                return self._dl(self.train_dataset)
+
+            def val_dataloader(self):
+                return self._dl(self.val_dataset)
+
+            def test_dataloader(self):
+                return self._dl(self.test_dataset)
+
             def collate_batch(self, batch):
                 s, t = zip(*batch, strict=True)
                 return {"scores": torch.stack(s), "targets": torch.stack(t)}
 
-        pipeline = CuvisPipeline("epoch_pooled_metrics")
-        source = ScoreSource()
-        auroc = StreamingAUROC(name="auroc_node")
-        loss = MeanLoss(name="mean_loss")
-        for node in (auroc, loss):
-            node.execution_stages = {ExecutionStage.VAL, ExecutionStage.TEST}
-        pipeline.connect(
-            (source.outputs.scores, auroc.scores),
-            (source.outputs.targets, auroc.targets),
-            (source.outputs.scores, loss.scores),
-        )
-
-        datamodule = SeparableDataModule()
+        datamodule = _DataModule()
         trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
             loss_nodes=[loss],
             metric_nodes=[auroc],
+            optimizer_config=OptimizerConfig(name="sgd", lr=0.01),
         )
         return trainer, datamodule
+
+    @classmethod
+    def _loader(cls, labels, batch_size):
+        ds = TensorDataset(torch.tensor(cls.SCORES), torch.tensor(labels))
+
+        def collate(batch):
+            s, t = zip(*batch, strict=True)
+            return {"scores": torch.stack(s), "targets": torch.stack(t)}
+
+        return DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate)
+
+    @staticmethod
+    def _pl_trainer(**kw):
+        return pl.Trainer(
+            enable_checkpointing=False,
+            enable_progress_bar=False,
+            logger=False,
+            **kw,
+        )
 
     @pytest.mark.parametrize("batch_size", [1, 4, 12])
     def test_pooled_auroc_is_batch_size_invariant(self, batch_size):
         """Pooled epoch AUROC == 1.0 for every batch size on separable data."""
-        trainer, datamodule = self._build(batch_size)
-        pl_trainer = pl.Trainer(
-            max_epochs=1,
-            enable_checkpointing=False,
-            enable_progress_bar=False,
-            logger=False,
-        )
+        trainer, datamodule = self._build(batch_size, val=(self.SCORES, self.SEPARABLE))
+        pl_trainer = self._pl_trainer()
         pl_trainer.validate(model=trainer, datamodule=datamodule)
 
-        # Pooled name: written only by the object path (the per-batch "auroc" is skipped),
-        # so an exact 1.0 attributes the value to the pooled compute, not a per-batch mean.
+        # Pooled name: written only by the object path (the per-batch "auroc" is
+        # skipped), so an exact 1.0 attributes the value to the pooled compute.
         value = pl_trainer.callback_metrics["auroc_node/auroc"].item()
         assert value == pytest.approx(1.0, abs=1e-6), (
             f"pooled AUROC at batch_size={batch_size} was {value}, expected 1.0"
         )
-        # The non-pooled per-batch metric is still logged: the per-batch float path runs,
-        # and the pooled name was skipped there rather than never reaching the trainer.
+        # The non-pooled per-batch metric still reaches the trainer on the float
+        # path (the pooled name was skipped there, not dropped entirely).
         assert "auroc_node/auroc_running" in pl_trainer.callback_metrics
+
+    def test_repeated_validate_is_isolated(self):
+        """Two validate() calls on one trainer must not pool onto each other.
+
+        The object is reset at each validation epoch end: call 1 (separable) ->
+        1.0; call 2 (same scores, inverted labels) -> 0.0. A leak would give ~0.5.
+        The node deliberately does not self-reset, so this exercises Lightning's
+        epoch-end reset of the logged object.
+        """
+        trainer, _ = self._build(4, val=(self.SCORES, self.SEPARABLE))
+        pl_trainer = self._pl_trainer()
+
+        pl_trainer.validate(trainer, dataloaders=self._loader(self.SEPARABLE, 4))
+        first = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+        pl_trainer.validate(trainer, dataloaders=self._loader(self.INVERTED, 4))
+        second = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+
+        assert first == pytest.approx(1.0, abs=1e-6)
+        assert second == pytest.approx(0.0, abs=1e-6), (
+            f"metric leaked across validate() calls: second run was {second}, "
+            "expected 0.0 (~0.5 indicates no reset)"
+        )
+
+    def test_val_then_test_is_isolated(self):
+        """test() after validate() must not inherit validation state."""
+        trainer, _ = self._build(4, val=(self.SCORES, self.SEPARABLE))
+        pl_trainer = self._pl_trainer()
+
+        pl_trainer.validate(trainer, dataloaders=self._loader(self.SEPARABLE, 4))
+        val_auroc = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+        pl_trainer.test(trainer, dataloaders=self._loader(self.INVERTED, 4))
+        test_auroc = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+
+        assert val_auroc == pytest.approx(1.0, abs=1e-6)
+        assert test_auroc == pytest.approx(0.0, abs=1e-6), (
+            f"validation state leaked into test: {test_auroc}, expected 0.0"
+        )
+
+    def test_metric_available_during_multi_epoch_fit(self):
+        """Object logging works through a 2-epoch fit and the pooled val metric
+        lands in callback_metrics (i.e. is monitorable for checkpointing)."""
+        trainer, datamodule = self._build(
+            4,
+            train=(self.SCORES, self.SEPARABLE),
+            val=(self.SCORES, self.SEPARABLE),
+        )
+        pl_trainer = self._pl_trainer(max_epochs=2, num_sanity_val_steps=0)
+        pl_trainer.fit(trainer, datamodule=datamodule)
+
+        value = pl_trainer.callback_metrics["auroc_node/auroc"].item()
+        assert value == pytest.approx(1.0, abs=1e-6)
 
 
 class TestGraphInputValidation:
