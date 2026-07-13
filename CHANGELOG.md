@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.10.1 - 2026-07-13
 
 - `GradientTrainer` now logs epoch-pooled metrics (`POOLED_METRIC_NAMES`) via PyTorch Lightning's
   native metric-object logging: it logs each node's live `torchmetrics.Metric` (from the new
