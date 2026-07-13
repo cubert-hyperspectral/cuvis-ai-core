@@ -33,6 +33,38 @@ if TYPE_CHECKING:
     from cuvis_ai_core.training.config import PipelineConfig, PipelineMetadata
 
 
+# Minimal, dependency-free pan/zoom for the pipeline SVG in a Jupyter / VS Code cell.
+# ``__UID__`` is replaced with a per-render element id. Drag (or scroll) pans;
+# Ctrl+wheel zooms by resizing the SVG so the scroll area grows with it; double-click
+# resets. Where output scripts are stripped it simply falls back to plain scrolling.
+_PIPELINE_PANZOOM_JS = (
+    "(function(){"
+    'var c=document.getElementById("__UID__");'
+    'var f=document.getElementById("__UID__-fit");'
+    'if(!c||!f||c.dataset.pz)return;c.dataset.pz="1";'
+    'var s=f.querySelector("svg");if(!s)return;'
+    'var mw=(s.getAttribute("width")||"").match(/([0-9.]+)([a-z%]*)/);'
+    'var mh=(s.getAttribute("height")||"").match(/([0-9.]+)([a-z%]*)/);'
+    "var bw=mw?parseFloat(mw[1]):s.getBoundingClientRect().width;"
+    "var bh=mh?parseFloat(mh[1]):s.getBoundingClientRect().height;"
+    'var u=mw?(mw[2]||"px"):"px";var z=1;'
+    'function ap(){s.setAttribute("width",(bw*z)+u);s.setAttribute("height",(bh*z)+u);}'
+    "var d=false,sx=0,sy=0,sl=0,st=0;"
+    'c.addEventListener("mousedown",function(e){'
+    "d=true;sx=e.clientX;sy=e.clientY;sl=c.scrollLeft;st=c.scrollTop;"
+    'c.style.cursor="grabbing";e.preventDefault();});'
+    'window.addEventListener("mouseup",function(){'
+    'if(d){d=false;c.style.cursor="grab";}});'
+    'window.addEventListener("mousemove",function(e){'
+    "if(!d)return;c.scrollLeft=sl-(e.clientX-sx);c.scrollTop=st-(e.clientY-sy);});"
+    'c.addEventListener("wheel",function(e){'
+    "if(!e.ctrlKey)return;e.preventDefault();"
+    "z=Math.min(8,Math.max(0.1,z*(e.deltaY<0?1.1:0.9)));ap();},{passive:false});"
+    'c.addEventListener("dblclick",function(){z=1;ap();});'
+    "})();"
+)
+
+
 class CuvisPipeline:
     """Main class for connecting nodes in a CUVIS.AI processing graph"""
 
@@ -200,16 +232,20 @@ class CuvisPipeline:
         return res
 
     def _repr_html_(self) -> str | None:
-        """Rich Jupyter representation: a collapsible, inline SVG of the graph.
+        """Rich Jupyter representation: an expandable, pannable inline SVG of the graph.
 
-        Jupyter calls this automatically when a pipeline is the last expression
-        in a cell. The Graphviz DAG is rendered to SVG in memory (no temp file)
-        and embedded inside a ``<details>`` element, collapsed by default so the
-        graph expands on click. Degrades to a Mermaid source block when the
-        Graphviz ``dot`` binary is unavailable, and returns ``None`` (so Jupyter
-        falls back to the plain-text ``__repr__``) if even that fails, rather
-        than raising a traceback into the cell.
+        Jupyter calls this automatically when a pipeline is the last expression in a
+        cell. The Graphviz DAG is rendered to SVG in memory (no temp file) and shown
+        at native size inside a scrollable viewport, wrapped in a ``<details>``
+        element (collapsed; expands on click). A large graph is NOT scaled down to the
+        cell width, so it stays readable: drag or scroll to pan, Ctrl+scroll to zoom,
+        double-click to reset. The drag/zoom needs the output's JS to run (trusted
+        Jupyter, VS Code); where scripts are stripped the viewport still scrolls.
+        Degrades to a Mermaid source block when the Graphviz ``dot`` binary is
+        unavailable, and returns ``None`` (falling back to ``__repr__``) if even that
+        fails, rather than raising a traceback into the cell.
         """
+        import uuid
         from html import escape
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
@@ -227,11 +263,25 @@ class CuvisPipeline:
                 .pipe(format="svg")
                 .decode("utf-8")
             )
-            # Drop the XML prolog / DOCTYPE / comment so the markup embeds cleanly.
+            # Drop the XML prolog / DOCTYPE / comment so the markup embeds cleanly, and
+            # let the graph keep its native size: defeat the notebook's default
+            # ``svg { max-width: 100% }``, which otherwise squashes it to cell width.
             start = svg.find("<svg")
             if start != -1:
                 svg = svg[start:]
-            body = f'<div style="max-width:100%;overflow:auto">{svg}</div>'
+            svg = svg.replace("<svg ", '<svg style="max-width:none" ', 1)
+            uid = "cuvis-pz-" + uuid.uuid4().hex[:10]
+            js = _PIPELINE_PANZOOM_JS.replace("__UID__", uid)
+            body = (
+                f'<div id="{uid}" style="position:relative;overflow:auto;'
+                "max-height:70vh;border:1px solid #bbb;border-radius:6px;"
+                'background:#fff;cursor:grab">'
+                f'<div id="{uid}-fit" style="display:inline-block">{svg}</div></div>'
+                '<div style="font:11px sans-serif;color:#888;margin:3px 2px 0">'
+                "drag or scroll to pan &middot; Ctrl+scroll to zoom &middot; "
+                "double-click to reset</div>"
+                f"<script>{js}</script>"
+            )
         except Exception as exc:  # graphviz binary missing or render failure
             logger.debug(
                 "HTML repr SVG render failed ({}); falling back to Mermaid.", exc
