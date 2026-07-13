@@ -40,17 +40,27 @@ if TYPE_CHECKING:
 _PIPELINE_PANZOOM_JS = (
     "(function(){"
     'var c=document.getElementById("__UID__");'
-    'var f=document.getElementById("__UID__-fit");'
-    'if(!c||!f||c.dataset.pz)return;c.dataset.pz="1";'
-    'var s=f.querySelector("svg");if(!s)return;'
+    'var b=document.getElementById("__UID__-btn");'
+    'var h=document.getElementById("__UID__-hint");'
+    'if(!c||!b||c.dataset.pz)return;c.dataset.pz="1";'
+    'var s=c.querySelector("svg");if(!s)return;'
     'var mw=(s.getAttribute("width")||"").match(/([0-9.]+)([a-z%]*)/);'
     'var mh=(s.getAttribute("height")||"").match(/([0-9.]+)([a-z%]*)/);'
     "var bw=mw?parseFloat(mw[1]):s.getBoundingClientRect().width;"
     "var bh=mh?parseFloat(mh[1]):s.getBoundingClientRect().height;"
-    'var u=mw?(mw[2]||"px"):"px";var z=1;'
+    'var u=mw?(mw[2]||"px"):"px";var z=1;var ex=false;'
     'function ap(){s.setAttribute("width",(bw*z)+u);s.setAttribute("height",(bh*z)+u);}'
+    "function render(){if(ex){"
+    's.style.maxWidth="none";s.style.height="";ap();'
+    'c.style.overflow="auto";c.style.maxHeight="70vh";c.style.cursor="grab";'
+    'h.style.display="";b.textContent="\\u2715 Collapse to overview";'
+    "}else{"
+    'z=1;ap();s.style.maxWidth="100%";s.style.height="auto";'
+    'c.style.overflow="hidden";c.style.maxHeight="";c.style.cursor="default";'
+    'h.style.display="none";b.textContent="\\u2922 Expand to pan & zoom";}}'
+    'b.addEventListener("click",function(){ex=!ex;render();});'
     "var d=false,sx=0,sy=0,sl=0,st=0;"
-    'c.addEventListener("mousedown",function(e){'
+    'c.addEventListener("mousedown",function(e){if(!ex)return;'
     "d=true;sx=e.clientX;sy=e.clientY;sl=c.scrollLeft;st=c.scrollTop;"
     'c.style.cursor="grabbing";e.preventDefault();});'
     'window.addEventListener("mouseup",function(){'
@@ -58,9 +68,10 @@ _PIPELINE_PANZOOM_JS = (
     'window.addEventListener("mousemove",function(e){'
     "if(!d)return;c.scrollLeft=sl-(e.clientX-sx);c.scrollTop=st-(e.clientY-sy);});"
     'c.addEventListener("wheel",function(e){'
-    "if(!e.ctrlKey)return;e.preventDefault();"
+    "if(!ex||!e.ctrlKey)return;e.preventDefault();"
     "z=Math.min(8,Math.max(0.1,z*(e.deltaY<0?1.1:0.9)));ap();},{passive:false});"
-    'c.addEventListener("dblclick",function(){z=1;ap();});'
+    'c.addEventListener("dblclick",function(){if(!ex)return;z=1;ap();});'
+    "render();"
     "})();"
 )
 
@@ -232,18 +243,20 @@ class CuvisPipeline:
         return res
 
     def _repr_html_(self) -> str | None:
-        """Rich Jupyter representation: a pannable inline SVG of the graph.
+        """Rich Jupyter representation: a compact overview that expands to pan/zoom.
 
         Jupyter calls this automatically when a pipeline is the last expression in a
-        cell. The Graphviz DAG is rendered to SVG in memory (no temp file) and shown
-        at native size inside a scrollable viewport, under a small caption naming the
-        pipeline. A large graph is NOT scaled down to the cell width, so it stays
-        readable: drag or scroll to pan, Ctrl+scroll to zoom, double-click to reset.
-        The drag/zoom needs the output's JS to run (trusted Jupyter, VS Code); where
-        scripts are stripped the viewport still scrolls. Degrades to a Mermaid source
-        block when the Graphviz ``dot`` binary is unavailable, and returns ``None``
-        (falling back to ``__repr__``) if even that fails, rather than raising a
-        traceback into the cell.
+        cell. The Graphviz DAG is rendered to SVG in memory (no temp file). By default
+        it shows a small overview fit to the cell width (the whole graph at a glance),
+        under a caption naming the pipeline and an *Expand* button. Clicking *Expand*
+        switches the SVG to native size inside a scrollable viewport, where a large
+        graph stays readable: drag or scroll to pan, Ctrl+scroll to zoom, double-click
+        to reset; clicking again collapses back to the overview. The button and
+        drag/zoom need the output's JS to run (trusted Jupyter, VS Code); where scripts
+        are stripped the overview still renders (the button is inert). Degrades to a
+        Mermaid source block when the Graphviz ``dot`` binary is unavailable, and
+        returns ``None`` (falling back to ``__repr__``) if even that fails, rather than
+        raising a traceback into the cell.
         """
         import uuid
         from html import escape
@@ -263,21 +276,23 @@ class CuvisPipeline:
                 .pipe(format="svg")
                 .decode("utf-8")
             )
-            # Drop the XML prolog / DOCTYPE / comment so the markup embeds cleanly, and
-            # let the graph keep its native size: defeat the notebook's default
-            # ``svg { max-width: 100% }``, which otherwise squashes it to cell width.
+            # Drop the XML prolog / DOCTYPE / comment so the markup embeds cleanly. The
+            # default overview fits the cell width (``max-width:100%``); the Expand
+            # button flips the SVG to native size for panning.
             start = svg.find("<svg")
             if start != -1:
                 svg = svg[start:]
-            svg = svg.replace("<svg ", '<svg style="max-width:none" ', 1)
+            svg = svg.replace("<svg ", '<svg style="max-width:100%;height:auto" ', 1)
             uid = "cuvis-pz-" + uuid.uuid4().hex[:10]
             js = _PIPELINE_PANZOOM_JS.replace("__UID__", uid)
             body = (
-                f'<div id="{uid}" style="position:relative;overflow:auto;'
-                "max-height:70vh;border:1px solid #bbb;border-radius:6px;"
-                'background:#fff;cursor:grab">'
-                f'<div id="{uid}-fit" style="display:inline-block">{svg}</div></div>'
-                '<div style="font:11px sans-serif;color:#888;margin:3px 2px 0">'
+                f'<button id="{uid}-btn" type="button" style="font:11px sans-serif;'
+                "margin:0 0 4px;padding:2px 8px;border:1px solid #bbb;border-radius:4px;"
+                'background:#f5f5f5;cursor:pointer">Expand to pan &amp; zoom</button>'
+                f'<div id="{uid}" style="position:relative;overflow:hidden;'
+                f'border:1px solid #bbb;border-radius:6px;background:#fff">{svg}</div>'
+                f'<div id="{uid}-hint" style="display:none;font:11px sans-serif;'
+                'color:#888;margin:3px 2px 0">'
                 "drag or scroll to pan &middot; Ctrl+scroll to zoom &middot; "
                 "double-click to reset</div>"
                 f"<script>{js}</script>"
