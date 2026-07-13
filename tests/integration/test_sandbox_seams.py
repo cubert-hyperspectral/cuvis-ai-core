@@ -5,6 +5,14 @@ runtimes are launched, and the spawner-env policy must continue to
 strip credentials / agent sockets / PYTHONPATH from what the child
 inherits. These tests fail loudly if either property regresses, so
 the work in item 06 (process / FS sandbox) stays bounded.
+
+Exception (accepted security debt): ``HF_TOKEN`` /
+``HUGGINGFACE_HUB_TOKEN`` are intentionally forwarded so the child can
+fetch gated model weights into the shared model cache on first run.
+This is tracked to move to a trusted provisioning pass that restores a
+token-free inference child; when that lands, flip
+``test_hf_token_forwarded_and_model_cache_injected`` back to asserting
+the strip.
 """
 
 from __future__ import annotations
@@ -73,8 +81,6 @@ def test_deny_list_strips_known_secret_env_vars(monkeypatch, tmp_path):
     monkeypatch.setenv("GITLAB_TOKEN", "should-not-leak")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "should-not-leak")
     monkeypatch.setenv("OPENAI_API_KEY", "should-not-leak")
-    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", "should-not-leak")
-    monkeypatch.setenv("HF_TOKEN", "should-not-leak")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/etc/gcp.json")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "should-not-leak")
 
@@ -103,8 +109,6 @@ def test_deny_list_strips_known_secret_env_vars(monkeypatch, tmp_path):
         "GITLAB_TOKEN",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "HUGGINGFACE_HUB_TOKEN",
-        "HF_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "AZURE_CLIENT_SECRET",
     ):
@@ -201,8 +205,6 @@ def test_deny_patterns_constant_contains_required_classes():
         "GITLAB_TOKEN",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "HUGGINGFACE_HUB_TOKEN",
-        "HF_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
     }
     required_prefixes = {"AWS_", "GITHUB_", "AZURE_"}
@@ -210,3 +212,78 @@ def test_deny_patterns_constant_contains_required_classes():
     missing_prefixes = required_prefixes - set(_DENY_PREFIXES)
     assert not missing_exact, f"Deny-list lost exact entries: {missing_exact}"
     assert not missing_prefixes, f"Deny-list lost prefixes: {missing_prefixes}"
+
+
+def test_hf_token_no_longer_denied():
+    """HF token vars are intentionally NOT on the deny-list (accepted debt).
+
+    Guards the policy flip: the child needs the token to fetch gated weights
+    into the shared model cache. If a future trusted-provisioning pass restores
+    the strip, this test flips back.
+    """
+    assert not _is_denied("HF_TOKEN")
+    assert not _is_denied("HUGGINGFACE_HUB_TOKEN")
+    assert "HF_TOKEN" not in _DENY_EXACT
+    assert "HUGGINGFACE_HUB_TOKEN" not in _DENY_EXACT
+
+
+def test_hf_token_forwarded_and_model_cache_injected(monkeypatch, tmp_path):
+    """HF token is forwarded and weight caches point at the shared model cache.
+
+    ACCEPTED SECURITY DEBT: the child (which runs untrusted plugin code) now
+    receives ``HF_TOKEN`` so it can fetch gated model weights into the shared
+    cache on first run. Tracked to move to a trusted provisioning pass that keeps
+    the inference child token-free; if that lands, this test flips back to
+    asserting the token is stripped.
+    """
+    monkeypatch.setenv("HF_TOKEN", "forwarded-on-purpose")
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", "forwarded-on-purpose")
+    monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
+    for var in ("HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TORCH_HOME"):
+        monkeypatch.delenv(var, raising=False)
+
+    output_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    output_dir.mkdir()
+    scratch_dir.mkdir()
+    venv_path = tmp_path / "venv"
+    venv_path.mkdir()
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=venv_path,
+        declared_paths=DeclaredPaths(output_dir=output_dir, scratch_dir=scratch_dir),
+        request_gpu=False,
+    )
+
+    model_cache = str(tmp_path / "model_cache")
+    assert env.get("HF_TOKEN") == "forwarded-on-purpose"
+    assert env.get("HUGGINGFACE_HUB_TOKEN") == "forwarded-on-purpose"
+    assert env["CUVIS_MODEL_CACHE_DIR"] == model_cache
+    assert env["HF_HUB_CACHE"].startswith(model_cache)
+    assert env["HUGGINGFACE_HUB_CACHE"] == env["HF_HUB_CACHE"]
+    assert env["TORCH_HOME"].startswith(model_cache)
+
+
+def test_model_cache_respects_operator_hf_cache(monkeypatch, tmp_path):
+    """An operator-set HF cache is not overridden by the injected model cache."""
+    operator_hf = str(tmp_path / "operator_hf")
+    monkeypatch.setenv("HF_HUB_CACHE", operator_hf)
+    monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
+    monkeypatch.delenv("TORCH_HOME", raising=False)
+
+    output_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    output_dir.mkdir()
+    scratch_dir.mkdir()
+    venv_path = tmp_path / "venv"
+    venv_path.mkdir()
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=venv_path,
+        declared_paths=DeclaredPaths(output_dir=output_dir, scratch_dir=scratch_dir),
+        request_gpu=False,
+    )
+
+    assert env["HF_HUB_CACHE"] == operator_hf
+    # TORCH_HOME was unset, so it is still injected under the model cache.
+    assert env["TORCH_HOME"].startswith(str(tmp_path / "model_cache"))

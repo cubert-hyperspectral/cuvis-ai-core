@@ -232,6 +232,16 @@ def _resolve_cache_root(override: Path | None) -> Path:
     return _DEFAULT_CACHE_ROOT
 
 
+def resolve_cache_root(override: Path | None = None) -> Path:
+    """Public accessor for the composed-env / model cache root.
+
+    Resolves ``override`` -> ``$CUVIS_RUN_CACHE_DIR`` -> the default
+    ``~/.cuvis_runs``. Shared with the model-weight cache (``model_cache``) so
+    the venv and weight caches sit under one root.
+    """
+    return _resolve_cache_root(override)
+
+
 def _sweep_stale_partials(root: Path) -> None:
     """Remove ``.building.*`` directories older than the staleness threshold."""
     if not root.exists():
