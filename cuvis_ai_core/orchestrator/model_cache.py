@@ -26,8 +26,8 @@ _MODEL_CACHE_DIRNAME = "model_cache"
 # HF cache vars an operator may already point at their own cache. If any is
 # already set we leave HF alone rather than override the operator's choice.
 # ``HF_HOME`` is deliberately excluded as an INJECTION target: setting it would
-# relocate the HF token file into the shared dir. The token is forwarded
-# separately (it is intentionally not in the spawner deny-list).
+# relocate the HF token file into the shared dir. The child never receives a
+# token anyway (the spawner strips it) and runs offline against the cache.
 _HF_CACHE_VARS = ("HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE")
 
 
@@ -51,9 +51,12 @@ def model_cache_env(parent_env: Mapping[str, str]) -> dict[str, str]:
 
     Sets ``HF_HUB_CACHE`` (+ legacy ``HUGGINGFACE_HUB_CACHE``) and ``TORCH_HOME``
     unless the operator already set them in ``parent_env`` (their choice wins).
-    Does NOT set ``HF_HUB_OFFLINE`` -- the first run may need to fetch; the cache
-    then serves subsequent runs. Creates the target dirs so the first write
-    succeeds.
+    Also sets ``HF_HUB_OFFLINE=1`` (unless the operator already set it) so the
+    child resolves weights from the pre-provisioned cache rather than reaching
+    the network: the child runs untrusted plugin code and gets no HF token, so a
+    gated fetch could not succeed anyway. Gated weights are provisioned
+    out-of-band by a trusted tool (the ``download-model`` CLI or the CuvisNEXT
+    action). Creates the target dirs so the first write succeeds.
     """
     cache = model_cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
@@ -73,5 +76,10 @@ def model_cache_env(parent_env: Mapping[str, str]) -> dict[str, str]:
         torch_home = cache / "torch"
         torch_home.mkdir(parents=True, exist_ok=True)
         additions["TORCH_HOME"] = str(torch_home)
+
+    # Resolve HF weights from the pre-provisioned cache only; never reach the
+    # network from the untrusted, token-less child. An operator override wins.
+    if not parent_env.get("HF_HUB_OFFLINE"):
+        additions["HF_HUB_OFFLINE"] = "1"
 
     return additions

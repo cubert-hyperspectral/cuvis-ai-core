@@ -21,14 +21,17 @@ inherits:
   ``transformers``, Jupyter, pip cache) write there instead of the
   real user ``HOME``.
 - HF / torch weight caches are pointed at one shared, persistent model
-  cache (``model_cache_env``) so name-keyed loaders resolve weights
-  offline after the first fetch instead of re-downloading into the
-  wiped per-run ``HOME``.
+  cache (``model_cache_env``) and the child runs ``HF_HUB_OFFLINE=1`` so
+  it resolves weights from that pre-provisioned cache instead of
+  re-downloading into the wiped per-run ``HOME``.
 - CUDA-related vars pass through when GPU is requested.
 - SSH agent socket, ``AWS_*``, ``GITHUB_*``, ``.env`` bleed-through, and
-  other implicit credentials are excluded. ``HF_TOKEN`` is intentionally
-  forwarded (accepted debt) so the child can fetch gated weights into the
-  shared cache; see ``model_cache`` and the sandbox-seams tests.
+  other implicit credentials are excluded, ``HF_TOKEN`` /
+  ``HUGGINGFACE_HUB_TOKEN`` included: the child runs untrusted plugin code,
+  so it never receives the token. Gated weights are provisioned into the
+  shared cache out-of-band by a trusted tool (the ``download-model`` CLI or
+  the CuvisNEXT provisioning action); see ``model_cache`` and the
+  sandbox-seams tests.
 """
 
 from __future__ import annotations
@@ -111,11 +114,13 @@ _DENY_EXACT = frozenset(
         "GITLAB_TOKEN",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        # NOTE: HF_TOKEN / HUGGINGFACE_HUB_TOKEN are intentionally NOT denied.
-        # The child needs the HF token to fetch gated model weights into the
-        # shared model cache on first run (see model_cache_env). Accepted
-        # security debt: a live token reaches untrusted plugin code; tracked to
-        # move to a trusted provisioning pass. See test_sandbox_seams.py.
+        # The HF token is stripped: the child runs untrusted plugin code, so it
+        # must not receive a live credential. Gated weights are provisioned into
+        # the shared model cache out-of-band by a trusted tool, and the child
+        # runs HF_HUB_OFFLINE=1 against that cache (see model_cache_env and
+        # test_sandbox_seams.py).
+        "HF_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
@@ -409,10 +414,11 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         env["TMP"] = str(declared_paths.scratch_dir)
         env["TMPDIR"] = str(declared_paths.scratch_dir)
 
-        # Point HF / torch weight caches at one shared, persistent model cache so
-        # the child resolves weights offline after first fetch instead of
-        # re-downloading into the wiped per-run HOME. HF_TOKEN is forwarded (not
-        # denied) so gated weights can be fetched on first run.
+        # Point HF / torch weight caches at one shared, persistent model cache and
+        # run the child HF_HUB_OFFLINE=1 so it resolves weights from that
+        # pre-provisioned cache instead of re-downloading into the wiped per-run
+        # HOME. The HF token is denied above; gated weights are provisioned
+        # out-of-band by a trusted tool, never fetched by the untrusted child.
         env.update(model_cache_env(env))
 
         # PATH: prepend the venv's bin/Scripts so child scripts resolve.

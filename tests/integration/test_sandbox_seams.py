@@ -6,13 +6,11 @@ strip credentials / agent sockets / PYTHONPATH from what the child
 inherits. These tests fail loudly if either property regresses, so
 the work in item 06 (process / FS sandbox) stays bounded.
 
-Exception (accepted security debt): ``HF_TOKEN`` /
-``HUGGINGFACE_HUB_TOKEN`` are intentionally forwarded so the child can
-fetch gated model weights into the shared model cache on first run.
-This is tracked to move to a trusted provisioning pass that restores a
-token-free inference child; when that lands, flip
-``test_hf_token_forwarded_and_model_cache_injected`` back to asserting
-the strip.
+The child runs untrusted plugin code, so it never receives an HF token:
+``HF_TOKEN`` / ``HUGGINGFACE_HUB_TOKEN`` are stripped and the child runs
+``HF_HUB_OFFLINE=1`` against the shared model cache. Gated weights are
+provisioned into that cache out-of-band by a trusted tool (the
+``download-model`` CLI or the CuvisNEXT action).
 """
 
 from __future__ import annotations
@@ -214,32 +212,31 @@ def test_deny_patterns_constant_contains_required_classes():
     assert not missing_prefixes, f"Deny-list lost prefixes: {missing_prefixes}"
 
 
-def test_hf_token_no_longer_denied():
-    """HF token vars are intentionally NOT on the deny-list (accepted debt).
+def test_hf_token_denied():
+    """HF token vars are stripped: the untrusted child never gets a credential."""
+    assert _is_denied("HF_TOKEN")
+    assert _is_denied("HUGGINGFACE_HUB_TOKEN")
+    assert "HF_TOKEN" in _DENY_EXACT
+    assert "HUGGINGFACE_HUB_TOKEN" in _DENY_EXACT
 
-    Guards the policy flip: the child needs the token to fetch gated weights
-    into the shared model cache. If a future trusted-provisioning pass restores
-    the strip, this test flips back.
+
+def test_hf_token_stripped_and_model_cache_injected(monkeypatch, tmp_path):
+    """The child gets the shared cache + offline mode, and no HF token.
+
+    Gated weights are provisioned into the shared cache out-of-band by a trusted
+    tool; the child (untrusted plugin code) runs ``HF_HUB_OFFLINE=1`` against that
+    cache and never receives ``HF_TOKEN`` / ``HUGGINGFACE_HUB_TOKEN``.
     """
-    assert not _is_denied("HF_TOKEN")
-    assert not _is_denied("HUGGINGFACE_HUB_TOKEN")
-    assert "HF_TOKEN" not in _DENY_EXACT
-    assert "HUGGINGFACE_HUB_TOKEN" not in _DENY_EXACT
-
-
-def test_hf_token_forwarded_and_model_cache_injected(monkeypatch, tmp_path):
-    """HF token is forwarded and weight caches point at the shared model cache.
-
-    ACCEPTED SECURITY DEBT: the child (which runs untrusted plugin code) now
-    receives ``HF_TOKEN`` so it can fetch gated model weights into the shared
-    cache on first run. Tracked to move to a trusted provisioning pass that keeps
-    the inference child token-free; if that lands, this test flips back to
-    asserting the token is stripped.
-    """
-    monkeypatch.setenv("HF_TOKEN", "forwarded-on-purpose")
-    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", "forwarded-on-purpose")
+    monkeypatch.setenv("HF_TOKEN", "must-not-leak")
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", "must-not-leak")
     monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
-    for var in ("HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TORCH_HOME"):
+    for var in (
+        "HF_HOME",
+        "HF_HUB_CACHE",
+        "HUGGINGFACE_HUB_CACHE",
+        "TORCH_HOME",
+        "HF_HUB_OFFLINE",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     output_dir = tmp_path / "out"
@@ -256,18 +253,20 @@ def test_hf_token_forwarded_and_model_cache_injected(monkeypatch, tmp_path):
     )
 
     model_cache = str(tmp_path / "model_cache")
-    assert env.get("HF_TOKEN") == "forwarded-on-purpose"
-    assert env.get("HUGGINGFACE_HUB_TOKEN") == "forwarded-on-purpose"
+    assert "HF_TOKEN" not in env
+    assert "HUGGINGFACE_HUB_TOKEN" not in env
     assert env["CUVIS_MODEL_CACHE_DIR"] == model_cache
     assert env["HF_HUB_CACHE"].startswith(model_cache)
     assert env["HUGGINGFACE_HUB_CACHE"] == env["HF_HUB_CACHE"]
     assert env["TORCH_HOME"].startswith(model_cache)
+    assert env["HF_HUB_OFFLINE"] == "1"
 
 
 def test_model_cache_respects_operator_hf_cache(monkeypatch, tmp_path):
-    """An operator-set HF cache is not overridden by the injected model cache."""
+    """An operator-set HF cache / offline flag is not overridden by injection."""
     operator_hf = str(tmp_path / "operator_hf")
     monkeypatch.setenv("HF_HUB_CACHE", operator_hf)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
     monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
     monkeypatch.delenv("TORCH_HOME", raising=False)
 
@@ -285,5 +284,7 @@ def test_model_cache_respects_operator_hf_cache(monkeypatch, tmp_path):
     )
 
     assert env["HF_HUB_CACHE"] == operator_hf
+    # The operator's explicit offline choice wins over the injected default.
+    assert env["HF_HUB_OFFLINE"] == "0"
     # TORCH_HOME was unset, so it is still injected under the model cache.
     assert env["TORCH_HOME"].startswith(str(tmp_path / "model_cache"))
