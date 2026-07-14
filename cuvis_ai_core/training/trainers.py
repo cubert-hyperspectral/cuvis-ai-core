@@ -109,6 +109,19 @@ class GradientTrainer(pl.LightningModule):
         self.datamodule = datamodule
         self.loss_nodes = loss_nodes
         self.metric_nodes = metric_nodes or []
+        # A node declaring POOLED_METRIC_NAMES must also expose pooled_metrics(), or those
+        # names would be skipped in the per-batch path and never logged at epoch end. Fail
+        # loud on the mismatch instead of silently dropping the metric.
+        for metric_node in self.metric_nodes:
+            pooled_names = getattr(metric_node, "POOLED_METRIC_NAMES", frozenset())
+            if pooled_names and not callable(
+                getattr(metric_node, "pooled_metrics", None)
+            ):
+                raise TypeError(
+                    f"Metric node '{metric_node.name}' declares POOLED_METRIC_NAMES "
+                    f"{set(pooled_names)} but has no pooled_metrics() method, so those "
+                    "metrics would never be logged."
+                )
         self.trainer_config = trainer_config or TrainerConfig()
         self.optimizer_config = optimizer_config or OptimizerConfig()
         self.scheduler_config = scheduler_config
@@ -317,11 +330,21 @@ class GradientTrainer(pl.LightningModule):
         metric_name_counter: dict[str, int] = {}  # Track duplicate names
 
         for metric_node in self.metric_nodes:
+            # Metrics that pool over the whole epoch (e.g. AUROC, average
+            # precision) must be reduced by a single compute() at epoch end, not
+            # by averaging per-batch running values (batch-size-sensitive, and
+            # badly biased at small batch sizes). Their names are skipped in the
+            # per-batch path here and logged as live torchmetrics objects below.
+            pooled_names = getattr(metric_node, "POOLED_METRIC_NAMES", frozenset())
+
             # O(1) lookup instead of O(n_outputs) iteration
             metric_outputs = node_outputs.get(metric_node.name, {}).get("metrics", [])
 
             # Each metric node outputs a list of Metric dataclass objects
             for metric in metric_outputs:  # list[Metric] objects
+                if metric.name in pooled_names:
+                    continue
+
                 # Generate base log name: NodeName_metric_name
                 base_name = f"{metric_node.name}/{metric.name}"
 
@@ -334,6 +357,23 @@ class GradientTrainer(pl.LightningModule):
                     log_name = base_name
 
                 self.log(log_name, metric.value, prog_bar=True)
+
+            # Pooled metrics: log the live torchmetrics object with on_epoch=True
+            # so Lightning accumulates over the epoch and logs a single pooled
+            # compute() (then resets) at epoch end, exact and batch-size-invariant,
+            # with no manual epoch-end hook. A metric node opts in by exposing
+            # pooled_metrics() -> dict[str, torchmetrics.Metric] alongside
+            # POOLED_METRIC_NAMES; nodes without it are unaffected.
+            pooled_metrics = getattr(metric_node, "pooled_metrics", None)
+            if pooled_metrics is not None:
+                for pooled_name, metric_obj in pooled_metrics().items():
+                    self.log(
+                        f"{metric_node.name}/{pooled_name}",
+                        metric_obj,
+                        on_step=False,
+                        on_epoch=True,
+                        prog_bar=True,
+                    )
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses for training."""

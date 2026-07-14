@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.1 - 2026-07-13
+
+- `GradientTrainer` now logs epoch-pooled metrics (`POOLED_METRIC_NAMES`) via PyTorch Lightning's
+  native metric-object logging: it logs each node's live `torchmetrics.Metric` (from the new
+  `pooled_metrics()`) with `on_epoch=True`, so Lightning computes a single pooled value and resets it
+  at epoch end (exact and batch-size-invariant). Replaces the manual `_log_epoch_metrics()` /
+  `on_validation_epoch_end` / `on_test_epoch_end` / `compute_epoch_metrics()` path. A node that
+  declares `POOLED_METRIC_NAMES` without a `pooled_metrics()` method now raises at trainer
+  construction instead of silently dropping the metric.
+
 ## 0.10.0 - 2026-06-23
 
 - **Breaking:** collapsed the `NodeRegistry` plugin-registration API. `register_plugins(path)` ->
