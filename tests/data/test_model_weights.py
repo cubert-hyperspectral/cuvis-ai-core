@@ -47,14 +47,23 @@ def test_download_forwards_token_and_records_registry_spec(
 ):
     fake = _fake_download_factory()
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+    # The sam3 entry pins a real sha256; the fake returns placeholder bytes, so
+    # skip the content check here (sha validation has its own tests).
+    monkeypatch.setattr(
+        ModelWeights, "_validate_sha", classmethod(lambda cls, *a, **k: None)
+    )
     monkeypatch.setenv("HF_TOKEN", "tok-123")
 
     resolved = ModelWeights.download_model("sam3", cache_dir=tmp_path / "cache")
 
-    call = fake.calls[-1]
-    assert call["repo_id"] == "facebook/sam3"
-    assert call["filename"] == "sam3.pt"
-    assert call["token"] == "tok-123"
+    # Main checkpoint call carries the registry repo / filename / revision / token.
+    main = next(c for c in fake.calls if c["filename"] == "sam3.pt")
+    assert main["repo_id"] == "facebook/sam3"
+    assert main["token"] == "tok-123"
+    assert main["revision"] == "3c879f39826c281e95690f02c7821c4de09afae7"
+    # Companion config.json is provisioned into the same cache so an offline
+    # child resolves the whole SAM3 set, not just the checkpoint.
+    assert any(c["filename"] == "config.json" for c in fake.calls)
     assert Path(resolved).exists()
     # Output contract: stdout is the resolved path only (last line).
     out = capsys.readouterr().out.strip().splitlines()

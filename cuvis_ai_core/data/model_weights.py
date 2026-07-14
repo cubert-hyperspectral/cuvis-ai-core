@@ -118,6 +118,20 @@ class ModelWeights:
         # (when pinned); always surface the computed sha so it can be recorded.
         cls._validate_sha(resolved, expected=spec["sha256"], force=force)
 
+        # Companion files the model's own loader also fetches from the same repo
+        # (e.g. SAM3's config.json). Pull them into the same cache so an offline
+        # child resolves the whole set, not just the checkpoint.
+        for aux in spec.get("aux_files") or []:
+            cls._log(f"Fetching companion {spec['repo_id']}/{aux}")
+            hf_hub_download(
+                repo_id=spec["repo_id"],
+                filename=aux,
+                revision=spec["revision"],
+                token=token,
+                cache_dir=str(cache_dir),
+                force_download=force,
+            )
+
         if out is not None:
             out = Path(out)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -235,8 +249,12 @@ class ModelWeights:
         "sam3": {
             "repo_id": "facebook/sam3",
             "filename": "sam3.pt",
-            "revision": None,
-            "sha256": None,
+            "revision": "3c879f39826c281e95690f02c7821c4de09afae7",
+            "sha256": "9999e2341ceef5e136daa386eecb55cb414446a00ac2b55eb2dfd2f7c3cf8c9e",
+            # Companion files the model's own loader fetches from the same repo;
+            # provisioned into the same cache so an offline child resolves the
+            # whole set (SAM3's builder pulls config.json alongside the .pt).
+            "aux_files": ["config.json"],
             "description": "SAM3 checkpoint (gated; requires an accepted license)",
         },
     }
