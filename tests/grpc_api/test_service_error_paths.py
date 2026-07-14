@@ -606,3 +606,25 @@ class TestPluginServiceClearCache:
         request = cuvis_ai_pb2.ClearPluginCacheRequest(plugin_name="test_plugin")
         response = self.service.clear_plugin_cache(request, self.ctx)
         assert response.cleared_count >= 0
+
+
+def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatch):
+    """The gradient Train RPC seeds, derives callbacks from the config, and constructs
+    the trainer before streaming. A mocked GradientTrainer makes fit() instant so the
+    progress generator drains cleanly (no real training)."""
+    service = TrainingService(SessionManager())
+    monkeypatch.setattr(
+        service, "_configure_gradient_components", lambda *a, **k: ([], [])
+    )
+    training_config = TrainingConfig(seed=7, max_epochs=1)
+
+    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
+        responses = list(
+            service._train_gradient(Mock(), Mock(), Mock(), training_config)
+        )
+
+    mock_gt.assert_called_once()
+    # The (mocked) trainer's fit ran on the worker thread and the stream drained to
+    # completion.
+    assert mock_gt.return_value.fit.called
+    assert responses

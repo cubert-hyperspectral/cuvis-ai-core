@@ -172,3 +172,112 @@ def test_gated_repo_error_maps_to_license_message(monkeypatch, tmp_path):
 
     with pytest.raises(ModelDownloadError, match="gated"):
         ModelWeights.download_model("sam3", cache_dir=tmp_path / "c")
+
+
+def test_http_401_maps_to_token_message(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock
+
+    from huggingface_hub.utils import HfHubHTTPError
+
+    def _raise(*args, **kwargs):
+        raise HfHubHTTPError("unauthorized", response=MagicMock(status_code=401))
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", _raise)
+
+    with pytest.raises(ModelDownloadError, match="401"):
+        ModelWeights.download_model(
+            repo_id="a/b", filename="w.pt", cache_dir=tmp_path / "c"
+        )
+
+
+def test_http_error_maps_to_generic_message(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock
+
+    from huggingface_hub.utils import HfHubHTTPError
+
+    def _raise(*args, **kwargs):
+        raise HfHubHTTPError("boom", response=MagicMock(status_code=500))
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", _raise)
+
+    with pytest.raises(ModelDownloadError, match="failed"):
+        ModelWeights.download_model(
+            repo_id="a/b", filename="w.pt", cache_dir=tmp_path / "c"
+        )
+
+
+def test_list_models_prints_registry(capsys):
+    ModelWeights.list_models()
+
+    out = capsys.readouterr().out
+    assert "sam3" in out
+    assert "facebook/sam3" in out
+
+
+def test_require_hf_hub_missing_raises(monkeypatch):
+    import sys
+
+    # A None entry in sys.modules makes ``import huggingface_hub`` raise ImportError,
+    # which the seam turns into an actionable install hint.
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+    with pytest.raises(ModelDownloadError, match="huggingface_hub is not installed"):
+        ModelWeights._require_hf_hub()
+
+
+def test_cli_list_prints_registry(monkeypatch, capsys):
+    import sys
+
+    from cuvis_ai_core.data.model_weights import download_model_cli
+
+    monkeypatch.setattr(sys, "argv", ["download-model", "list"])
+
+    with pytest.raises(SystemExit) as exc:
+        download_model_cli()
+
+    assert exc.value.code == 0
+    assert "sam3" in capsys.readouterr().out
+
+
+def test_cli_download_invokes_downloader(monkeypatch, tmp_path):
+    import sys
+
+    from cuvis_ai_core.data.model_weights import download_model_cli
+
+    fake = _fake_download_factory()
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "download-model",
+            "download",
+            "--repo-id",
+            "a/b",
+            "--filename",
+            "w.pt",
+            "--cache-dir",
+            str(tmp_path / "c"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        download_model_cli()
+
+    assert exc.value.code == 0
+    assert fake.calls[-1]["repo_id"] == "a/b"
+
+
+def test_cli_download_error_exits_nonzero(monkeypatch):
+    import sys
+
+    from cuvis_ai_core.data.model_weights import download_model_cli
+
+    monkeypatch.setattr(
+        sys, "argv", ["download-model", "download", "does-not-exist"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        download_model_cli()
+
+    assert "error:" in str(exc.value)

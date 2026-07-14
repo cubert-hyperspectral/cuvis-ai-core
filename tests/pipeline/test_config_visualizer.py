@@ -112,3 +112,26 @@ class TestRenderPipelineConfig:
         data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
         assert fmt == "png"
         assert data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+_DANGLING_YAML = """
+metadata:
+  name: Dangling
+nodes:
+- name: mask_cleanup
+  class_name: cuvis_ai.node.mask_ops.MaskRobustifier
+  hparams: {min_area: 1}
+connections:
+- source: mask_cleanup.outputs.mask
+  target: ghost_sink.inputs.mask
+"""
+
+
+def test_config_to_dot_boxes_endpoint_absent_from_nodes():
+    """A connection endpoint missing from nodes[] still gets a minimal box, so a
+    partial config renders instead of emitting a dangling edge."""
+    dot = config_to_dot(_config(_DANGLING_YAML))
+
+    # ghost_sink is only named in a connection, never declared as a node.
+    assert '"ghost_sink" [label="ghost_sink"];' in dot
+    assert '"mask_cleanup" -> "ghost_sink"' in dot

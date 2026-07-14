@@ -568,3 +568,58 @@ def test_restore_trainrun_cli_forwards_args(monkeypatch) -> None:
     assert captured["trainrun_path"] == "outputs/run.yaml"
     assert captured["mode"] == "train"
     assert captured["overrides"] == ["data.batch_size=8"]
+
+
+def test_create_datamodule_from_config_sets_up_fit(monkeypatch) -> None:
+    """The trainrun datamodule builder resolves the split path, builds the module via the
+    registry, and returns it already ``setup(stage="fit")``."""
+    from unittest.mock import MagicMock
+
+    fake_dm = MagicMock()
+    monkeypatch.setattr(restore_mod, "_build_data_module", lambda *a, **k: fake_dm)
+    monkeypatch.setattr(
+        restore_mod, "_resolve_splits_path_in_config", lambda data, base: data
+    )
+
+    result = restore_mod._create_datamodule_from_config(MagicMock())
+
+    fake_dm.setup.assert_called_once_with(stage="fit")
+    assert result is fake_dm
+
+
+def test_restore_trainrun_redirects_checkpoint_dirpath(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A gradient trainrun that configures a checkpoint callback has its ``dirpath``
+    redirected under the run's ``output_dir`` before the GradientTrainer is built."""
+    import copy
+
+    exp = copy.deepcopy(mock_experiment_dict)
+    exp["training"]["callbacks"] = {"checkpoint": {"monitor": "val_loss"}}
+    path = _write_trainrun(tmp_path, exp, mock_pipeline_dict)
+
+    captured: dict = {}
+
+    class _CapturingGrad(RecordingTrainer):
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: FakeRestorePipeline(node_fits=(True,)),
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", _CapturingGrad)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    dirpath = captured["training_config"].callbacks.checkpoint.dirpath
+    assert dirpath.endswith("checkpoints")

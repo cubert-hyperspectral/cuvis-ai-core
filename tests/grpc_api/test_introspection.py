@@ -87,3 +87,25 @@ class TestGetPipelineVisualization:
 
         assert response.image_data
         assert response.format == "png"
+
+
+def test_get_pipeline_visualization_from_config_content(grpc_stub):
+    """Sessionless config preview: a ``config_content`` request renders straight from the
+    YAML with no loaded session, so a client can preview a pipeline the moment it is
+    selected. ``format=dot`` returns DOT source (no graphviz binary needed)."""
+    yaml_cfg = (
+        "metadata:\n  name: Preview\n"
+        "nodes:\n"
+        "- name: mask_cleanup\n"
+        "  class_name: cuvis_ai.node.mask_ops.MaskRobustifier\n"
+        "  hparams: {min_area: 1}\n"
+        "connections: []\n"
+    )
+    response = grpc_stub.GetPipelineVisualization(
+        cuvis_ai_pb2.GetPipelineVisualizationRequest(
+            config_content=yaml_cfg, format="dot"
+        )
+    )
+
+    assert response.format == "dot"
+    assert b"digraph" in response.image_data

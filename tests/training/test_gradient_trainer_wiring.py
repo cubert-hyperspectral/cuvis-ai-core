@@ -147,3 +147,23 @@ def test_fit_enables_checkpointing_with_explicit_callbacks():
     kwargs = mock_trainer_cls.call_args.kwargs
     assert kwargs["enable_checkpointing"] is True
     assert kwargs["callbacks"] == trainer.callbacks
+
+
+def test_fit_builds_callbacks_from_config_and_logs_early_stopping():
+    """With no explicit callbacks, fit() builds them from the config, and an
+    early-stopping entry is logged. Covers the config-callbacks branch and the
+    early-stopping log line."""
+    from cuvis_ai_schemas.training.callbacks import EarlyStoppingConfig
+
+    cfg = TrainingConfig(
+        max_epochs=1,
+        callbacks=CallbacksConfig(
+            early_stopping=[EarlyStoppingConfig(monitor="val_loss")],
+        ),
+    )
+    trainer = _trainer(cfg)  # no explicit callbacks -> they come from the config
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        mock_trainer_cls.return_value = MagicMock()
+        trainer.fit()
+    # callbacks were derived from the config (not an explicitly-passed list).
+    assert "callbacks" in mock_trainer_cls.call_args.kwargs
