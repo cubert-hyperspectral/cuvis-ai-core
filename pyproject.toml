@@ -200,6 +200,3 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-# Dev-only: resolve against the local sibling checkout. Strip before release
-# (the release PR pins the published floor; a local path must not ship).
-cuvis-ai-schemas = { path = "../../cuvis-ai-schemas/cuvis-ai-schemas", editable = true }
