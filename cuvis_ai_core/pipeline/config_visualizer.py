@@ -47,7 +47,9 @@ def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
     Returns:
         A DOT source string.
     """
-    graph_name = config.metadata.name if config.metadata and config.metadata.name else "pipeline"
+    graph_name = (
+        config.metadata.name if config.metadata and config.metadata.name else "pipeline"
+    )
     lines: list[str] = [f'digraph "{_escape(graph_name)}" {{']
     lines.append(f"    rankdir={rankdir};")
     lines.append('    bgcolor="transparent";')
@@ -72,7 +74,9 @@ def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
     for conn in config.connections:
         for endpoint in (conn.from_node, conn.to_node):
             if endpoint not in declared:
-                lines.append(f'    "{_escape(endpoint)}" [label="{_escape(endpoint)}"];')
+                lines.append(
+                    f'    "{_escape(endpoint)}" [label="{_escape(endpoint)}"];'
+                )
                 declared.add(endpoint)
 
     for conn in config.connections:
@@ -93,7 +97,9 @@ def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
     return "\n".join(lines)
 
 
-def render_pipeline_config(yaml_content: str, fmt: str = "png", *, rankdir: str = "LR") -> tuple[bytes, str]:
+def render_pipeline_config(
+    yaml_content: str, fmt: str = "png", *, rankdir: str = "LR"
+) -> tuple[bytes, str]:
     """Render a pipeline YAML config to an image (or DOT) without building the pipeline.
 
     Args:
@@ -119,7 +125,9 @@ def render_pipeline_config(yaml_content: str, fmt: str = "png", *, rankdir: str 
         data = graphviz.Source(dot).pipe(format=image_format)
         return bytes(data), image_format
     except Exception as exc:  # graphviz binary missing or render failure
-        logger.warning("Config visualization render failed ({}); returning DOT source.", exc)
+        logger.warning(
+            "Config visualization render failed ({}); returning DOT source.", exc
+        )
         return dot.encode("utf-8"), "dot"
 
 

@@ -674,7 +674,7 @@ class TestEpochPooledMetrics:
             datamodule=datamodule,
             loss_nodes=[loss],
             metric_nodes=[auroc],
-            optimizer_config=OptimizerConfig(name="sgd", lr=0.01),
+            training_config=TrainingConfig(optimizer=OptimizerConfig(name="sgd", lr=0.01)),
         )
         return trainer, datamodule
 
