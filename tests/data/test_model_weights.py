@@ -134,6 +134,22 @@ def test_sha_match_passes(monkeypatch, tmp_path):
     assert Path(resolved).exists()
 
 
+def test_default_cache_dir_follows_hf_env(monkeypatch, tmp_path):
+    """The default provisioning dir tracks the child's HF cache resolution.
+
+    So a weight pulled with no explicit ``--cache-dir`` lands exactly where the
+    offline child (which resolves the same way) will look for it.
+    """
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    assert ModelWeights._default_cache_dir() == tmp_path / "hub"
+
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "home"))
+    assert ModelWeights._default_cache_dir() == tmp_path / "home" / "hub"
+
+
 def test_unknown_registry_name_raises(tmp_path):
     with pytest.raises(ModelDownloadError, match="Unknown model"):
         ModelWeights.download_model("does-not-exist", cache_dir=tmp_path / "c")

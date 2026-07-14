@@ -288,3 +288,39 @@ def test_model_cache_respects_operator_hf_cache(monkeypatch, tmp_path):
     assert env["HF_HUB_OFFLINE"] == "0"
     # TORCH_HOME was unset, so it is still injected under the model cache.
     assert env["TORCH_HOME"].startswith(str(tmp_path / "model_cache"))
+
+
+def test_model_cache_points_hub_cache_at_hf_home(monkeypatch, tmp_path):
+    """With only HF_HOME set, the child's HF_HUB_CACHE targets ``$HF_HOME/hub``.
+
+    ``download-model`` resolves the identical directory, so a pre-provisioned
+    weight and the offline child agree even when the operator manages their
+    cache via ``HF_HOME`` rather than ``HF_HUB_CACHE``. ``HF_HUB_CACHE`` outranks
+    ``HF_HOME/hub`` in ``huggingface_hub``, so the child reads it regardless of
+    its wiped HOME.
+    """
+    hf_home = tmp_path / "hf_home"
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
+
+    output_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    output_dir.mkdir()
+    scratch_dir.mkdir()
+    venv_path = tmp_path / "venv"
+    venv_path.mkdir()
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=venv_path,
+        declared_paths=DeclaredPaths(output_dir=output_dir, scratch_dir=scratch_dir),
+        request_gpu=False,
+    )
+
+    expected = str(hf_home / "hub")
+    assert env["HF_HUB_CACHE"] == expected
+    assert env["HUGGINGFACE_HUB_CACHE"] == expected
+    # Still offline, and the shared root is still exported for non-HF plugins.
+    assert env["HF_HUB_OFFLINE"] == "1"
+    assert env["CUVIS_MODEL_CACHE_DIR"] == str(tmp_path / "model_cache")

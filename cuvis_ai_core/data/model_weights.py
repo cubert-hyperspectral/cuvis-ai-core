@@ -61,9 +61,10 @@ class ModelWeights:
         Provide a registry ``name`` (e.g. ``"sam3"``) OR an explicit
         ``repo_id`` + ``filename``. Registry values fill in any field left
         unset. ``token`` defaults to ``$HF_TOKEN``. ``cache_dir`` defaults to
-        the shared model cache so a subsequent child run loads offline; pass
-        ``out`` to also copy the resolved file to a standalone location (e.g.
-        for shipping or a node ``checkpoint_path``).
+        the HF cache the child will read (operator ``HF_HUB_CACHE`` / ``HF_HOME``,
+        else the shared model cache) so the child loads it offline; pass ``out``
+        to also copy the resolved file to a standalone location (e.g. for
+        shipping or a node ``checkpoint_path``).
 
         Raises:
             ModelDownloadError: on a missing spec, a gated/auth failure, or a
@@ -205,9 +206,12 @@ class ModelWeights:
     @staticmethod
     def _default_cache_dir() -> Path:
         # Lazy import keeps this module free of the orchestrator import cost.
-        from cuvis_ai_core.orchestrator.model_cache import model_cache_dir
+        # Resolve the SAME HF cache the sandboxed child will read (operator
+        # HF_HUB_CACHE / HF_HOME, else the shared model cache) so a provisioned
+        # weight lands exactly where the offline child looks for it.
+        from cuvis_ai_core.orchestrator.model_cache import hf_cache_dir
 
-        return model_cache_dir() / "hf"
+        return hf_cache_dir(os.environ)
 
     @classmethod
     def _validate_sha(cls, path: Path, *, expected: str | None, force: bool) -> None:

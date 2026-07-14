@@ -23,13 +23,6 @@ from pathlib import Path
 _MODEL_CACHE_DIR_ENV = "CUVIS_MODEL_CACHE_DIR"
 _MODEL_CACHE_DIRNAME = "model_cache"
 
-# HF cache vars an operator may already point at their own cache. If any is
-# already set we leave HF alone rather than override the operator's choice.
-# ``HF_HOME`` is deliberately excluded as an INJECTION target: setting it would
-# relocate the HF token file into the shared dir. The child never receives a
-# token anyway (the spawner strips it) and runs offline against the cache.
-_HF_CACHE_VARS = ("HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE")
-
 
 def model_cache_dir() -> Path:
     """Resolve the shared model-weight cache directory.
@@ -46,17 +39,43 @@ def model_cache_dir() -> Path:
     return resolve_cache_root(None) / _MODEL_CACHE_DIRNAME
 
 
+def hf_cache_dir(env: Mapping[str, str]) -> Path:
+    """Resolve the ONE Hugging Face hub cache shared by provisioner + child.
+
+    Mirrors ``huggingface_hub``'s own precedence so a pre-provisioned weight
+    (written by ``download-model`` in the trusted parent) and the offline child
+    always target the SAME directory:
+
+    ``$HF_HUB_CACHE`` -> ``$HUGGINGFACE_HUB_CACHE`` -> ``$HF_HOME/hub`` ->
+    ``<shared model cache>/hf`` (the clean-host default).
+
+    Keyed off the standard HF variables, so no cuvis-specific variable is
+    introduced for HF weights. ``HF_HOME`` is honored as a *read* here (its
+    ``hub`` subdir) but is never re-exported to the child, which would relocate
+    the HF token file; the child instead gets ``HF_HUB_CACHE`` pointing here,
+    and that outranks ``HF_HOME/hub`` in ``huggingface_hub``.
+    """
+    explicit = env.get("HF_HUB_CACHE") or env.get("HUGGINGFACE_HUB_CACHE")
+    if explicit:
+        return Path(explicit)
+    hf_home = env.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return model_cache_dir() / "hf"
+
+
 def model_cache_env(parent_env: Mapping[str, str]) -> dict[str, str]:
     """Env additions that point the child's weight caches at the shared dir.
 
-    Sets ``HF_HUB_CACHE`` (+ legacy ``HUGGINGFACE_HUB_CACHE``) and ``TORCH_HOME``
-    unless the operator already set them in ``parent_env`` (their choice wins).
-    Also sets ``HF_HUB_OFFLINE=1`` (unless the operator already set it) so the
-    child resolves weights from the pre-provisioned cache rather than reaching
-    the network: the child runs untrusted plugin code and gets no HF token, so a
-    gated fetch could not succeed anyway. Gated weights are provisioned
-    out-of-band by a trusted tool (the ``download-model`` CLI or the CuvisNEXT
-    action). Creates the target dirs so the first write succeeds.
+    Always sets ``HF_HUB_CACHE`` (+ legacy ``HUGGINGFACE_HUB_CACHE``) to the one
+    HF cache both the provisioner and the child resolve to (:func:`hf_cache_dir`:
+    an operator ``HF_HUB_CACHE`` / ``HF_HOME`` wins, else the shared cache), so a
+    pre-provisioned weight and the offline child never disagree. Sets
+    ``TORCH_HOME`` and ``HF_HUB_OFFLINE=1`` unless the operator already set them.
+    ``HF_HUB_OFFLINE=1`` keeps the untrusted, token-less child off the network;
+    gated weights are provisioned out-of-band by a trusted tool (the
+    ``download-model`` CLI or the CuvisNEXT action). Creates the target dirs so
+    the first write succeeds.
     """
     cache = model_cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
@@ -66,11 +85,15 @@ def model_cache_env(parent_env: Mapping[str, str]) -> dict[str, str]:
     # tree instead of the wiped per-run HOME.
     additions: dict[str, str] = {"CUVIS_MODEL_CACHE_DIR": str(cache)}
 
-    if not any(parent_env.get(var) for var in _HF_CACHE_VARS):
-        hf_hub = cache / "hf"
-        hf_hub.mkdir(parents=True, exist_ok=True)
-        additions["HF_HUB_CACHE"] = str(hf_hub)
-        additions["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
+    # Point HF at ONE cache resolved identically by the trusted provisioner
+    # (download-model) and this child, and export it explicitly so the child's
+    # wiped HOME cannot redirect it. HF_HUB_CACHE outranks HF_HOME/hub in
+    # huggingface_hub, so this wins even when the operator manages their cache
+    # via HF_HOME.
+    hf_hub = hf_cache_dir(parent_env)
+    hf_hub.mkdir(parents=True, exist_ok=True)
+    additions["HF_HUB_CACHE"] = str(hf_hub)
+    additions["HUGGINGFACE_HUB_CACHE"] = str(hf_hub)
 
     if not parent_env.get("TORCH_HOME"):
         torch_home = cache / "torch"
