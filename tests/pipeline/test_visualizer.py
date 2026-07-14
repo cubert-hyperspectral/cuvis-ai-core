@@ -345,3 +345,60 @@ def test_format_edge_label_returns_empty_in_card_mode():
         dedupe_matching_ports=True,
     )
     assert label == ""
+
+
+def test_repr_html_embeds_svg_and_panzoom(monkeypatch):
+    """The Jupyter HTML repr wraps the rendered SVG with the fullscreen toggle and the
+    pan/zoom script. ``graphviz.Source.pipe`` is stubbed so the success path runs without
+    depending on the ``dot`` binary being installed."""
+    import graphviz
+
+    pipeline, *_ = _build_pipeline()
+    fake_svg = b'<?xml version="1.0"?>\n<svg width="10" height="10"><g/></svg>'
+    monkeypatch.setattr(graphviz.Source, "pipe", lambda self, format=None: fake_svg)
+
+    html = pipeline._repr_html_()
+
+    assert html is not None
+    assert f"Pipeline: {pipeline.name}" in html
+    assert '<svg style="max-width:100%;height:auto"' in html
+    assert "Expand to pan" in html
+    assert "<script>" in html
+
+
+def test_repr_html_falls_back_to_mermaid_when_svg_render_fails(monkeypatch):
+    """If the Graphviz render raises (e.g. no ``dot`` binary), the repr degrades to a
+    Mermaid source block instead of raising into the cell."""
+    import graphviz
+
+    pipeline, *_ = _build_pipeline()
+
+    def _boom(self, format=None):
+        raise RuntimeError("dot not found")
+
+    monkeypatch.setattr(graphviz.Source, "pipe", _boom)
+
+    html = pipeline._repr_html_()
+
+    assert html is not None
+    assert "<pre>" in html
+    assert "flowchart" in html
+    assert "<svg" not in html
+
+
+def test_repr_html_returns_none_when_all_rendering_fails(monkeypatch):
+    """When both the SVG render and the Mermaid fallback fail, the repr returns ``None``
+    so Jupyter falls back to ``__repr__`` rather than surfacing a traceback."""
+    import graphviz
+
+    from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
+
+    pipeline, *_ = _build_pipeline()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("render unavailable")
+
+    monkeypatch.setattr(graphviz.Source, "pipe", _boom)
+    monkeypatch.setattr(PipelineVisualizer, "to_mermaid", _boom)
+
+    assert pipeline._repr_html_() is None
