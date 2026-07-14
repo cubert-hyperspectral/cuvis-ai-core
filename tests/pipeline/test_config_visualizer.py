@@ -135,3 +135,33 @@ def test_config_to_dot_boxes_endpoint_absent_from_nodes():
     # ghost_sink is only named in a connection, never declared as a node.
     assert '"ghost_sink" [label="ghost_sink"];' in dot
     assert '"mask_cleanup" -> "ghost_sink"' in dot
+
+
+def test_render_returns_image_bytes_on_success(monkeypatch):
+    """Cover the image-render success path without depending on the ``dot`` binary
+    (CI has no graphviz binary, so the real-render test is skipped there)."""
+    import graphviz
+
+    fake_png = b"\x89PNG\r\n\x1a\n-fake"
+    monkeypatch.setattr(graphviz.Source, "pipe", lambda self, format=None: fake_png)
+
+    data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
+
+    assert fmt == "png"
+    assert data == fake_png
+
+
+def test_render_falls_back_to_dot_when_pipe_raises(monkeypatch):
+    """When the graphviz render raises (missing binary / render failure), the function
+    degrades to DOT bytes instead of propagating. Binary-independent."""
+    import graphviz
+
+    def _boom(self, format=None):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(graphviz.Source, "pipe", _boom)
+
+    data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
+
+    assert fmt == "dot"
+    assert b"digraph" in data
