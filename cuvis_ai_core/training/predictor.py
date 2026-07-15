@@ -29,8 +29,15 @@ class Predictor:
         self,
         max_batches: int | None = None,
         collect_outputs: bool = False,
+        stage: ExecutionStage = ExecutionStage.INFERENCE,
     ) -> list[dict[tuple[str, str], Any]] | None:
-        """Run `ExecutionStage.INFERENCE` over the datamodule's predict dataloader."""
+        """Run the pipeline over the datamodule's predict dataloader at `stage`.
+
+        `stage` (default `ExecutionStage.INFERENCE`) is the `Context` stage each batch runs under,
+        and it selects which nodes fire: `pipeline.forward` skips a node whose `execution_stages`
+        excludes the stage. Pass `stage=ExecutionStage.TEST` (or `VAL`) to also run nodes gated to
+        those stages, such as metric nodes, so their accumulated results can be read after the run.
+        """
         if max_batches is not None and max_batches <= 0:
             raise ValueError("max_batches must be None or a positive integer.")
 
@@ -61,7 +68,7 @@ class Predictor:
 
                     moved_batch = self._move_batch_to_device(batch)
                     context = Context(
-                        stage=ExecutionStage.INFERENCE,
+                        stage=stage,
                         batch_idx=batch_idx,
                         global_step=batch_idx,
                     )
