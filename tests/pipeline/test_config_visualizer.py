@@ -6,7 +6,10 @@ import shutil
 
 import pytest
 
-from cuvis_ai_core.pipeline.config_visualizer import config_to_dot, render_pipeline_config
+from cuvis_ai_core.pipeline.config_visualizer import (
+    config_to_dot,
+    render_pipeline_config,
+)
 from cuvis_ai_schemas.pipeline.config import PipelineConfig
 
 _CHAIN_YAML = """
@@ -91,23 +94,21 @@ class TestRenderPipelineConfig:
         assert fmt == "dot"
         assert b"digraph" in data
 
-    def test_unknown_format_without_graphviz_falls_back_to_dot(self, monkeypatch) -> None:
-        # Force the graphviz import to fail so the render path takes the DOT fallback.
-        import builtins
+    def test_falls_back_to_dot_when_dot_binary_missing(self, monkeypatch) -> None:
+        # dot not on PATH -> subprocess.run raises FileNotFoundError -> DOT fallback.
+        import subprocess
 
-        real_import = builtins.__import__
+        def _no_dot(*args, **kwargs):
+            raise FileNotFoundError("dot")
 
-        def _fake_import(name, *args, **kwargs):
-            if name == "graphviz":
-                raise ImportError("graphviz unavailable")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", _fake_import)
+        monkeypatch.setattr(subprocess, "run", _no_dot)
         data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
         assert fmt == "dot"
         assert b"digraph" in data
 
-    @pytest.mark.skipif(shutil.which("dot") is None, reason="graphviz 'dot' binary not installed")
+    @pytest.mark.skipif(
+        shutil.which("dot") is None, reason="graphviz 'dot' binary not installed"
+    )
     def test_png_render_returns_png_bytes(self) -> None:
         data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
         assert fmt == "png"
@@ -140,10 +141,15 @@ def test_config_to_dot_boxes_endpoint_absent_from_nodes():
 def test_render_returns_image_bytes_on_success(monkeypatch):
     """Cover the image-render success path without depending on the ``dot`` binary
     (CI has no graphviz binary, so the real-render test is skipped there)."""
-    import graphviz
+    import subprocess
 
     fake_png = b"\x89PNG\r\n\x1a\n-fake"
-    monkeypatch.setattr(graphviz.Source, "pipe", lambda self, format=None: fake_png)
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[0] == "dot" and cmd[1] == "-Tpng"
+        return subprocess.CompletedProcess(cmd, 0, stdout=fake_png, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
 
     data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
 
@@ -151,17 +157,49 @@ def test_render_returns_image_bytes_on_success(monkeypatch):
     assert data == fake_png
 
 
-def test_render_falls_back_to_dot_when_pipe_raises(monkeypatch):
-    """When the graphviz render raises (missing binary / render failure), the function
-    degrades to DOT bytes instead of propagating. Binary-independent."""
-    import graphviz
+def test_render_falls_back_to_dot_on_nonzero_exit(monkeypatch):
+    """A nonzero `dot` exit degrades to DOT bytes instead of propagating."""
+    import subprocess
 
-    def _boom(self, format=None):
-        raise RuntimeError("render failed")
+    def _fail(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"boom")
 
-    monkeypatch.setattr(graphviz.Source, "pipe", _boom)
+    monkeypatch.setattr(subprocess, "run", _fail)
 
     data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
 
     assert fmt == "dot"
     assert b"digraph" in data
+
+
+def test_render_falls_back_to_dot_on_timeout(monkeypatch):
+    """A hung `dot` is killed by the timeout and degrades to DOT bytes."""
+    import subprocess
+
+    def _timeout(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 10.0))
+
+    monkeypatch.setattr(subprocess, "run", _timeout)
+
+    data, fmt = render_pipeline_config(_CHAIN_YAML, fmt="png")
+
+    assert fmt == "dot"
+    assert b"digraph" in data
+
+
+def test_render_rejects_oversize_config(monkeypatch):
+    """An oversize config is a client error (ValueError), not a silent DOT fallback."""
+    import cuvis_ai_core.pipeline.config_visualizer as cv
+
+    monkeypatch.setattr(cv, "_MAX_CONFIG_BYTES", 10)
+    with pytest.raises(ValueError, match="too large"):
+        render_pipeline_config(_CHAIN_YAML, fmt="png")
+
+
+def test_render_rejects_too_many_elements(monkeypatch):
+    """A config over the node+connection cap raises before any render."""
+    import cuvis_ai_core.pipeline.config_visualizer as cv
+
+    monkeypatch.setattr(cv, "_MAX_GRAPH_ELEMENTS", 1)
+    with pytest.raises(ValueError, match="render cap"):
+        render_pipeline_config(_CHAIN_YAML, fmt="png")  # 2 nodes + 1 conn > 1

@@ -109,3 +109,17 @@ def test_get_pipeline_visualization_from_config_content(grpc_stub):
 
     assert response.format == "dot"
     assert b"digraph" in response.image_data
+
+
+def test_get_pipeline_visualization_oversize_config_is_invalid_argument(grpc_stub):
+    """The sessionless render caps input size; an oversize config is rejected as
+    INVALID_ARGUMENT (the cap raises ValueError, which @grpc_handler maps), not
+    rendered or silently degraded."""
+    oversize = "metadata:\n  name: x\n" + "#" + "z" * 1_100_000  # > 1 MB
+    with pytest.raises(grpc.RpcError) as exc:
+        grpc_stub.GetPipelineVisualization(
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(
+                config_content=oversize, format="dot"
+            )
+        )
+    assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT

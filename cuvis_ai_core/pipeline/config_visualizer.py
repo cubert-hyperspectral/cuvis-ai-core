@@ -7,12 +7,15 @@ graph the moment it is selected in a picker, before it is ever loaded into a ses
 
 The graph is derived purely from the config's declared ``nodes`` and ``connections``
 (the ports live in the connection strings), so it needs neither the node classes nor the
-plugin catalog. Rendering reuses the ``graphviz`` dependency already required by
-:class:`~cuvis_ai_core.pipeline.visualizer.PipelineVisualizer`; if the graphviz binary is
-unavailable the DOT source is returned so the caller still has something to display.
+plugin catalog. Rendering shells the graphviz ``dot`` binary directly with a hard timeout
+(the ``graphviz`` Python wrapper exposes none); if ``dot`` is unavailable or times out the
+DOT source is returned so the caller still has something to display. Because this path is
+reachable without a session, the input is size/complexity-capped before rendering.
 """
 
 from __future__ import annotations
+
+import subprocess
 
 import yaml
 from loguru import logger
@@ -21,6 +24,16 @@ from cuvis_ai_schemas.pipeline.config import PipelineConfig
 
 _IMAGE_FORMATS = frozenset({"png", "svg"})
 _DOT_FORMATS = frozenset({"dot", "graphviz"})
+
+# Bounds for the sessionless render, which is reachable without a session
+# (GetPipelineVisualization with config_content). A pipeline config is tiny in
+# practice; these caps stop a crafted config from pinning CPU or hanging `dot`.
+# The gRPC transport already caps the message size; these are a much tighter,
+# renderer-specific bound. Exceeding a cap raises ValueError (mapped to
+# INVALID_ARGUMENT by the handler), never the DOT fallback.
+_MAX_CONFIG_BYTES = 1_000_000  # ~1 MB of YAML; a real pipeline config is a few KB
+_MAX_GRAPH_ELEMENTS = 2000  # nodes + connections; a real pipeline has well under 100
+_RENDER_TIMEOUT_S = 10.0  # hard ceiling on the `dot` render of a bounded graph
 
 
 def _short_class(class_name: str) -> str:
@@ -109,26 +122,64 @@ def render_pipeline_config(
 
     Returns:
         ``(data, actual_format)`` where ``data`` is the encoded image bytes for an image
-        format, or UTF-8 DOT bytes for a DOT request or when graphviz is unavailable.
+        format, or UTF-8 DOT bytes for a DOT request or when the ``dot`` binary is
+        unavailable / times out.
+
+    Raises:
+        ValueError: if ``yaml_content`` exceeds ``_MAX_CONFIG_BYTES`` or the config has
+            more than ``_MAX_GRAPH_ELEMENTS`` nodes + connections. Raised BEFORE any
+            render so it is not swallowed by the DOT fallback; the handler maps it to
+            ``INVALID_ARGUMENT``. YAML parse / schema errors propagate the same way.
     """
+    # Caps first, before any parse or render, so a crafted input is rejected as a
+    # client error rather than silently degrading to a DOT response.
+    if len(yaml_content.encode("utf-8")) > _MAX_CONFIG_BYTES:
+        raise ValueError(
+            f"pipeline config exceeds {_MAX_CONFIG_BYTES} bytes; too large to visualize"
+        )
+
     requested = (fmt or "png").lower()
     config = PipelineConfig.model_validate(yaml.safe_load(yaml_content) or {})
+    element_count = len(config.nodes) + len(config.connections)
+    if element_count > _MAX_GRAPH_ELEMENTS:
+        raise ValueError(
+            f"pipeline config has {element_count} nodes+connections; exceeds the "
+            f"{_MAX_GRAPH_ELEMENTS} render cap"
+        )
+
     dot = config_to_dot(config, rankdir=rankdir)
 
     if requested in _DOT_FORMATS:
         return dot.encode("utf-8"), "dot"
 
     image_format = requested if requested in _IMAGE_FORMATS else "png"
+    # Render by shelling `dot` directly (not graphviz.Source.pipe, which exposes no
+    # timeout): a hard timeout bounds render time even for a small pathological graph.
+    # Any failure (missing binary, nonzero exit, or timeout) degrades to DOT bytes so
+    # the caller always has something to display.
     try:
-        import graphviz
-
-        data = graphviz.Source(dot).pipe(format=image_format)
-        return bytes(data), image_format
-    except Exception as exc:  # graphviz binary missing or render failure
+        proc = subprocess.run(
+            ["dot", f"-T{image_format}"],
+            input=dot.encode("utf-8"),
+            capture_output=True,
+            timeout=_RENDER_TIMEOUT_S,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout, image_format
+        logger.warning(
+            "dot render exited {} ({}); returning DOT source.",
+            proc.returncode,
+            proc.stderr.decode("utf-8", "replace").strip(),
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "dot render exceeded {}s; returning DOT source.", _RENDER_TIMEOUT_S
+        )
+    except (FileNotFoundError, OSError) as exc:  # dot binary missing / not executable
         logger.warning(
             "Config visualization render failed ({}); returning DOT source.", exc
         )
-        return dot.encode("utf-8"), "dot"
+    return dot.encode("utf-8"), "dot"
 
 
 __all__ = ["config_to_dot", "render_pipeline_config"]
