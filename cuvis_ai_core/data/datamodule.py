@@ -93,11 +93,10 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         super().__init__()
         # Within-epoch patch multiplicity: repeat each TRAIN sample this many times
         # per epoch (N independent downstream crops/frame). Loader-agnostic, applied
-        # only to the train loader. Accept it via params too (config-driven construction).
-        spf = params.get("samples_per_frame", samples_per_frame)
-        if int(spf) < 1:
-            raise ValueError(f"samples_per_frame must be >= 1, got {spf}")
-        self.samples_per_frame = int(spf)
+        # only to the train loader (see ``train_dataloader``).
+        if int(samples_per_frame) < 1:
+            raise ValueError(f"samples_per_frame must be >= 1, got {samples_per_frame}")
+        self.samples_per_frame = int(samples_per_frame)
         # Coerce a plain dict / OmegaConf mapping (e.g. from `DataModule(**cfg.data)`)
         # into a DataSplitConfig so config-driven construction works uniformly.
         from cuvis_ai_schemas.training.data import DataSplitConfig as _DataSplitConfig
@@ -278,6 +277,12 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         )
 
     def train_dataloader(self) -> DataLoader:
+        # ``samples_per_frame`` multiplicity is applied here, train split only: the
+        # returned loader's ``dataset`` is a ``_RepeatDataset`` of length
+        # ``N * len(train_ds)``, while the ``train_ds`` property stays the unwrapped frame
+        # count. Read multiplicity off the loader (``len(loader.dataset)`` / iteration),
+        # never off ``train_ds``. A map-style repeat keeps this DDP-safe: Lightning's
+        # automatic ``DistributedSampler`` shards the repeated dataset like any other.
         ds = self._train_ds
         if self.samples_per_frame > 1 and ds is not None:
             ds = _RepeatDataset(ds, self.samples_per_frame)
