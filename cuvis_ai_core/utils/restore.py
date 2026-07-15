@@ -143,7 +143,9 @@ def _resolve_splits_path_in_config(
     splits_path = Path(splits.splits_path)
     if splits_path.is_absolute():
         return data_config
-    resolved = splits.model_copy(update={"splits_path": str(base_dir / splits_path)})
+    resolved = splits.model_copy(
+        update={"splits_path": str((base_dir / splits_path).resolve())}
+    )
     return data_config.model_copy(update={"splits": resolved})
 
 
@@ -423,7 +425,10 @@ def restore_trainrun(
     overrides : list[str] | None
         Hydra-style config overrides (e.g., ["output_dir=outputs/custom", "data.batch_size=16"])
     """
-    trainrun_path = Path(trainrun_path)
+    # Absolutize up front, before any Hydra resolution can rewrite the process
+    # CWD: the trainrun dir is the base for resolving a relative splits_path
+    # (see _resolve_splits_path_in_config), so it must not depend on CWD.
+    trainrun_path = Path(trainrun_path).resolve()
     if not trainrun_path.exists():
         raise FileNotFoundError(f"TrainRun file not found: {trainrun_path}")
 

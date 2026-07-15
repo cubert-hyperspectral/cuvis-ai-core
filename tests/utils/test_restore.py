@@ -518,6 +518,26 @@ def test_resolve_splits_path_rewrites_relative_to_base_dir(tmp_path: Path) -> No
     assert Path(out.splits.splits_path).is_absolute()
 
 
+def test_resolve_splits_path_relative_base_dir_becomes_absolute() -> None:
+    """A RELATIVE base_dir still yields an absolute splits_path.
+
+    Regression: the previous ``str(base_dir / splits_path)`` left the result relative
+    when base_dir was relative (a relative ``--trainrun-path``), so split loading
+    stayed CWD-dependent. ``.resolve()`` closes that. ``restore_trainrun`` now also
+    absolutizes ``trainrun_path`` at entry, but the helper must be robust on its own.
+    """
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    cfg = DataConfig(
+        data_module="npz_multi",
+        splits=DataSplitConfig(splits_path="splits.json"),
+        params={"index_csv": "x.csv"},
+    )
+    out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=Path("configs/tr"))
+    assert Path(out.splits.splits_path).is_absolute()
+    assert out.splits.splits_path.replace("\\", "/").endswith("configs/tr/splits.json")
+
+
 def test_resolve_splits_path_absolute_and_none_pass_through(tmp_path: Path) -> None:
     from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
 

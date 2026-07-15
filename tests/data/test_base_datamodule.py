@@ -185,6 +185,30 @@ def test_effective_splits_without_path_is_identity():
     assert dm._effective_splits() is splits  # no file load when splits_path unset
 
 
+def test_splits_path_leakage_check_is_file_owned(tmp_path):
+    """``leakage_check`` comes from the file even when also set inline.
+
+    Documents the file-owned limitation: the enum has a default so a plain ``or``
+    cannot distinguish "unset" from "default", so the file value wins. The inline
+    stages still merge, and the file's own stages survive the ``model_copy`` rebuild.
+    """
+    from cuvis_ai_core.data.splits_io import save_splits
+
+    save_splits(
+        DataSplitConfig(train=[_fi([0, 1])], leakage_check="warn"),
+        tmp_path / "splits.json",
+    )
+    dm = FakeDataModule(
+        splits=DataSplitConfig(
+            splits_path=str(tmp_path / "splits.json"),
+            leakage_check="off",  # inline value must NOT win
+        ),
+    )
+    effective = dm._effective_splits()
+    assert effective.leakage_check == "warn"  # file-owned, inline "off" ignored
+    assert len(effective.train) == 1  # file stage survived the model_copy rebuild
+
+
 def test_create_data_module_dispatch():
     class _Reg:
         data_modules = {"fake": FakeDataModule}

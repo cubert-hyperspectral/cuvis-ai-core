@@ -183,6 +183,31 @@ def test_parse_trainrun_yaml_explicit_missing_reference_raises(
         TrainRunService.parse_trainrun_yaml(tr)
 
 
+def test_parse_trainrun_yaml_resolves_relative_splits_path(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    """A relative ``data.splits.splits_path`` resolves against the trainrun dir.
+
+    Parity with the CLI restore path: a gRPC-restored trainrun that references its
+    splits file relatively must carry an absolute path, so the later Train call is
+    never rejected as baseless and never resolves against the child's CWD.
+    """
+    cfg = {
+        **mock_experiment_dict,
+        "data": {"data_module": "npz_multi", "splits": {"splits_path": "splits.json"}},
+    }
+    tr = tmp_path / "run.yaml"
+    tr.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    (tmp_path / "pipeline.yaml").write_text(
+        yaml.safe_dump(mock_pipeline_dict), encoding="utf-8"
+    )
+
+    parsed, _pipeline_path = TrainRunService.parse_trainrun_yaml(tr)
+
+    assert Path(parsed.data.splits.splits_path).is_absolute()
+    assert parsed.data.splits.splits_path == str(tmp_path / "splits.json")
+
+
 # ---------------------------------------------------------------------------
 # restore_train_run (builds a real pipeline from mock nodes)
 # ---------------------------------------------------------------------------

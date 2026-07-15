@@ -222,10 +222,14 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         config and each **non-empty** inline stage (``train``/``val``/``test``/``predict``)
         overrides the file's stage. Empty inline stages keep their defined meaning
         (predict-empty -> whole universe; train/val-empty -> no fit), so "intentionally
-        empty" needs no special marker. ``splits_path`` is used as given: an absolute path,
-        or one relative to the current working directory for direct programmatic use. The
-        restore layer rewrites a trainrun-relative path to absolute before construction, so
-        resolution never depends on Hydra's runtime CWD.
+        empty" needs no special marker. ``leakage_check`` and ``universe_hash`` are
+        **file-owned**: they come from the loaded file, so an inline ``leakage_check`` is
+        ignored when ``splits_path`` is set (the enum has a default, so a plain ``or``
+        cannot tell "unset" from "default"; a real override would need a nullable field).
+        ``splits_path`` is used as given: an absolute path, or one relative to the current
+        working directory for direct programmatic use. The restore layer rewrites a
+        trainrun-relative path to absolute before construction, so resolution never depends
+        on Hydra's runtime CWD.
         """
         from cuvis_ai_core.data.splits_io import load_splits
 
@@ -235,14 +239,20 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
             return splits
 
         base = load_splits(splits.splits_path)
-        return type(splits)(
-            splits_path=splits.splits_path,
-            leakage_check=base.leakage_check,
-            universe_hash=base.universe_hash,
-            train=splits.train or base.train,
-            val=splits.val or base.val,
-            test=splits.test or base.test,
-            predict=splits.predict or base.predict,
+        # Anchor on the file config so any DataSplitConfig field we don't explicitly
+        # override survives a future schema addition; overlay the inline splits_path and
+        # each non-empty inline stage. Keep the `x or base.x` form (NOT an unconditional
+        # `splits.x`): DataSplitConfig stage lists default to [], so an unconditional
+        # update would let a splits_path-only inline config silently wipe the file's
+        # stages. leakage_check / universe_hash stay file-owned (not in the update).
+        return base.model_copy(
+            update={
+                "splits_path": splits.splits_path,
+                "train": splits.train or base.train,
+                "val": splits.val or base.val,
+                "test": splits.test or base.test,
+                "predict": splits.predict or base.predict,
+            }
         )
 
     def _setup_from_selectors(self, stage: str | None) -> None:

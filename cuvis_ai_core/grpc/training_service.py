@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import grpc
@@ -66,6 +67,24 @@ class TrainingService:
             return
 
         try:
+            # A relative splits_path cannot be resolved on the wire Train path:
+            # there is no trainrun file to anchor it. RestoreTrainRun resolves a
+            # relative splits_path against the trainrun dir before it reaches the
+            # session; a raw TrainRequest.data / SetTrainRunConfig with a relative
+            # path is genuinely baseless. Reject it with a clear error instead of
+            # resolving against the child's wiped CWD (wrong file / FileNotFound).
+            splits = data_config_py.splits
+            if (
+                splits is not None
+                and splits.splits_path
+                and not Path(splits.splits_path).is_absolute()
+            ):
+                raise ValueError(
+                    "splits_path must be absolute on the gRPC Train path (no trainrun "
+                    "base dir to resolve against); send an absolute path or load the "
+                    "trainrun via RestoreTrainRun"
+                )
+
             # Create datamodule from data config via the registry dispatch
             datamodule = self._create_data_module(session, data_config_py)
             training_config_py: TrainingConfig | None = None

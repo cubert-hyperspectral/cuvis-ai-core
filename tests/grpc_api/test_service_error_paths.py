@@ -223,6 +223,31 @@ class TestTrainingServiceErrors:
         assert responses == []
         self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
 
+    def test_train_relative_splits_path_is_invalid_argument(self):
+        """A relative splits_path is baseless on the wire Train path -> rejected.
+
+        RestoreTrainRun resolves a relative splits_path against the trainrun dir;
+        a raw session/request with a relative path has no base dir, so Train must
+        reject it rather than resolve against the child's CWD.
+        """
+        from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+        session_id = self.session_manager.create_session()
+        session = self.session_manager.get_session(session_id)
+        session.pipeline = Mock()  # pass require_pipeline
+        session.data_config = DataConfig(
+            data_module="npz_multi",
+            splits=DataSplitConfig(splits_path="splits.json"),  # relative
+        )
+        request = cuvis_ai_pb2.TrainRequest(session_id=session_id)
+        responses = list(self.service.train(request, self.ctx))
+        assert responses == []
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+        assert any(
+            "absolute" in str(c.args[0]).lower()
+            for c in self.ctx.set_details.mock_calls
+        )
+
 
 class TestGrpcHandlerDecorator:
     """Test the @grpc_handler decorator in isolation."""
