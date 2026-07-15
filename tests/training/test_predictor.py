@@ -204,6 +204,29 @@ def test_predictor_stage_selects_which_nodes_fire() -> None:
     assert all(ctx.stage == ExecutionStage.TEST for ctx in source.contexts)
 
 
+def test_predictor_collect_ports_filters_and_moves_to_cpu() -> None:
+    # collect_ports keeps only the named ports and returns them detached on CPU.
+    pipeline, _, _ = _build_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    kept = Predictor(pipeline=pipeline, datamodule=datamodule).predict(
+        collect_outputs=True, collect_ports={"doubled"}
+    )
+    assert kept is not None and len(kept) == 2
+    for out in kept:
+        assert set(out) == {("source", "doubled")}
+        value = out[("source", "doubled")]
+        assert value.device.type == "cpu"
+        assert not value.requires_grad
+
+    # A port name that no node produces yields empty per-batch dicts (nothing retained).
+    pipeline, _, _ = _build_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    dropped = Predictor(pipeline=pipeline, datamodule=datamodule).predict(
+        collect_outputs=True, collect_ports={"not_a_port"}
+    )
+    assert dropped is not None and all(out == {} for out in dropped)
+
+
 def test_predictor_max_batches_limits_iteration() -> None:
     pipeline, source, sink = _build_pipeline()
     datamodule = PredictDataModule(
