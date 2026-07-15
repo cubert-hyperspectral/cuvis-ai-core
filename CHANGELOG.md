@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- Added `samples_per_frame` to `BaseCuvisAIDataModule`, so every data module inherits within-epoch
+  train multiplicity: each training sample is repeated N times per epoch (train split only; default
+  1 is a bit-for-bit no-op). Applied in `train_dataloader` via a map-style repeat dataset, so
+  `len(train_dataloader().dataset)` is `N * frames` while the `train_ds` property stays the frame
+  count; validation, test, and predict loaders are untouched.
+
 ## 0.10.1 - 2026-07-13
 
 - `GradientTrainer` now logs epoch-pooled metrics (`POOLED_METRIC_NAMES`) via PyTorch Lightning's

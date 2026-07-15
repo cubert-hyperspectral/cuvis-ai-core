@@ -45,6 +45,29 @@ class DataStage(StrEnum):
     PREDICT = "predict"
 
 
+class _RepeatDataset(Dataset):
+    """Present ``base`` as ``n`` times longer, mapping ``idx -> base[idx % len(base)]``.
+
+    Backs ``samples_per_frame``: each base sample is visited ``n`` times per epoch.
+    Datasets return raw frames (cropping/augmentation happens downstream in the
+    pipeline), so the repeated visits become independent transformed samples; a
+    shuffled loader spreads a frame's ``n`` occurrences across the epoch. No data is
+    copied — only indices are remapped.
+    """
+
+    def __init__(self, base: Dataset, n: int) -> None:
+        if int(n) < 1:
+            raise ValueError(f"repeat factor must be >= 1, got {n}")
+        self._base = base
+        self._n = int(n)
+
+    def __len__(self) -> int:
+        return len(self._base) * self._n  # type: ignore[arg-type]
+
+    def __getitem__(self, idx: int) -> Any:
+        return self._base[idx % len(self._base)]  # type: ignore[arg-type]
+
+
 class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
     """Shared split + dataloader plumbing for every data module.
 
@@ -64,9 +87,16 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         splits: DataSplitConfig | None = None,
         batch_size: int = 1,
         num_workers: int = 0,
+        samples_per_frame: int = 1,
         **params: Any,
     ) -> None:
         super().__init__()
+        # Within-epoch patch multiplicity: repeat each TRAIN sample this many times
+        # per epoch (N independent downstream crops/frame). Loader-agnostic, applied
+        # only to the train loader (see ``train_dataloader``).
+        if int(samples_per_frame) < 1:
+            raise ValueError(f"samples_per_frame must be >= 1, got {samples_per_frame}")
+        self.samples_per_frame = int(samples_per_frame)
         # Coerce a plain dict / OmegaConf mapping (e.g. from `DataModule(**cfg.data)`)
         # into a DataSplitConfig so config-driven construction works uniformly.
         from cuvis_ai_schemas.training.data import DataSplitConfig as _DataSplitConfig
@@ -247,7 +277,16 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         )
 
     def train_dataloader(self) -> DataLoader:
-        return self._loader(self._train_ds, shuffle=True, name="train")
+        # ``samples_per_frame`` multiplicity is applied here, train split only: the
+        # returned loader's ``dataset`` is a ``_RepeatDataset`` of length
+        # ``N * len(train_ds)``, while the ``train_ds`` property stays the unwrapped frame
+        # count. Read multiplicity off the loader (``len(loader.dataset)`` / iteration),
+        # never off ``train_ds``. A map-style repeat keeps this DDP-safe: Lightning's
+        # automatic ``DistributedSampler`` shards the repeated dataset like any other.
+        ds = self._train_ds
+        if self.samples_per_frame > 1 and ds is not None:
+            ds = _RepeatDataset(ds, self.samples_per_frame)
+        return self._loader(ds, shuffle=True, name="train")
 
     def val_dataloader(self) -> DataLoader:
         return self._loader(self._val_ds, shuffle=False, name="val")
