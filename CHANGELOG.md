@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## 0.11.0 - 2026-07-15
 
 - **Adopted the flat `TrainingConfig` (folds `TrainerConfig` in, needs `cuvis-ai-schemas>=0.8.0`).** `GradientTrainer.__init__` now takes a single `training_config: TrainingConfig` instead of separate `trainer_config` / `optimizer_config` / `scheduler_config` params, deriving the optimizer and scheduler from it and building `pl.Trainer` kwargs via `training_config.to_lightning_kwargs()`. The `TrainerConfig` re-export is removed. Flattened `configs/training/default.yaml` (the nested `trainer:` block is gone). Breaking for callers that constructed `GradientTrainer` with the old per-config params or imported `TrainerConfig` from `cuvis_ai_core.training.config`. Migration: a pre-0.8 `trainrun.yaml` with a nested `trainer:` block (or top-level `batch_size` / `num_workers`) now fails `restore-trainrun` under `extra="forbid"` — flatten the `trainer:` block into `training:`. A statistical-only run must set `training: null` (with `training` present but non-null, `restore-trainrun` builds a `GradientTrainer`).
 - **Fixed: `restore-trainrun` silently dropped the LR scheduler.** The CLI restore path built `GradientTrainer` without a scheduler, so the `scheduler:` block in a trainrun YAML was ignored (only the gRPC path applied it). Deriving the scheduler from the single `training_config` fixes both paths. Added a regression test.
