@@ -117,7 +117,7 @@ class ModelWeights:
         # skip-if-present must still validate: a cached file with the wrong hash
         # is a broken state, not a success. Validate against the expected sha
         # (when pinned); always surface the computed sha so it can be recorded.
-        cls._validate_sha(resolved, expected=spec["sha256"], force=force)
+        cls._validate_sha(resolved, expected=spec["sha256"])
 
         # Companion files the model's own loader also fetches from the same repo
         # (e.g. SAM3's config.json). Pull them into the same cache so an offline
@@ -214,7 +214,7 @@ class ModelWeights:
         return hf_cache_dir(os.environ)
 
     @classmethod
-    def _validate_sha(cls, path: Path, *, expected: str | None, force: bool) -> None:
+    def _validate_sha(cls, path: Path, *, expected: str | None) -> None:
         digest = cls._sha256(path)
         if expected:
             if digest.lower() != expected.lower():
