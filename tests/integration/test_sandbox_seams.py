@@ -213,22 +213,31 @@ def test_deny_patterns_constant_contains_required_classes():
 
 
 def test_hf_token_denied():
-    """HF token vars are stripped: the untrusted child never gets a credential."""
-    assert _is_denied("HF_TOKEN")
-    assert _is_denied("HUGGINGFACE_HUB_TOKEN")
-    assert "HF_TOKEN" in _DENY_EXACT
-    assert "HUGGINGFACE_HUB_TOKEN" in _DENY_EXACT
+    """HF token env vars are stripped: the untrusted child never gets a credential.
+
+    huggingface_hub reads ``HF_TOKEN`` or the legacy ``HUGGING_FACE_HUB_TOKEN``
+    (with the underscore); both must be denied. The misspelled
+    ``HUGGINGFACE_HUB_TOKEN`` is kept as harmless belt-and-suspenders.
+    """
+    for var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        assert _is_denied(var)
+        assert var in _DENY_EXACT
 
 
 def test_hf_token_stripped_and_model_cache_injected(monkeypatch, tmp_path):
-    """The child gets the shared cache + offline mode, and no HF token.
+    """The child gets the shared cache + offline mode, and no HF credential.
 
     Gated weights are provisioned into the shared cache out-of-band by a trusted
     tool; the child (untrusted plugin code) runs ``HF_HUB_OFFLINE=1`` against that
-    cache and never receives ``HF_TOKEN`` / ``HUGGINGFACE_HUB_TOKEN``.
+    cache and never receives an HF token env var. The token FILE vector is closed
+    by pinning ``HF_TOKEN_PATH`` at a guaranteed-absent scratch file, so an
+    operator ``HF_TOKEN_PATH`` never reaches the child.
     """
     monkeypatch.setenv("HF_TOKEN", "must-not-leak")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "must-not-leak")
     monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", "must-not-leak")
+    # An operator-set token-file locator must not survive into the child.
+    monkeypatch.setenv("HF_TOKEN_PATH", str(tmp_path / "operator_token"))
     monkeypatch.setenv("CUVIS_MODEL_CACHE_DIR", str(tmp_path / "model_cache"))
     for var in (
         "HF_HOME",
@@ -254,7 +263,11 @@ def test_hf_token_stripped_and_model_cache_injected(monkeypatch, tmp_path):
 
     model_cache = str(tmp_path / "model_cache")
     assert "HF_TOKEN" not in env
+    assert "HUGGING_FACE_HUB_TOKEN" not in env
     assert "HUGGINGFACE_HUB_TOKEN" not in env
+    # The token file is pinned at an absent scratch path, overriding the operator's.
+    assert env["HF_TOKEN_PATH"] == str(scratch_dir / ".no-hf-token")
+    assert not Path(env["HF_TOKEN_PATH"]).exists()
     assert env["CUVIS_MODEL_CACHE_DIR"] == model_cache
     assert env["HF_HUB_CACHE"].startswith(model_cache)
     assert env["HUGGINGFACE_HUB_CACHE"] == env["HF_HUB_CACHE"]
@@ -321,6 +334,10 @@ def test_model_cache_points_hub_cache_at_hf_home(monkeypatch, tmp_path):
     expected = str(hf_home / "hub")
     assert env["HF_HUB_CACHE"] == expected
     assert env["HUGGINGFACE_HUB_CACHE"] == expected
+    # HF_HOME is read to resolve the cache, then dropped: the child keeps the
+    # resolved HF_HUB_CACHE but never a pointer into the operator's HF home
+    # (which is also the default token-file location).
+    assert "HF_HOME" not in env
     # Still offline, and the shared root is still exported for non-HF plugins.
     assert env["HF_HUB_OFFLINE"] == "1"
     assert env["CUVIS_MODEL_CACHE_DIR"] == str(tmp_path / "model_cache")
