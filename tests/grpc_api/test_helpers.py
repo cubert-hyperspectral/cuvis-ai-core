@@ -365,9 +365,6 @@ training:
   optimizer:
     name: adamw
     lr: 0.001
-  trainer:
-    max_epochs: 1
-  batch_size: 2
   max_epochs: 1
 metric_nodes: []
 loss_nodes: []

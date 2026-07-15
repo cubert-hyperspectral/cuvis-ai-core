@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig, TrainingConfig
+from cuvis_ai_core.training.config import OptimizerConfig, TrainingConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 
 from tests.fixtures.mock_nodes import (
@@ -149,13 +149,11 @@ def test_gpu_acceleration():
 
     config_cpu = TrainingConfig(
         seed=42,
-        trainer=TrainerConfig(
-            max_epochs=5,  # More epochs for gradient training
-            accelerator="cpu",
-            devices=1,
-            enable_progress_bar=False,
-            enable_checkpointing=False,
-        ),
+        max_epochs=5,  # More epochs for gradient training
+        accelerator="cpu",
+        devices=1,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
         optimizer=OptimizerConfig(name="adam", lr=0.001),
     )
 
@@ -177,13 +175,11 @@ def test_gpu_acceleration():
 
     warmup_config = TrainingConfig(
         seed=42,
-        trainer=TrainerConfig(
-            max_epochs=1,
-            accelerator="cpu",
-            devices=1,
-            enable_progress_bar=False,
-            enable_checkpointing=False,
-        ),
+        max_epochs=1,
+        accelerator="cpu",
+        devices=1,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
         optimizer=OptimizerConfig(name="adam", lr=0.001),
     )
     # Use external trainer for warmup
@@ -199,8 +195,7 @@ def test_gpu_acceleration():
             datamodule=warmup_dm,
             loss_nodes=loss_nodes_warmup,
             metric_nodes=metric_nodes_warmup,
-            trainer_config=warmup_config.trainer,
-            optimizer_config=warmup_config.optimizer,
+            training_config=warmup_config,
             monitors=[],
         )
         warmup_trainer.fit()
@@ -233,8 +228,7 @@ def test_gpu_acceleration():
             datamodule=datamodule,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
-            trainer_config=config_cpu.trainer,
-            optimizer_config=config_cpu.optimizer,
+            training_config=config_cpu,
             monitors=[],
         )
         trainer.fit()
@@ -266,13 +260,11 @@ def test_gpu_acceleration():
 
     config_gpu = TrainingConfig(
         seed=42,
-        trainer=TrainerConfig(
-            max_epochs=5,
-            accelerator="gpu",
-            devices=1,
-            enable_progress_bar=False,
-            enable_checkpointing=False,
-        ),
+        max_epochs=5,
+        accelerator="gpu",
+        devices=1,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
         optimizer=OptimizerConfig(name="adam", lr=0.001),
     )
 
@@ -296,13 +288,11 @@ def test_gpu_acceleration():
 
     warmup_config_gpu = TrainingConfig(
         seed=42,
-        trainer=TrainerConfig(
-            max_epochs=1,
-            accelerator="gpu",
-            devices=1,
-            enable_progress_bar=False,
-            enable_checkpointing=False,
-        ),
+        max_epochs=1,
+        accelerator="gpu",
+        devices=1,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
         optimizer=OptimizerConfig(name="adam", lr=0.001),
     )
     # Use external trainer for GPU warmup
@@ -318,8 +308,7 @@ def test_gpu_acceleration():
             datamodule=warmup_dm_gpu,
             loss_nodes=loss_nodes_gpu_warmup,
             metric_nodes=metric_nodes_gpu_warmup,
-            trainer_config=warmup_config_gpu.trainer,
-            optimizer_config=warmup_config_gpu.optimizer,
+            training_config=warmup_config_gpu,
             monitors=[],
         )
         gpu_warmup_trainer.fit()
@@ -354,8 +343,7 @@ def test_gpu_acceleration():
             datamodule=datamodule,
             loss_nodes=loss_nodes_gpu,
             metric_nodes=metric_nodes_gpu,
-            trainer_config=config_gpu.trainer,
-            optimizer_config=config_gpu.optimizer,
+            training_config=config_gpu,
             monitors=[],
         )
         gpu_trainer.fit()
@@ -453,13 +441,11 @@ def test_gpu_batch_size_scaling():
 
         config = TrainingConfig(
             seed=42,
-            trainer=TrainerConfig(
-                max_epochs=3,
-                accelerator="gpu",
-                devices=1,
-                enable_progress_bar=False,
-                enable_checkpointing=False,
-            ),
+            max_epochs=3,
+            accelerator="gpu",
+            devices=1,
+            enable_progress_bar=False,
+            enable_checkpointing=False,
             optimizer=OptimizerConfig(name="adam", lr=0.001),
         )
 
@@ -482,13 +468,11 @@ def test_gpu_batch_size_scaling():
 
         warmup_config = TrainingConfig(
             seed=42,
-            trainer=TrainerConfig(
-                max_epochs=1,
-                accelerator="gpu",
-                devices=1,
-                enable_progress_bar=False,
-                enable_checkpointing=False,
-            ),
+            max_epochs=1,
+            accelerator="gpu",
+            devices=1,
+            enable_progress_bar=False,
+            enable_checkpointing=False,
             optimizer=OptimizerConfig(name="adam", lr=0.001),
         )
         # Use external trainer for warmup
@@ -504,8 +488,7 @@ def test_gpu_batch_size_scaling():
                 datamodule=warmup_dm,
                 loss_nodes=loss_nodes_batch_warmup,
                 metric_nodes=metric_nodes_batch_warmup,
-                trainer_config=warmup_config.trainer,
-                optimizer_config=warmup_config.optimizer,
+                training_config=warmup_config,
                 monitors=[],
             )
             batch_warmup_trainer.fit()
@@ -540,8 +523,7 @@ def test_gpu_batch_size_scaling():
                 datamodule=datamodule,
                 loss_nodes=loss_nodes_batch,
                 metric_nodes=metric_nodes_batch,
-                trainer_config=config.trainer,
-                optimizer_config=config.optimizer,
+                training_config=config,
                 monitors=[],
             )
             batch_trainer.fit()
@@ -637,13 +619,11 @@ def test_gpu_memory_scaling():
 
         config = TrainingConfig(
             seed=42,
-            trainer=TrainerConfig(
-                max_epochs=1,
-                accelerator="gpu",
-                devices=1,
-                enable_progress_bar=False,
-                enable_checkpointing=False,
-            ),
+            max_epochs=1,
+            accelerator="gpu",
+            devices=1,
+            enable_progress_bar=False,
+            enable_checkpointing=False,
             optimizer=OptimizerConfig(name="adam", lr=0.001),
         )
 
@@ -660,8 +640,7 @@ def test_gpu_memory_scaling():
                 datamodule=datamodule,
                 loss_nodes=loss_nodes_mem,
                 metric_nodes=metric_nodes_mem,
-                trainer_config=config.trainer,
-                optimizer_config=config.optimizer,
+                training_config=config,
                 monitors=[],
             )
             mem_trainer.fit()

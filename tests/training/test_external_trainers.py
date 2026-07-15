@@ -12,7 +12,7 @@ from cuvis_ai_schemas.execution import Context, Metric
 from cuvis_ai_schemas.pipeline import PortSpec
 
 from cuvis_ai_core.data.datamodule import BaseCuvisAIDataModule
-from cuvis_ai_core.training.config import OptimizerConfig, TrainerConfig
+from cuvis_ai_core.training.config import OptimizerConfig, TrainingConfig
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from tests.fixtures import (
     MockStatisticalTrainableNode,
@@ -44,12 +44,14 @@ class TestGradientTrainer:
             pass
 
         datamodule = MockDataModule()
-        trainer_config = TrainerConfig(max_epochs=1)
+        training_config = TrainingConfig(max_epochs=1)
 
         # Should raise TypeError - missing required parameter
         with pytest.raises(TypeError, match="loss_nodes"):
             GradientTrainer(
-                pipeline=pipeline, datamodule=datamodule, trainer_config=trainer_config
+                pipeline=pipeline,
+                datamodule=datamodule,
+                training_config=training_config,
             )
 
     def test_gradient_trainer_creates_executor_once(self):
@@ -86,11 +88,11 @@ class TestGradientTrainer:
         class MockDataModule(pl.LightningDataModule):
             pass
 
-        trainer_config = TrainerConfig(max_epochs=1)
+        training_config = TrainingConfig(max_epochs=1)
         trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=MockDataModule(),
-            trainer_config=trainer_config,
+            training_config=training_config,
             loss_nodes=[loss_node],
         )
 
@@ -136,11 +138,11 @@ class TestGradientTrainer:
             def train_dataloader(self):
                 return [{"dummy": torch.tensor(1.0)}]
 
-        trainer_config = TrainerConfig(max_epochs=1)
+        training_config = TrainingConfig(max_epochs=1)
         trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=MockDataModule(),
-            trainer_config=trainer_config,
+            training_config=training_config,
             loss_nodes=[loss_node],
         )
         trainer.setup("fit")
@@ -324,23 +326,22 @@ class TestGradientTrainer:
         assert projection_node_id is not None, "Could not find projection node"
 
         # Step 3: Gradient training
-        trainer_config = TrainerConfig(
+        training_config = TrainingConfig(
             max_epochs=3,
             enable_progress_bar=False,
             enable_checkpointing=False,
+            optimizer=OptimizerConfig(name="adam", lr=0.01),
         )
-        optimizer_config = OptimizerConfig(name="adam", lr=0.01)
 
         grad_trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
-            trainer_config=trainer_config,
-            optimizer_config=optimizer_config,
+            training_config=training_config,
             loss_nodes=[loss_node],
         )
 
         # Override to disable validation
-        grad_trainer.trainer_config.__dict__.update(
+        grad_trainer.training_config.__dict__.update(
             {
                 "num_sanity_val_steps": 0,
                 "limit_val_batches": 0,
@@ -673,7 +674,7 @@ class TestEpochPooledMetrics:
             datamodule=datamodule,
             loss_nodes=[loss],
             metric_nodes=[auroc],
-            optimizer_config=OptimizerConfig(name="sgd", lr=0.01),
+            training_config=TrainingConfig(optimizer=OptimizerConfig(name="sgd", lr=0.01)),
         )
         return trainer, datamodule
 

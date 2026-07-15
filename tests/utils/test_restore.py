@@ -504,6 +504,68 @@ def test_restore_pipeline_cli_passes_vis_ext(monkeypatch) -> None:
     assert captured["pipeline_vis_ext"] == restore_mod.PipelineVisFormat.MD
 
 
+def test_resolve_splits_path_rewrites_relative_to_base_dir(tmp_path: Path) -> None:
+    """A relative splits_path resolves against the trainrun dir, not the CWD Hydra sets."""
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    cfg = DataConfig(
+        data_module="npz_multi",
+        splits=DataSplitConfig(splits_path="splits.json"),
+        params={"index_csv": "x.csv"},
+    )
+    out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=tmp_path)
+    assert out.splits.splits_path == str(tmp_path / "splits.json")
+    assert Path(out.splits.splits_path).is_absolute()
+
+
+def test_resolve_splits_path_relative_base_dir_becomes_absolute() -> None:
+    """A RELATIVE base_dir still yields an absolute splits_path.
+
+    Regression: the previous ``str(base_dir / splits_path)`` left the result relative
+    when base_dir was relative (a relative ``--trainrun-path``), so split loading
+    stayed CWD-dependent. ``.resolve()`` closes that. ``restore_trainrun`` now also
+    absolutizes ``trainrun_path`` at entry, but the helper must be robust on its own.
+    """
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    cfg = DataConfig(
+        data_module="npz_multi",
+        splits=DataSplitConfig(splits_path="splits.json"),
+        params={"index_csv": "x.csv"},
+    )
+    out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=Path("configs/tr"))
+    assert Path(out.splits.splits_path).is_absolute()
+    assert out.splits.splits_path.replace("\\", "/").endswith("configs/tr/splits.json")
+
+
+def test_resolve_splits_path_absolute_and_none_pass_through(tmp_path: Path) -> None:
+    from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+    abs_path = str(tmp_path / "splits.json")
+    cfg_abs = DataConfig(
+        data_module="npz_multi", splits=DataSplitConfig(splits_path=abs_path)
+    )
+    assert (
+        restore_mod._resolve_splits_path_in_config(
+            cfg_abs, base_dir=tmp_path
+        ).splits.splits_path
+        == abs_path
+    )  # absolute untouched
+
+    cfg_inline = DataConfig(data_module="fake", splits=DataSplitConfig(train=[]))
+    assert (
+        restore_mod._resolve_splits_path_in_config(cfg_inline, base_dir=tmp_path)
+        is cfg_inline
+    )  # no splits_path -> identity
+
+    cfg_rel = DataConfig(
+        data_module="npz_multi", splits=DataSplitConfig(splits_path="splits.json")
+    )
+    assert (
+        restore_mod._resolve_splits_path_in_config(cfg_rel, base_dir=None) is cfg_rel
+    )  # no base_dir -> identity
+
+
 def test_restore_trainrun_cli_forwards_args(monkeypatch) -> None:
     captured: dict = {}
     monkeypatch.setattr(
@@ -526,3 +588,58 @@ def test_restore_trainrun_cli_forwards_args(monkeypatch) -> None:
     assert captured["trainrun_path"] == "outputs/run.yaml"
     assert captured["mode"] == "train"
     assert captured["overrides"] == ["data.batch_size=8"]
+
+
+def test_create_datamodule_from_config_sets_up_fit(monkeypatch) -> None:
+    """The trainrun datamodule builder resolves the split path, builds the module via the
+    registry, and returns it already ``setup(stage="fit")``."""
+    from unittest.mock import MagicMock
+
+    fake_dm = MagicMock()
+    monkeypatch.setattr(restore_mod, "_build_data_module", lambda *a, **k: fake_dm)
+    monkeypatch.setattr(
+        restore_mod, "_resolve_splits_path_in_config", lambda data, base: data
+    )
+
+    result = restore_mod._create_datamodule_from_config(MagicMock())
+
+    fake_dm.setup.assert_called_once_with(stage="fit")
+    assert result is fake_dm
+
+
+def test_restore_trainrun_redirects_checkpoint_dirpath(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A gradient trainrun that configures a checkpoint callback has its ``dirpath``
+    redirected under the run's ``output_dir`` before the GradientTrainer is built."""
+    import copy
+
+    exp = copy.deepcopy(mock_experiment_dict)
+    exp["training"]["callbacks"] = {"checkpoint": {"monitor": "val_loss"}}
+    path = _write_trainrun(tmp_path, exp, mock_pipeline_dict)
+
+    captured: dict = {}
+
+    class _CapturingGrad(RecordingTrainer):
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: FakeRestorePipeline(node_fits=(True,)),
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", _CapturingGrad)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    dirpath = captured["training_config"].callbacks.checkpoint.dirpath
+    assert dirpath.endswith("checkpoints")

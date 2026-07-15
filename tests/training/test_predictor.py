@@ -70,6 +70,29 @@ class PredictSinkNode(Node):
         self.close_calls += 1
 
 
+class GatedSinkNode(Node):
+    """A sink gated to VAL/TEST only (like a metric node), to exercise stage routing."""
+
+    INPUT_SPECS = {
+        "doubled": PortSpec(
+            dtype=torch.float32, shape=(-1, -1), description="Input stream"
+        ),
+    }
+    OUTPUT_SPECS = {}
+
+    def __init__(self, **kwargs) -> None:
+        kwargs.setdefault("execution_stages", {ExecutionStage.VAL, ExecutionStage.TEST})
+        super().__init__(**kwargs)
+        self.forward_calls = 0
+
+    def forward(
+        self, doubled: torch.Tensor, context: Context | None = None, **_
+    ) -> dict:
+        del doubled, context
+        self.forward_calls += 1
+        return {}
+
+
 class DictDataset(Dataset):
     def __init__(self, values: torch.Tensor) -> None:
         self.values = values
@@ -153,6 +176,55 @@ def test_predictor_runs_inference_with_context_and_hooks() -> None:
     ]
     assert [ctx.batch_idx for ctx in source.contexts] == [0, 1, 2]
     assert all(device.type == "cpu" for device in source.input_devices)
+
+
+def _build_gated_pipeline() -> tuple[CuvisPipeline, PredictSourceNode, GatedSinkNode]:
+    pipeline = CuvisPipeline("predict_gated_pipeline")
+    source = PredictSourceNode(name="source")
+    gated = GatedSinkNode(name="gated")
+    pipeline.connect(source.outputs.doubled, gated.inputs.doubled)
+    return pipeline, source, gated
+
+
+def test_predictor_stage_selects_which_nodes_fire() -> None:
+    # Default stage INFERENCE: a VAL/TEST-gated node (e.g. a metric node) does not run.
+    pipeline, source, gated = _build_gated_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    Predictor(pipeline=pipeline, datamodule=datamodule).predict(collect_outputs=False)
+    assert gated.forward_calls == 0
+    assert all(ctx.stage == ExecutionStage.INFERENCE for ctx in source.contexts)
+
+    # stage=TEST: the gated node fires for every batch, in its native stage.
+    pipeline, source, gated = _build_gated_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    Predictor(pipeline=pipeline, datamodule=datamodule).predict(
+        stage=ExecutionStage.TEST, collect_outputs=False
+    )
+    assert gated.forward_calls == 2
+    assert all(ctx.stage == ExecutionStage.TEST for ctx in source.contexts)
+
+
+def test_predictor_collect_ports_filters_and_moves_to_cpu() -> None:
+    # collect_ports keeps only the named ports and returns them detached on CPU.
+    pipeline, _, _ = _build_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    kept = Predictor(pipeline=pipeline, datamodule=datamodule).predict(
+        collect_outputs=True, collect_ports={"doubled"}
+    )
+    assert kept is not None and len(kept) == 2
+    for out in kept:
+        assert set(out) == {("source", "doubled")}
+        value = out[("source", "doubled")]
+        assert value.device.type == "cpu"
+        assert not value.requires_grad
+
+    # A port name that no node produces yields empty per-batch dicts (nothing retained).
+    pipeline, _, _ = _build_pipeline()
+    datamodule = PredictDataModule(values=torch.tensor([[1.0], [2.0]]), batch_size=1)
+    dropped = Predictor(pipeline=pipeline, datamodule=datamodule).predict(
+        collect_outputs=True, collect_ports={"not_a_port"}
+    )
+    assert dropped is not None and all(out == {} for out in dropped)
 
 
 def test_predictor_max_batches_limits_iteration() -> None:

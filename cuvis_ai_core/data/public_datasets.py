@@ -152,6 +152,12 @@ class PublicDatasets:
             "description": "Hyperspectral foreign-object detection on a lentil conveyor — 69-frame XMR CU3S session with Dinomaly companion pipeline",
             "size": "~6GB",
         },
+        "Industrial_FOD_Lentils": {
+            "repo_id": "cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Lentils",
+            "target_dir": "XMR_Industrial_Foreign_Object_Detection_Lentils",
+            "description": "Full industrial foreign-object detection HSI dataset on a lentil conveyor: 15 merged XMR CU3S sessions across three acquisition days (1,136 frames, 696 annotated), pixel-level COCO masks for 7 foreign-object classes",
+            "size": "~57GB",
+        },
         "Blood_Perfusion": {
             "repo_id": "cubert-gmbh/XMR_Demo_Blood_Perfusion",
             "target_dir": "XMR_Demo_Blood_Perfusion",
@@ -169,6 +175,7 @@ class PublicDatasets:
     # Convenience aliases
     _datasets["lentils"] = _datasets["Lentils"]
     _datasets["demo_industrial_fod_lentils"] = _datasets["Demo_Industrial_FOD_Lentils"]
+    _datasets["industrial_fod_lentils"] = _datasets["Industrial_FOD_Lentils"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
     _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]
 

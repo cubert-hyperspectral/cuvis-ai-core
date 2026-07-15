@@ -11,9 +11,7 @@ from torch.optim import Optimizer
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import (
-    OptimizerConfig,
-    SchedulerConfig,
-    TrainerConfig,
+    TrainingConfig,
     create_callbacks_from_config,
 )
 from cuvis_ai_schemas.enums import ExecutionStage
@@ -35,10 +33,9 @@ class GradientTrainer(pl.LightningModule):
     metric_nodes : list[Node], optional
         List of metric nodes whose outputs should be logged during validation/testing.
         Each metric node should output {"metrics": list[Metric]}.
-    trainer_config : TrainerConfig, optional
-        PyTorch Lightning trainer configuration
-    optimizer_config : OptimizerConfig, optional
-        Optimizer and scheduler configuration
+    training_config : TrainingConfig, optional
+        Full training configuration: the ``pl.Trainer`` keyword arguments plus the
+        optimizer, scheduler, and callbacks. Defaults to ``TrainingConfig()``.
     monitors : list, optional
         List of monitoring objects (TensorBoard, etc.)
 
@@ -64,8 +61,7 @@ class GradientTrainer(pl.LightningModule):
     ...     datamodule=datamodule,
     ...     loss_nodes=[bce_loss, entropy_loss],
     ...     metric_nodes=[iou_metric],
-    ...     trainer_config=cfg.trainer,
-    ...     optimizer_config=cfg.optimizer,
+    ...     training_config=cfg,
     ... )
     >>> trainer.fit()
 
@@ -94,9 +90,7 @@ class GradientTrainer(pl.LightningModule):
         datamodule: pl.LightningDataModule,
         loss_nodes: list[Node],
         metric_nodes: list[Node] | None = None,
-        trainer_config: TrainerConfig | None = None,
-        optimizer_config: OptimizerConfig | None = None,
-        scheduler_config: SchedulerConfig | None = None,
+        training_config: TrainingConfig | None = None,
         monitors: list | None = None,
         callbacks: list | None = None,
     ) -> None:
@@ -122,14 +116,9 @@ class GradientTrainer(pl.LightningModule):
                     f"{set(pooled_names)} but has no pooled_metrics() method, so those "
                     "metrics would never be logged."
                 )
-        self.trainer_config = trainer_config or TrainerConfig()
-        self.optimizer_config = optimizer_config or OptimizerConfig()
-        self.scheduler_config = scheduler_config
-        if self.scheduler_config is None and hasattr(
-            self.optimizer_config, "scheduler"
-        ):
-            # Backward compatibility: allow scheduler attached to optimizer config
-            self.scheduler_config = self.optimizer_config.scheduler
+        self.training_config = training_config or TrainingConfig()
+        self.optimizer_config = self.training_config.optimizer
+        self.scheduler_config = self.training_config.scheduler
         self.monitors = monitors or []
         self.callbacks = callbacks or []
         self.trainer = None  # Store trainer instance for reuse in test()
@@ -140,40 +129,38 @@ class GradientTrainer(pl.LightningModule):
         Unified API - both GradientTrainer and StatisticalTrainer use .fit()
         """
 
-        # === ADD THIS LOGGING BLOCK HERE (right after docstring) ===
+        # Re-seed here as a fallback for direct GradientTrainer users who bypass
+        # the restore/gRPC orchestration (which seeds before building the pipeline
+        # and datamodule, the point where weight init and data splitting happen).
+        pl.seed_everything(self.training_config.seed, workers=True)
+
+        config_callbacks = self.training_config.callbacks
         logger.info("=" * 60)
         logger.info(
-            f"Training: max_epochs={self.trainer_config.max_epochs}, "
+            f"Training: max_epochs={self.training_config.max_epochs}, "
             f"optimizer={self.optimizer_config.name}(lr={self.optimizer_config.lr})"
         )
-        if (
-            self.trainer_config.callbacks
-            and self.trainer_config.callbacks.early_stopping
-        ):
-            es = self.trainer_config.callbacks.early_stopping[0]
+        if config_callbacks and config_callbacks.early_stopping:
+            es = config_callbacks.early_stopping[0]
             logger.info(
                 f"EarlyStopping: {es.monitor} (patience={es.patience}, mode={es.mode})"
             )
         logger.info("=" * 60)
-        # === END OF LOGGING BLOCK ===
 
-        # Convert TrainerConfig to kwargs for pl.Trainer
-        trainer_kwargs = self.trainer_config.model_dump(exclude_none=True)
-        trainer_kwargs.pop("callbacks", None)
+        # The pl.Trainer keyword arguments (explicit allowlist; callbacks handled below).
+        trainer_kwargs = self.training_config.to_lightning_kwargs()
 
-        # Determine which callbacks to use:
-        # 1. If explicit callbacks passed to __init__, use those (backward compatibility)
-        # 2. Otherwise, create callbacks from trainer_config.callbacks if present
+        # Callbacks: explicit ones passed to __init__ win (e.g. the gRPC progress
+        # stream); otherwise build them from the config.
         if self.callbacks:
             trainer_kwargs["callbacks"] = self.callbacks
-        elif self.trainer_config.callbacks is not None:
-            trainer_kwargs["callbacks"] = create_callbacks_from_config(
-                self.trainer_config.callbacks
-            )
+        elif config_callbacks is not None:
+            trainer_kwargs["callbacks"] = create_callbacks_from_config(config_callbacks)
 
-            # Automatic checkpointing: enable if ModelCheckpoint callback is configured
-            if self.trainer_config.callbacks.checkpoint is not None:
-                trainer_kwargs["enable_checkpointing"] = True
+        # Automatic checkpointing: enable whenever a checkpoint callback is
+        # configured, independent of how callbacks were supplied.
+        if config_callbacks is not None and config_callbacks.checkpoint is not None:
+            trainer_kwargs["enable_checkpointing"] = True
 
         self.trainer = pl.Trainer(**trainer_kwargs)
         self.trainer.fit(model=self, datamodule=self.datamodule)
@@ -478,7 +465,7 @@ class GradientTrainer(pl.LightningModule):
         scheduler = create_scheduler(
             self.scheduler_config,
             optimizer,
-            self.trainer_config.max_epochs,
+            self.training_config.max_epochs,
         )
         if scheduler is None:
             return optimizer

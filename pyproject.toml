@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "cuvis-ai-schemas[proto]>=0.7.0",
+    "cuvis-ai-schemas[proto]>=0.8.0",
     # Core framework dependencies
     "torch>=2.11.0",
     "torchvision>=0.26.0",
@@ -120,6 +120,7 @@ Changelog = "https://github.com/cubert-hyperspectral/cuvis-ai-core/blob/main/CHA
 restore-pipeline = "cuvis_ai_core.utils.restore:restore_pipeline_cli"
 restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
+download-model = "cuvis_ai_core.data.model_weights:download_model_cli"
 suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
 audit-plugin-deps = "scripts.audit_plugin_deps:main"
 provision = "scripts.provision:main"

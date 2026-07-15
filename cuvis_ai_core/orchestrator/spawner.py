@@ -20,9 +20,18 @@ inherits:
   assume ``HOME`` exists (``huggingface_hub``, ``matplotlib``,
   ``transformers``, Jupyter, pip cache) write there instead of the
   real user ``HOME``.
+- HF / torch weight caches are pointed at one shared, persistent model
+  cache (``model_cache_env``) and the child runs ``HF_HUB_OFFLINE=1`` so
+  it resolves weights from that pre-provisioned cache instead of
+  re-downloading into the wiped per-run ``HOME``.
 - CUDA-related vars pass through when GPU is requested.
-- SSH agent socket, ``AWS_*``, ``GITHUB_*``, ``HUGGINGFACE_HUB_TOKEN``,
-  ``.env`` bleed-through, and other implicit credentials are excluded.
+- SSH agent socket, ``AWS_*``, ``GITHUB_*``, ``.env`` bleed-through, and
+  other implicit credentials are excluded, ``HF_TOKEN`` /
+  ``HUGGINGFACE_HUB_TOKEN`` included: the child runs untrusted plugin code,
+  so it never receives the token. Gated weights are provisioned into the
+  shared cache out-of-band by a trusted tool (the ``download-model`` CLI or
+  the CuvisNEXT provisioning action); see ``model_cache`` and the
+  sandbox-seams tests.
 """
 
 from __future__ import annotations
@@ -41,6 +50,7 @@ import grpc
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 from loguru import logger
 
+from cuvis_ai_core.orchestrator.model_cache import model_cache_env
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 
 # Child-runtime startup deadlines (seconds). The two *_TIMEOUT defaults are
@@ -104,8 +114,17 @@ _DENY_EXACT = frozenset(
         "GITLAB_TOKEN",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "HUGGINGFACE_HUB_TOKEN",
+        # The HF token env vars are stripped: the child runs untrusted plugin
+        # code, so it must not receive a live credential. Gated weights are
+        # provisioned into the shared model cache out-of-band by a trusted tool
+        # (see model_cache_env and test_sandbox_seams.py). huggingface_hub reads
+        # HF_TOKEN or the legacy HUGGING_FACE_HUB_TOKEN (with the underscore);
+        # the token FILE is denied separately by pinning HF_TOKEN_PATH in
+        # _build_child_env. HUGGINGFACE_HUB_TOKEN (no underscore) is not read by
+        # current huggingface_hub, but is kept as harmless belt-and-suspenders.
         "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
@@ -398,6 +417,27 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         env["TEMP"] = str(declared_paths.scratch_dir)
         env["TMP"] = str(declared_paths.scratch_dir)
         env["TMPDIR"] = str(declared_paths.scratch_dir)
+
+        # Point HF / torch weight caches at one shared, persistent model cache and
+        # run the child HF_HUB_OFFLINE=1 so it resolves weights from that
+        # pre-provisioned cache instead of re-downloading into the wiped per-run
+        # HOME. The HF token is denied above; gated weights are provisioned
+        # out-of-band by a trusted tool, never fetched by the untrusted child.
+        env.update(model_cache_env(env))
+
+        # Close the HF token-FILE vector. huggingface_hub.get_token() falls back
+        # from the (denied) env-var token to a token file whose location derives
+        # from HF_TOKEN_PATH -> HF_HOME/token -> XDG_CACHE_HOME/.../token. Rather
+        # than enumerate every locator var, pin HF_TOKEN_PATH (which outranks them
+        # all) at a guaranteed-absent file under the per-run scratch dir: the
+        # child then resolves NO token regardless of the operator's HF_HOME /
+        # XDG_CACHE_HOME. _get_token_from_file() catches FileNotFoundError and
+        # returns None, so this cannot raise. HF_HOME is dropped too: model_cache_env
+        # has already read it to resolve HF_HUB_CACHE (which outranks HF_HOME/hub),
+        # so the child keeps the resolved weight cache but not a pointer into the
+        # operator's real HF home.
+        env.pop("HF_HOME", None)
+        env["HF_TOKEN_PATH"] = str(declared_paths.scratch_dir / ".no-hf-token")
 
         # PATH: prepend the venv's bin/Scripts so child scripts resolve.
         bin_dir = venv_bin_dir(venv_path)

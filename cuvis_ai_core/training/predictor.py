@@ -29,8 +29,21 @@ class Predictor:
         self,
         max_batches: int | None = None,
         collect_outputs: bool = False,
+        stage: ExecutionStage = ExecutionStage.INFERENCE,
+        collect_ports: set[str] | None = None,
     ) -> list[dict[tuple[str, str], Any]] | None:
-        """Run `ExecutionStage.INFERENCE` over the datamodule's predict dataloader."""
+        """Run the pipeline over the datamodule's predict dataloader at `stage`.
+
+        `stage` (default `ExecutionStage.INFERENCE`) is the `Context` stage each batch runs under,
+        and it selects which nodes fire: `pipeline.forward` skips a node whose `execution_stages`
+        excludes the stage. Pass `stage=ExecutionStage.TEST` (or `VAL`) to also run nodes gated to
+        those stages, such as metric nodes, so their accumulated results can be read after the run.
+
+        `collect_ports` bounds what `collect_outputs` retains. When it is `None` the whole
+        per-batch output dict is kept verbatim (device-resident). When it is a set of port names,
+        only outputs whose port name is in the set are kept, and each is detached and moved to CPU,
+        so a full-dataset run does not accumulate device tensors and exhaust GPU memory.
+        """
         if max_batches is not None and max_batches <= 0:
             raise ValueError("max_batches must be None or a positive integer.")
 
@@ -61,19 +74,40 @@ class Predictor:
 
                     moved_batch = self._move_batch_to_device(batch)
                     context = Context(
-                        stage=ExecutionStage.INFERENCE,
+                        stage=stage,
                         batch_idx=batch_idx,
                         global_step=batch_idx,
                     )
                     outputs = self.pipeline.forward(batch=moved_batch, context=context)
                     if collect_outputs:
-                        collected.append(outputs)
+                        collected.append(self._select_outputs(outputs, collect_ports))
                     batch_idx += 1
                 pbar.close()
         finally:
             self._close_nodes()
 
         return collected if collect_outputs else None
+
+    @staticmethod
+    def _select_outputs(
+        outputs: dict[tuple[str, str], Any], collect_ports: set[str] | None
+    ) -> dict[tuple[str, str], Any]:
+        """Pick which outputs to retain for a `collect_outputs` run.
+
+        With `collect_ports=None` the dict is returned as-is (device-resident). With a set of port
+        names, only matching entries are kept and each tensor is detached and moved to CPU, so the
+        GPU tensors from this batch are freed once the batch goes out of scope.
+        """
+        if collect_ports is None:
+            return outputs
+        selected: dict[tuple[str, str], Any] = {}
+        for (node_name, port_name), value in outputs.items():
+            if port_name not in collect_ports:
+                continue
+            selected[(node_name, port_name)] = (
+                value.detach().cpu() if isinstance(value, torch.Tensor) else value
+            )
+        return selected
 
     @staticmethod
     def _estimate_total_batches(

@@ -62,7 +62,6 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
         "training": {
             "max_epochs": 2,
             "optimizer": {"name": "adamw", "lr": 0.001},
-            "trainer": {"max_epochs": 2},
         },
         "loss_nodes": [],
         "metric_nodes": [],

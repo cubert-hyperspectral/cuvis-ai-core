@@ -223,6 +223,31 @@ class TestTrainingServiceErrors:
         assert responses == []
         self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
 
+    def test_train_relative_splits_path_is_invalid_argument(self):
+        """A relative splits_path is baseless on the wire Train path -> rejected.
+
+        RestoreTrainRun resolves a relative splits_path against the trainrun dir;
+        a raw session/request with a relative path has no base dir, so Train must
+        reject it rather than resolve against the child's CWD.
+        """
+        from cuvis_ai_schemas.training.data import DataConfig, DataSplitConfig
+
+        session_id = self.session_manager.create_session()
+        session = self.session_manager.get_session(session_id)
+        session.pipeline = Mock()  # pass require_pipeline
+        session.data_config = DataConfig(
+            data_module="npz_multi",
+            splits=DataSplitConfig(splits_path="splits.json"),  # relative
+        )
+        request = cuvis_ai_pb2.TrainRequest(session_id=session_id)
+        responses = list(self.service.train(request, self.ctx))
+        assert responses == []
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+        assert any(
+            "absolute" in str(c.args[0]).lower()
+            for c in self.ctx.set_details.mock_calls
+        )
+
 
 class TestGrpcHandlerDecorator:
     """Test the @grpc_handler decorator in isolation."""
@@ -606,3 +631,25 @@ class TestPluginServiceClearCache:
         request = cuvis_ai_pb2.ClearPluginCacheRequest(plugin_name="test_plugin")
         response = self.service.clear_plugin_cache(request, self.ctx)
         assert response.cleared_count >= 0
+
+
+def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatch):
+    """The gradient Train RPC seeds, derives callbacks from the config, and constructs
+    the trainer before streaming. A mocked GradientTrainer makes fit() instant so the
+    progress generator drains cleanly (no real training)."""
+    service = TrainingService(SessionManager())
+    monkeypatch.setattr(
+        service, "_configure_gradient_components", lambda *a, **k: ([], [])
+    )
+    training_config = TrainingConfig(seed=7, max_epochs=1)
+
+    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
+        responses = list(
+            service._train_gradient(Mock(), Mock(), Mock(), training_config)
+        )
+
+    mock_gt.assert_called_once()
+    # The (mocked) trainer's fit ran on the worker thread and the stream drained to
+    # completion.
+    assert mock_gt.return_value.fit.called
+    assert responses

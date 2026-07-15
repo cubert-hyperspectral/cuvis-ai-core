@@ -19,7 +19,7 @@ def test_basic_config_resolution(pipeline_factory):
                         "weight_decay": 0.01,
                     },
                     "max_epochs": 100,
-                    "batch_size": 32,
+                    "accumulate_grad_batches": 2,
                 },
                 False,
             )
@@ -47,7 +47,7 @@ def test_config_resolution_with_overrides(pipeline_factory):
                     "seed": 42,
                     "optimizer": {"name": "adamw", "lr": 0.001},
                     "max_epochs": 100,
-                    "batch_size": 32,
+                    "accumulate_grad_batches": 1,
                 },
                 False,
             )
@@ -58,12 +58,12 @@ def test_config_resolution_with_overrides(pipeline_factory):
         config_type="training",
         config_path="training.yaml",
         search_paths=[str(config_dir)],
-        overrides=["optimizer.lr=0.005", "max_epochs=50", "batch_size=64"],
+        overrides=["optimizer.lr=0.005", "max_epochs=50", "accumulate_grad_batches=2"],
     )
 
     assert config_dict["optimizer"]["lr"] == 0.005
     assert config_dict["max_epochs"] == 50
-    assert config_dict["batch_size"] == 64
+    assert config_dict["accumulate_grad_batches"] == 2
     assert config_dict["seed"] == 42
     assert config_dict["optimizer"]["name"] == "adamw"
 
@@ -90,8 +90,7 @@ def test_multiple_search_paths(pipeline_factory, tmp_path):
 max_epochs: 100
 optimizer:
   name: adamw
-  lr: 0.001
-batch_size: 32""")
+  lr: 0.001""")
 
     # Create second config directory
     config_dir2 = tmp_path / "configs2"
@@ -101,8 +100,7 @@ batch_size: 32""")
 max_epochs: 200
 optimizer:
   name: adamw
-  lr: 0.001
-batch_size: 32""")
+  lr: 0.001""")
 
     config_dict = resolve_config_with_hydra(
         config_type="training",
@@ -124,4 +122,4 @@ def test_trainrun_resolution_with_config_root():
     )
 
     assert config_dict["pipeline"] == "../pipeline/gradient_based.yaml"
-    assert config_dict["training"]["trainer"]["max_epochs"] == 20
+    assert config_dict["training"]["max_epochs"] == 20

@@ -214,9 +214,7 @@ class TestWorkflow3_ResumeTraining:
             },
             "training": {
                 "seed": 42,
-                "trainer": {
-                    "max_epochs": 2,
-                },
+                "max_epochs": 2,
             },
         }
         with open(exp_path, "w") as f:

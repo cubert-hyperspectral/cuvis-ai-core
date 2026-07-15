@@ -5,6 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import grpc
@@ -66,6 +67,24 @@ class TrainingService:
             return
 
         try:
+            # A relative splits_path cannot be resolved on the wire Train path:
+            # there is no trainrun file to anchor it. RestoreTrainRun resolves a
+            # relative splits_path against the trainrun dir before it reaches the
+            # session; a raw TrainRequest.data / SetTrainRunConfig with a relative
+            # path is genuinely baseless. Reject it with a clear error instead of
+            # resolving against the child's wiped CWD (wrong file / FileNotFound).
+            splits = data_config_py.splits
+            if (
+                splits is not None
+                and splits.splits_path
+                and not Path(splits.splits_path).is_absolute()
+            ):
+                raise ValueError(
+                    "splits_path must be absolute on the gRPC Train path (no trainrun "
+                    "base dir to resolve against); send an absolute path or load the "
+                    "trainrun via RestoreTrainRun"
+                )
+
             # Create datamodule from data config via the registry dispatch
             datamodule = self._create_data_module(session, data_config_py)
             training_config_py: TrainingConfig | None = None
@@ -420,6 +439,12 @@ class TrainingService:
         training_config: TrainingConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train with gradient-based method and stream progress."""
+        # Seed as early as the Train RPC allows so training-time randomness
+        # (shuffling, dropout, augmentation) is reproducible.
+        import pytorch_lightning as pl
+
+        pl.seed_everything(training_config.seed, workers=True)
+
         loss_nodes, metric_nodes = self._configure_gradient_components(
             session, data_config, training_config
         )
@@ -440,16 +465,12 @@ class TrainingService:
             )
 
         callback_list = [ProgressStreamCallback(progress_handler)]
-        callback_list.extend(
-            create_callbacks_from_config(training_config.trainer.callbacks)
-        )
+        callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
         trainer = GradientTrainer(
             pipeline=session.pipeline,
             datamodule=datamodule,
-            trainer_config=training_config.trainer,
-            optimizer_config=training_config.optimizer,
-            scheduler_config=training_config.scheduler,
+            training_config=training_config,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             callbacks=callback_list,
@@ -484,7 +505,7 @@ class TrainingService:
 
         final_context = Context(
             stage=ExecutionStage.TRAIN,
-            epoch=training_config.trainer.max_epochs,
+            epoch=training_config.max_epochs,
             batch_idx=0,
             global_step=getattr(getattr(trainer, "trainer", None), "global_step", 0),
         )

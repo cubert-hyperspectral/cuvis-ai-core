@@ -356,8 +356,8 @@ class TestInferenceHappyPath:
         assert "bad" not in response.outputs
         assert "bad" not in response.metrics
 
-    def test_inference_fallback_when_requested_spec_unserializable(self):
-        """Requesting only a non-serializable output falls back to all serializable ones."""
+    def test_inference_requested_metadata_does_not_fallback_to_all_outputs(self):
+        """Requesting only metadata returns no tensors instead of serializing everything."""
         self.mock_pipeline.forward.return_value = {
             ("rgb_selector", "band_info"): {"strategy": "x", "bands": [1, 2, 3]},
             ("rgb_selector", "rgb_image"): torch.zeros(2, 3),
@@ -366,9 +366,10 @@ class TestInferenceHappyPath:
         # band_info is a dict and cannot serialize; it is the only requested spec.
         response = self._infer(output_specs=["rgb_selector.band_info"])
         assert "rgb_selector.band_info" not in response.outputs
-        # Fallback returns the rest of the serializable outputs.
-        assert "rgb_selector.rgb_image" in response.outputs
-        assert "detector.scores" in response.outputs
+        # Do not substitute unrelated serializable outputs under a success response.
+        assert "rgb_selector.rgb_image" not in response.outputs
+        assert "detector.scores" not in response.outputs
+        assert len(response.outputs) == 0
 
     def test_inference_tuple_key_formatted(self):
         tensor = torch.randn(2)

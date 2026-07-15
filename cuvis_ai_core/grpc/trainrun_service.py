@@ -171,6 +171,21 @@ class TrainRunService:
 
         trainrun_config = TrainRunConfig.from_dict(trainrun_dict)
 
+        # Resolve a relative splits_path against the trainrun dir, so a restored
+        # trainrun carries an absolute path — parity with the CLI restore path and
+        # with the pipeline-reference resolution below. Reuses the same helper the
+        # CLI uses (lazy import avoids a module-load cycle).
+        if trainrun_config.data is not None:
+            from cuvis_ai_core.utils.restore import _resolve_splits_path_in_config
+
+            resolved_data = _resolve_splits_path_in_config(
+                trainrun_config.data, trainrun_path.parent
+            )
+            if resolved_data is not trainrun_config.data:
+                trainrun_config = trainrun_config.model_copy(
+                    update={"data": resolved_data}
+                )
+
         if trainrun_config.pipeline is not None:
             # An explicit reference must resolve; a failure surfaces loudly with
             # the tried-paths diagnostic (mirrors the CLI restore path) rather

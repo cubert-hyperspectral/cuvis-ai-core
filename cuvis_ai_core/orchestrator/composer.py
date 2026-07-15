@@ -154,7 +154,7 @@ def compose_env(
         spec_hash=spec_hash,
     )
 
-    root = _resolve_cache_root(cache_root)
+    root = resolve_cache_root(cache_root)
     root.mkdir(parents=True, exist_ok=True)
     locks_dir = root / _LOCKS_DIRNAME
     locks_dir.mkdir(exist_ok=True)
@@ -223,7 +223,13 @@ def _build_or_reuse(
     return venv_dir
 
 
-def _resolve_cache_root(override: Path | None) -> Path:
+def resolve_cache_root(override: Path | None = None) -> Path:
+    """Resolve the composed-env / model cache root.
+
+    Resolves ``override`` -> ``$CUVIS_RUN_CACHE_DIR`` -> the default
+    ``~/.cuvis_runs``. Shared with the model-weight cache (``model_cache``) so
+    the venv and weight caches sit under one root.
+    """
     if override is not None:
         return Path(override)
     env_val = os.environ.get(_DEFAULT_CACHE_ROOT_ENV)

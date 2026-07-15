@@ -353,7 +353,7 @@ def test_build_lock_times_out_raises_composer_error(tmp_path: Path, monkeypatch)
 
 def test_resolve_cache_root_defaults_without_override_or_env(monkeypatch):
     monkeypatch.delenv("CUVIS_RUN_CACHE_DIR", raising=False)
-    assert composer_mod._resolve_cache_root(None) == composer_mod._DEFAULT_CACHE_ROOT
+    assert composer_mod.resolve_cache_root(None) == composer_mod._DEFAULT_CACHE_ROOT
 
 
 def test_sweep_stale_partials_noop_when_root_missing(tmp_path: Path):
