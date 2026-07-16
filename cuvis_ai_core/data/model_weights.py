@@ -301,19 +301,18 @@ class ModelWeights:
         # EfficientTAM checkpoints for the RTSAM2 streaming-propagation plugin.
         # Public (Apache-2.0), so no token is needed; the loader reads the config
         # from the installed package, so only the .pt is provisioned here.
-        # revision / sha256 stay None until pinned from a first authorized fetch.
         "efficienttam_s": {
             "repo_id": "yunyangx/efficient-track-anything",
             "filename": "efficienttam_s.pt",
-            "revision": None,
-            "sha256": None,
+            "revision": "9bdd8ab585b19ef95f9c9ed847ac9478301890b4",
+            "sha256": "2b572be30d9e96ee29c8d785fe157c6b079ede7d56fbc8a3671d4120e63c89cd",
             "description": "EfficientTAM small checkpoint (RTSAM2 default; public)",
         },
         "efficienttam_ti": {
             "repo_id": "yunyangx/efficient-track-anything",
             "filename": "efficienttam_ti.pt",
-            "revision": None,
-            "sha256": None,
+            "revision": "9bdd8ab585b19ef95f9c9ed847ac9478301890b4",
+            "sha256": "acbb17b28cca1f860acee09c9ecb6efdb732080dc7a85a07292c31813175fa7d",
             "description": "EfficientTAM tiny checkpoint (RTSAM2; public)",
         },
     }

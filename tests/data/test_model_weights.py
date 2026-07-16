@@ -137,8 +137,12 @@ def test_efficienttam_registry_entries_resolve_public_repo(monkeypatch, tmp_path
     the .pt is provisioned and no token is required."""
     fake = _fake_download_factory()
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+    # The entries pin a real sha256; the fake returns placeholder bytes, so skip
+    # the content check here (sha validation has its own tests).
+    monkeypatch.setattr(ModelWeights, "_validate_sha", classmethod(lambda cls, *a, **k: None))
     monkeypatch.delenv("HF_TOKEN", raising=False)
 
+    pinned_revision = "9bdd8ab585b19ef95f9c9ed847ac9478301890b4"
     for name, filename in (
         ("efficienttam_s", "efficienttam_s.pt"),
         ("efficienttam_ti", "efficienttam_ti.pt"),
@@ -149,7 +153,7 @@ def test_efficienttam_registry_entries_resolve_public_repo(monkeypatch, tmp_path
         call = fake.calls[0]
         assert call["repo_id"] == "yunyangx/efficient-track-anything"
         assert call["filename"] == filename
-        assert call["revision"] is None
+        assert call["revision"] == pinned_revision
         assert call["token"] is None
 
 
