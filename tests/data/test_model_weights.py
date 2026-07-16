@@ -131,6 +131,28 @@ def test_alias_written_even_without_pinned_revision(monkeypatch, tmp_path):
     assert (cache / "models--acme--model" / "refs" / "main").read_text() == "0" * 40
 
 
+def test_efficienttam_registry_entries_resolve_public_repo(monkeypatch, tmp_path):
+    """The RTSAM2 EfficientTAM weights are public (yunyangx repo) and carry no
+    aux files -- the loader reads the config from the installed package, so only
+    the .pt is provisioned and no token is required."""
+    fake = _fake_download_factory()
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    for name, filename in (
+        ("efficienttam_s", "efficienttam_s.pt"),
+        ("efficienttam_ti", "efficienttam_ti.pt"),
+    ):
+        fake.calls.clear()
+        ModelWeights.download_model(name, cache_dir=tmp_path / name)
+        assert len(fake.calls) == 1  # only the checkpoint; no companion aux files
+        call = fake.calls[0]
+        assert call["repo_id"] == "yunyangx/efficient-track-anything"
+        assert call["filename"] == filename
+        assert call["revision"] is None
+        assert call["token"] is None
+
+
 def test_out_copy_places_standalone_file(monkeypatch, tmp_path):
     fake = _fake_download_factory(content=b"payload")
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
