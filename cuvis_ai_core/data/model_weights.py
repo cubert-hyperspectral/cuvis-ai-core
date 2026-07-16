@@ -133,6 +133,13 @@ class ModelWeights:
                 force_download=force,
             )
 
+        # Make the provisioned cache resolvable offline by the DEFAULT revision: a
+        # loader that calls hf_hub_download without a revision (e.g. SAM3's builder)
+        # resolves "main" via refs/main, which hf_hub_download does not write for a
+        # pinned commit. Alias it to the commit we actually fetched so the cache is
+        # offline-complete -- for any model, not only a commit-pinned one.
+        cls._alias_default_revision(resolved)
+
         if out is not None:
             out = Path(out)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +219,36 @@ class ModelWeights:
         from cuvis_ai_core.orchestrator.model_cache import hf_cache_dir
 
         return hf_cache_dir(os.environ)
+
+    @classmethod
+    def _alias_default_revision(cls, cached_file: Path) -> None:
+        """Alias the default revision to the fetched commit so offline loads resolve.
+
+        ``hf_hub_download(revision=<commit>)`` populates ``snapshots/<commit>`` and
+        ``blobs/`` but writes no ``refs/main``. A loader that requests the default
+        revision offline (huggingface's ``DEFAULT_REVISION`` -- ``main`` -- which is
+        what SAM3's builder does by calling ``hf_hub_download`` with no revision)
+        reads ``refs/main`` and fails with a local-cache miss when it is absent,
+        despite the snapshot being present. Write it, pointing at the commit actually
+        fetched, parsed from HF's cache layout
+        ``<cache>/models--*/snapshots/<commit>/<file>``. No-op for a non-standard path
+        (e.g. an ``--out`` copy).
+        """
+        snapshot_dir = cached_file.parent  # .../snapshots/<commit>
+        snapshots = snapshot_dir.parent  # .../snapshots
+        repo_dir = snapshots.parent  # .../models--<org>--<name>
+        if snapshots.name != "snapshots" or not repo_dir.name.startswith("models--"):
+            return  # not the standard HF cache layout; nothing to alias
+        try:
+            from huggingface_hub.constants import DEFAULT_REVISION
+        except Exception:  # pragma: no cover - stable constant; fall back defensively
+            DEFAULT_REVISION = "main"
+        ref = repo_dir / "refs" / DEFAULT_REVISION
+        try:
+            ref.parent.mkdir(parents=True, exist_ok=True)
+            ref.write_text(snapshot_dir.name)
+        except OSError as exc:  # non-fatal: the snapshot download already succeeded
+            cls._log(f"warning: could not write default ref {ref}: {exc}")
 
     @classmethod
     def _validate_sha(cls, path: Path, *, expected: str | None) -> None:
