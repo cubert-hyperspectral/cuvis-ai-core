@@ -1,10 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## 0.11.1 - 2026-07-17
 
 - The `download-model` CLI now provisions a complete HuggingFace cache: after fetching a checkpoint pinned to a commit revision (which `hf_hub_download` leaves without a `refs/main`), it aliases the repo's default revision to the fetched commit, so a loader that resolves the default revision offline (as SAM3's builder does) finds the snapshot instead of failing with a local-cache miss. Added tests.
 - Registered the public EfficientTAM checkpoints (`download-model efficienttam_s` / `efficienttam_ti`, from `yunyangx/efficient-track-anything`) so the RTSAM2 streaming-propagation plugin resolves its weights from the shared offline cache like SAM3.
 - New public dataset `Industrial_FOD_Bedding` (`dataset download Industrial_FOD_Bedding`): a 6-channel VIS+SWIR (X4) still-frame foreign-object-detection set on bedding substrate, 252 frames (193 train / 59 val), with pixel masks for 23 foreign-object classes.
+- Raised the `click` floor to `>=8.4.2` for PYSEC-2026-2132, a command-injection flaw in `click.edit()`; this lets the sam3 / rtsam2 plugins raise their own `click` floor without tripping the plugin/core dependency-floor audit.
 
 ## 0.11.0 - 2026-07-15
 
