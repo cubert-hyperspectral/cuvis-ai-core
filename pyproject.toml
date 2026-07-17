@@ -65,7 +65,7 @@ dependencies = [
     "pycocotools>=2.0.11",
     "graphviz>=0.21",
     "scikit-learn>=1.8.0",
-    "click>=8.3.3",
+    "click>=8.4.2",
     "packaging>=25.0",
     # Per-run child-env composer (orchestrator package)
     "filelock>=3.20.3",

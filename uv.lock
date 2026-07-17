@@ -771,7 +771,7 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "click", specifier = ">=8.3.3" },
+    { name = "click", specifier = ">=8.4.2" },
     { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.8.0" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
