@@ -47,7 +47,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "numpy>=2.4.1",
     "opencv-python-headless>=4.13.0.92",
-    "pillow>=12.2.0",
+    "pillow>=12.3.0",
     # Security floors for transitively-pulled packages, raised here so downstream
     # plugins inherit the fix instead of pinning each individually:
     #   gitpython CVE-2026-42215 / 42284 / 44244, GHSA-mv93-w799-cj2w

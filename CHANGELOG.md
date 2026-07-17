@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.2 - 2026-07-17
+
+- Raised the `pillow` floor to `>=12.3.0` (locked 12.3.0) for the batch of advisories fixed in Pillow 12.3.0: PYSEC-2026-2253/2254/2255/2256 (decompression-bomb checks bypassed in the PCF/BDF/GD font and FontFile paths), PYSEC-2026-2257 (Windows viewer `cmd.exe` shell injection), PYSEC-2026-3451 (coordinate out-of-bounds write), PYSEC-2026-3452 (EPS `%%BeginBinary` infinite loop), and PYSEC-2026-3453 (ImageCms heap corruption). Lets the plugins raise their own `pillow` floor without tripping the plugin/core dependency-floor audit.
+
 ## 0.11.1 - 2026-07-17
 
 - The `download-model` CLI now provisions a complete HuggingFace cache: after fetching a checkpoint pinned to a commit revision (which `hf_hub_download` leaves without a `refs/main`), it aliases the repo's default revision to the fetched commit, so a loader that resolves the default revision offline (as SAM3's builder does) finds the snapshot instead of failing with a local-cache miss. Added tests.
