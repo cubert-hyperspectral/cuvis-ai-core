@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- The `download-model` CLI now provisions a complete HuggingFace cache: after fetching a checkpoint pinned to a commit revision (which `hf_hub_download` leaves without a `refs/main`), it aliases the repo's default revision to the fetched commit, so a loader that resolves the default revision offline (as SAM3's builder does) finds the snapshot instead of failing with a local-cache miss. Added tests.
+- Registered the public EfficientTAM checkpoints (`download-model efficienttam_s` / `efficienttam_ti`, from `yunyangx/efficient-track-anything`) so the RTSAM2 streaming-propagation plugin resolves its weights from the shared offline cache like SAM3.
+- New public dataset `Industrial_FOD_Bedding` (`dataset download Industrial_FOD_Bedding`): a 6-channel VIS+SWIR (X4) still-frame foreign-object-detection set on bedding substrate, 252 frames (193 train / 59 val), with pixel masks for 23 foreign-object classes.
+
 ## 0.11.0 - 2026-07-15
 
 - **Adopted the flat `TrainingConfig` (folds `TrainerConfig` in, needs `cuvis-ai-schemas>=0.8.0`).** `GradientTrainer.__init__` now takes a single `training_config: TrainingConfig` instead of separate `trainer_config` / `optimizer_config` / `scheduler_config` params, deriving the optimizer and scheduler from it and building `pl.Trainer` kwargs via `training_config.to_lightning_kwargs()`. The `TrainerConfig` re-export is removed. Flattened `configs/training/default.yaml` (the nested `trainer:` block is gone). Breaking for callers that constructed `GradientTrainer` with the old per-config params or imported `TrainerConfig` from `cuvis_ai_core.training.config`. Migration: a pre-0.8 `trainrun.yaml` with a nested `trainer:` block (or top-level `batch_size` / `num_workers`) now fails `restore-trainrun` under `extra="forbid"` — flatten the `trainer:` block into `training:`. A statistical-only run must set `training: null` (with `training` present but non-null, `restore-trainrun` builds a `GradientTrainer`).

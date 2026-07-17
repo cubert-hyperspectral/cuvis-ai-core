@@ -158,6 +158,12 @@ class PublicDatasets:
             "description": "Full industrial foreign-object detection HSI dataset on a lentil conveyor: 15 merged XMR CU3S sessions across three acquisition days (1,136 frames, 696 annotated), pixel-level COCO masks for 7 foreign-object classes",
             "size": "~57GB",
         },
+        "Industrial_FOD_Bedding": {
+            "repo_id": "cubert-gmbh/X4_SWIR_Industrial_Foreign_Object_Detection_Bedding",
+            "target_dir": "X4_SWIR_Industrial_Foreign_Object_Detection_Bedding",
+            "description": "Industrial foreign-object detection in bedding substrate: 6-channel VIS+SWIR X4 still frames (450/550/625/1050/1200/1450 nm), 252 frames (193 train / 59 val), pixel masks for 23 foreign-object classes",
+            "size": "~170GB",
+        },
         "Blood_Perfusion": {
             "repo_id": "cubert-gmbh/XMR_Demo_Blood_Perfusion",
             "target_dir": "XMR_Demo_Blood_Perfusion",
@@ -176,6 +182,7 @@ class PublicDatasets:
     _datasets["lentils"] = _datasets["Lentils"]
     _datasets["demo_industrial_fod_lentils"] = _datasets["Demo_Industrial_FOD_Lentils"]
     _datasets["industrial_fod_lentils"] = _datasets["Industrial_FOD_Lentils"]
+    _datasets["industrial_fod_bedding"] = _datasets["Industrial_FOD_Bedding"]
     _datasets["blood_perfusion"] = _datasets["Blood_Perfusion"]
     _datasets["demo_object_tracking"] = _datasets["Demo_Object_Tracking"]
 

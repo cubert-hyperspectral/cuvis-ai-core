@@ -23,7 +23,16 @@ def _fake_download_factory(content: bytes = b"weights-bytes"):
         cache_dir=None,
         force_download=False,
     ):
-        target = Path(cache_dir) / filename
+        # Emulate HF's cache layout so the downloader's default-revision aliasing
+        # (which parses <cache>/models--*/snapshots/<commit>/<file>) sees a real path.
+        commit = revision or "0" * 40
+        target = (
+            Path(cache_dir)
+            / ("models--" + repo_id.replace("/", "--"))
+            / "snapshots"
+            / commit
+            / filename
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         _fake.calls.append(
@@ -93,6 +102,59 @@ def test_revision_is_pinned(monkeypatch, tmp_path):
         repo_id="a/b", filename="w.pt", revision="abc123", cache_dir=tmp_path / "c"
     )
     assert fake.calls[-1]["revision"] == "abc123"
+
+
+def test_download_aliases_default_revision_to_fetched_commit(monkeypatch, tmp_path):
+    """hf_hub_download(revision=<commit>) writes no refs/main; the downloader must
+    alias the default revision to the fetched commit so an offline loader that
+    requests the default resolves the snapshot."""
+    fake = _fake_download_factory()
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+
+    commit = "a" * 40
+    cache = tmp_path / "cache"
+    ModelWeights.download_model(
+        repo_id="acme/model", filename="w.pt", revision=commit, cache_dir=cache
+    )
+    assert (cache / "models--acme--model" / "refs" / "main").read_text() == commit
+
+
+def test_alias_written_even_without_pinned_revision(monkeypatch, tmp_path):
+    """The alias is driven by the resolved snapshot commit, not the revision arg, so
+    it is written for any provisioned model -- not only commit-pinned ones."""
+    fake = _fake_download_factory()
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+
+    cache = tmp_path / "cache"
+    ModelWeights.download_model(repo_id="acme/model", filename="w.pt", cache_dir=cache)
+    # The fake resolves an unspecified revision to a placeholder commit.
+    assert (cache / "models--acme--model" / "refs" / "main").read_text() == "0" * 40
+
+
+def test_efficienttam_registry_entries_resolve_public_repo(monkeypatch, tmp_path):
+    """The RTSAM2 EfficientTAM weights are public (yunyangx repo) and carry no
+    aux files -- the loader reads the config from the installed package, so only
+    the .pt is provisioned and no token is required."""
+    fake = _fake_download_factory()
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake)
+    # The entries pin a real sha256; the fake returns placeholder bytes, so skip
+    # the content check here (sha validation has its own tests).
+    monkeypatch.setattr(ModelWeights, "_validate_sha", classmethod(lambda cls, *a, **k: None))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    pinned_revision = "9bdd8ab585b19ef95f9c9ed847ac9478301890b4"
+    for name, filename in (
+        ("efficienttam_s", "efficienttam_s.pt"),
+        ("efficienttam_ti", "efficienttam_ti.pt"),
+    ):
+        fake.calls.clear()
+        ModelWeights.download_model(name, cache_dir=tmp_path / name)
+        assert len(fake.calls) == 1  # only the checkpoint; no companion aux files
+        call = fake.calls[0]
+        assert call["repo_id"] == "yunyangx/efficient-track-anything"
+        assert call["filename"] == filename
+        assert call["revision"] == pinned_revision
+        assert call["token"] is None
 
 
 def test_out_copy_places_standalone_file(monkeypatch, tmp_path):

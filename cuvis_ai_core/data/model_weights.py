@@ -133,6 +133,13 @@ class ModelWeights:
                 force_download=force,
             )
 
+        # Make the provisioned cache resolvable offline by the DEFAULT revision: a
+        # loader that calls hf_hub_download without a revision (e.g. SAM3's builder)
+        # resolves "main" via refs/main, which hf_hub_download does not write for a
+        # pinned commit. Alias it to the commit we actually fetched so the cache is
+        # offline-complete -- for any model, not only a commit-pinned one.
+        cls._alias_default_revision(resolved)
+
         if out is not None:
             out = Path(out)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +221,36 @@ class ModelWeights:
         return hf_cache_dir(os.environ)
 
     @classmethod
+    def _alias_default_revision(cls, cached_file: Path) -> None:
+        """Alias the default revision to the fetched commit so offline loads resolve.
+
+        ``hf_hub_download(revision=<commit>)`` populates ``snapshots/<commit>`` and
+        ``blobs/`` but writes no ``refs/main``. A loader that requests the default
+        revision offline (huggingface's ``DEFAULT_REVISION`` -- ``main`` -- which is
+        what SAM3's builder does by calling ``hf_hub_download`` with no revision)
+        reads ``refs/main`` and fails with a local-cache miss when it is absent,
+        despite the snapshot being present. Write it, pointing at the commit actually
+        fetched, parsed from HF's cache layout
+        ``<cache>/models--*/snapshots/<commit>/<file>``. No-op for a non-standard path
+        (e.g. an ``--out`` copy).
+        """
+        snapshot_dir = cached_file.parent  # .../snapshots/<commit>
+        snapshots = snapshot_dir.parent  # .../snapshots
+        repo_dir = snapshots.parent  # .../models--<org>--<name>
+        if snapshots.name != "snapshots" or not repo_dir.name.startswith("models--"):
+            return  # not the standard HF cache layout; nothing to alias
+        try:
+            from huggingface_hub.constants import DEFAULT_REVISION
+        except Exception:  # pragma: no cover - stable constant; fall back defensively
+            DEFAULT_REVISION = "main"
+        ref = repo_dir / "refs" / DEFAULT_REVISION
+        try:
+            ref.parent.mkdir(parents=True, exist_ok=True)
+            ref.write_text(snapshot_dir.name)
+        except OSError as exc:  # non-fatal: the snapshot download already succeeded
+            cls._log(f"warning: could not write default ref {ref}: {exc}")
+
+    @classmethod
     def _validate_sha(cls, path: Path, *, expected: str | None) -> None:
         digest = cls._sha256(path)
         if expected:
@@ -260,6 +297,23 @@ class ModelWeights:
             # whole set (SAM3's builder pulls config.json alongside the .pt).
             "aux_files": ["config.json"],
             "description": "SAM3 checkpoint (gated; requires an accepted license)",
+        },
+        # EfficientTAM checkpoints for the RTSAM2 streaming-propagation plugin.
+        # Public (Apache-2.0), so no token is needed; the loader reads the config
+        # from the installed package, so only the .pt is provisioned here.
+        "efficienttam_s": {
+            "repo_id": "yunyangx/efficient-track-anything",
+            "filename": "efficienttam_s.pt",
+            "revision": "9bdd8ab585b19ef95f9c9ed847ac9478301890b4",
+            "sha256": "2b572be30d9e96ee29c8d785fe157c6b079ede7d56fbc8a3671d4120e63c89cd",
+            "description": "EfficientTAM small checkpoint (RTSAM2 default; public)",
+        },
+        "efficienttam_ti": {
+            "repo_id": "yunyangx/efficient-track-anything",
+            "filename": "efficienttam_ti.pt",
+            "revision": "9bdd8ab585b19ef95f9c9ed847ac9478301890b4",
+            "sha256": "acbb17b28cca1f860acee09c9ecb6efdb732080dc7a85a07292c31813175fa7d",
+            "description": "EfficientTAM tiny checkpoint (RTSAM2; public)",
         },
     }
 
