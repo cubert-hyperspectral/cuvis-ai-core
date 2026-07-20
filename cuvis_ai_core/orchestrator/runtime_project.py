@@ -58,6 +58,12 @@ def resolve_git_tag(repo: str, tag: str) -> str:
             stderr=subprocess.PIPE,
             timeout=60,
         )
+    except FileNotFoundError as exc:
+        raise RuntimeProjectError(
+            "'git' was not found on PATH — it is required to resolve tag-pinned "
+            f"plugin sources (git ls-remote {repo}). Install git or ensure it is "
+            "on the server process PATH."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeProjectError(
             f"git ls-remote failed for {repo}: {exc.stderr.strip() or exc}"

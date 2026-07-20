@@ -113,6 +113,17 @@ def test_resolve_git_tag_surfaces_subprocess_failure():
             resolve_git_tag("https://example.com/repo.git", "v0.1.0")
 
 
+def test_resolve_git_tag_names_git_when_missing():
+    # A machine without git raises FileNotFoundError from subprocess; the
+    # translated error must name the tool instead of leaking [WinError 2].
+    with patch(
+        "cuvis_ai_core.orchestrator.runtime_project.subprocess.check_output",
+        side_effect=FileNotFoundError(2, "No such file or directory"),
+    ):
+        with pytest.raises(RuntimeProjectError, match="'git' was not found"):
+            resolve_git_tag("https://example.com/repo.git", "v0.1.0")
+
+
 # ---------------------------------------------------------------------------
 # resolve_plugin_sources — git + local end-to-end
 # ---------------------------------------------------------------------------
