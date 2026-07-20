@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.3 - 2026-07-20
+
+- The orchestrator now resolves the `uv` executable explicitly when composing per-pipeline environments, instead of spawning a bare `uv` from the inherited PATH: a `CUVIS_UV` env override wins (a host app pins the exact binary), then `shutil.which("uv")`, then the uv wheel's `find_uv_bin()` as a last resort. When nothing resolves, `uv lock` / `uv sync` raise `UvRunnerError` naming the missing tool and the searched PATH instead of surfacing an opaque `[WinError 2]` FileNotFoundError; a stale `CUVIS_UV` pointing at a removed binary gets the same treatment at exec time.
+- `resolve_git_tag` reports a missing `git` executable as a `RuntimeProjectError` naming the tool (resolving a `repo:` + `tag:` plugin source needs git on PATH), matching its existing failure contract instead of leaking a raw `FileNotFoundError`.
+
 ## 0.11.2 - 2026-07-17
 
 - Raised the `pillow` floor to `>=12.3.0` (locked 12.3.0) for the batch of advisories fixed in Pillow 12.3.0: PYSEC-2026-2253/2254/2255/2256 (decompression-bomb checks bypassed in the PCF/BDF/GD font and FontFile paths), PYSEC-2026-2257 (Windows viewer `cmd.exe` shell injection), PYSEC-2026-3451 (coordinate out-of-bounds write), PYSEC-2026-3452 (EPS `%%BeginBinary` infinite loop), and PYSEC-2026-3453 (ImageCms heap corruption). Lets the plugins raise their own `pillow` floor without tripping the plugin/core dependency-floor audit.
