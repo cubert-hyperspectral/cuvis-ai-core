@@ -677,6 +677,85 @@ def test_forward_restore_train_run_fills_parent_session_id(monkeypatch, tmp_path
     assert resp.session_id in sm.list_sessions()
 
 
+def test_forward_restore_train_run_targets_prepared_session(monkeypatch, tmp_path):
+    """request.session_id restores into the caller-prepared session."""
+    sm = SessionManager()
+    prepared_id = sm.create_session()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+
+    def _fake_ensure(session_manager, session_id, pipeline_config, data_module=None):
+        assert session_id == prepared_id  # resolution runs against THIS session
+        handle = MagicMock()
+        handle.stub.return_value.RestoreTrainRun.return_value = (
+            cuvis_ai_pb2.RestoreTrainRunResponse(session_id="")
+        )
+        session_manager.get_session(session_id).child_handle = handle
+        return handle
+
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", _fake_ensure)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "x.yaml"), session_id=prepared_id
+        ),
+        ctx,
+    )
+    assert resp.session_id == prepared_id
+    # No extra session was allocated for the restore.
+    assert sm.list_sessions() == [prepared_id]
+
+
+def test_forward_restore_train_run_unknown_target_session_is_not_found(
+    monkeypatch, tmp_path
+):
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "x.yaml"), session_id="missing"
+        ),
+        ctx,
+    )
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+
+
+def test_forward_restore_train_run_keeps_caller_session_on_error(monkeypatch, tmp_path):
+    """A failure must not close a session this call did not create."""
+    sm = SessionManager()
+    prepared_id = sm.create_session()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=ValueError("unresolved plugins")),
+    )
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "x.yaml"), session_id=prepared_id
+        ),
+        ctx,
+    )
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    # The caller's session survives the failed restore.
+    assert sm.list_sessions() == [prepared_id]
+
+
 # ---------------------------------------------------------------------------
 # Pipeline-op wrappers: each no-child wrapper returns FAILED_PRECONDITION
 # ---------------------------------------------------------------------------
