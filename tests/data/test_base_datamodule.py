@@ -236,3 +236,37 @@ def test_create_data_module_validates_params():
     dc = DataConfig(data_module="fake", params={"required_key": ""})
     with pytest.raises(ValueError, match="required_key"):
         create_data_module(_Reg(), dc)
+
+
+class _SelectorOnlyModule(FakeDataModule):
+    """A module that enumerates a universe but does not own split semantics."""
+
+    DATA_MODULE_NAME = "selector_only"
+    OWNS_SPLITS = False
+
+
+def test_owns_splits_false_refuses_splitless_training_stages():
+    dm = _SelectorOnlyModule()
+    for stage in ("fit", "validate", "test", None):
+        with pytest.raises(ValueError, match="does not own split semantics"):
+            dm.setup(stage)
+
+
+def test_owns_splits_false_allows_splitless_predict():
+    dm = _SelectorOnlyModule()
+    dm.setup("predict")
+    assert len(dm._predict_ds) == 3  # build_stage_dataset("predict")
+
+
+def test_owns_splits_false_with_splits_trains_normally():
+    dm = _SelectorOnlyModule(
+        splits=DataSplitConfig(train=[_fi([0, 1])], val=[_fi([2])], test=[_fi([3])])
+    )
+    dm.setup("fit")
+    assert len(dm._train_ds) == 2
+
+
+def test_owns_splits_default_true_keeps_module_owned_path():
+    dm = FakeDataModule()
+    dm.setup("fit")
+    assert len(dm._train_ds) == 3  # module-owned build_stage_dataset unchanged
