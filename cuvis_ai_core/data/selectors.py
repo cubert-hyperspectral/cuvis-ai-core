@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from cuvis_ai_core.utils.general import expand_range_selectors
@@ -113,6 +114,19 @@ def validate_leakage(
 # -- internals ----------------------------------------------------------------
 
 
+def _norm_source(path: str) -> str:
+    """Normalize a source path for comparison (never for identity).
+
+    ``files`` / ``file_indices`` selectors written by an external author (e.g.
+    the CuvisNEXT split designer) may differ from the module's enumerated
+    ``SampleRef.source`` in separator style or drive-letter case even when they
+    name the same file; on Windows that made an exact string match silently
+    select 0 samples. Comparison-only defense: ``SampleRef.uid`` derivation is
+    untouched, so frozen splits and hashes stay stable.
+    """
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _resolve_one(
     sel: Selector, refs: list[SampleRef], *, name_to_id: dict[str, int] | None
 ) -> list[SampleRef]:
@@ -122,11 +136,16 @@ def _resolve_one(
     if kind == SelectorKind.ALL:
         return list(refs)
     if kind == SelectorKind.FILES:
-        wanted = set(sel.paths)
-        return [r for r in refs if r.source in wanted]
+        wanted = {_norm_source(p) for p in sel.paths}
+        return [r for r in refs if _norm_source(r.source) in wanted]
     if kind == SelectorKind.FILE_INDICES:
         wanted_ids = set(_expand_int_ids(sel.ids, sel))
-        return [r for r in refs if r.source == sel.source and r.index in wanted_ids]
+        wanted_source = _norm_source(sel.source)
+        return [
+            r
+            for r in refs
+            if _norm_source(r.source) == wanted_source and r.index in wanted_ids
+        ]
     if kind == SelectorKind.DIR_INDICES:
         positions = _expand_int_ids(sel.ids, sel)
         size = len(refs)

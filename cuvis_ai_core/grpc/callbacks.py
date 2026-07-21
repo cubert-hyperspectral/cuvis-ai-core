@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -9,6 +10,47 @@ from pytorch_lightning import Callback, LightningModule, Trainer
 
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
+
+
+class StopTrainingCallback(Callback):
+    """Stop a Lightning run cooperatively when a stop event is set.
+
+    Checked at batch boundaries: setting ``trainer.should_stop`` makes the
+    training epoch loop end after the current batch, so cancellation never
+    interrupts an in-flight forward/backward pass.
+    """
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__()
+        self.stop_event = stop_event
+
+    def _check(self, trainer: Trainer) -> None:
+        """Request a graceful stop if the event fired."""
+        if self.stop_event.is_set():
+            trainer.should_stop = True
+
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: Any,
+        batch: Any,
+        batch_idx: int,
+    ) -> None:
+        self._check(trainer)
+
+    def on_validation_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: Any,
+        batch: Any,
+        batch_idx: int,
+    ) -> None:
+        self._check(trainer)
+
+    def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._check(trainer)
 
 
 class ProgressStreamCallback(Callback):
@@ -64,6 +106,22 @@ class ProgressStreamCallback(Callback):
         metrics = self._extract_metrics(trainer, "val")
         self._emit_progress(ExecutionStage.VAL, losses, metrics, "running")
 
+    def on_validation_epoch_end(
+        self, trainer: Trainer, pl_module: LightningModule
+    ) -> None:
+        # Epoch-aggregated emission INCLUDING losses: per-batch emissions carry
+        # only that batch's loss, and _extract_metrics deliberately skips loss
+        # keys, so without this hook an epoch-level val_loss never reaches the
+        # stream — a live loss curve needs the train and val loss per epoch.
+        losses = self._extract_epoch_losses(trainer)
+        metrics = self._extract_metrics(trainer, "val")
+        self._emit_progress(ExecutionStage.VAL, losses, metrics, "running")
+
+    def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        losses = self._extract_epoch_losses(trainer)
+        metrics = self._extract_metrics(trainer, "train")
+        self._emit_progress(ExecutionStage.TRAIN, losses, metrics, "running")
+
     def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         self._emit_progress(ExecutionStage.TEST, {}, {}, "running")
 
@@ -101,6 +159,24 @@ class ProgressStreamCallback(Callback):
                         continue
         elif hasattr(outputs, "item"):
             losses["total"] = float(outputs.item())
+
+        return losses
+
+    def _extract_epoch_losses(self, trainer: Trainer) -> dict[str, float]:
+        """Extract epoch-aggregated loss values from trainer.callback_metrics."""
+        losses: dict[str, float] = {}
+        callback_metrics = getattr(trainer, "callback_metrics", {}) or {}
+
+        for key, value in callback_metrics.items():
+            if "loss" not in key.lower():
+                continue
+            try:
+                losses[key] = float(value.item())
+            except Exception:
+                try:
+                    losses[key] = float(value)
+                except Exception:
+                    continue
 
         return losses
 
@@ -145,4 +221,4 @@ class ProgressStreamCallback(Callback):
         self.progress_handler(context, losses, metrics, status)
 
 
-__all__ = ["ProgressStreamCallback"]
+__all__ = ["ProgressStreamCallback", "StopTrainingCallback"]

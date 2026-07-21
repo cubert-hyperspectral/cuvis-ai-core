@@ -1,5 +1,6 @@
 """External trainer orchestrators for cuvis.ai graphs."""
 
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,6 +17,15 @@ from cuvis_ai_core.training.config import (
 )
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context, InputStream
+
+
+class TrainingCancelled(Exception):
+    """A training run was stopped cooperatively via the session's stop event.
+
+    Raised by :class:`StatisticalTrainer` at batch / node boundaries. A node
+    interrupted mid-initialization is left partially fitted; the cancelled run
+    must not be treated as trained.
+    """
 
 
 class GradientTrainer(pl.LightningModule):
@@ -499,7 +509,10 @@ class StatisticalTrainer:
     """
 
     def __init__(
-        self, pipeline: CuvisPipeline, datamodule: pl.LightningDataModule
+        self,
+        pipeline: CuvisPipeline,
+        datamodule: pl.LightningDataModule,
+        stop_event: threading.Event | None = None,
     ) -> None:
         """Initialize statistical trainer.
 
@@ -509,9 +522,19 @@ class StatisticalTrainer:
             The cuvis-ai pipeline containing statistical nodes
         datamodule : pl.LightningDataModule
             Data provider for initialization
+        stop_event : threading.Event, optional
+            Cooperative-cancel flag. Checked between statistical nodes and
+            before each batch; when set, ``fit()`` raises
+            :class:`TrainingCancelled`.
         """
         self.pipeline = pipeline
         self.datamodule = datamodule
+        self.stop_event = stop_event
+
+    def _raise_if_cancelled(self) -> None:
+        """Raise TrainingCancelled when the stop event has fired."""
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise TrainingCancelled("Statistical training stopped via StopTrain")
 
     def fit(self) -> None:
         """Train all statistical nodes in topological order.
@@ -540,6 +563,7 @@ class StatisticalTrainer:
             if node not in stat_nodes:
                 continue
 
+            self._raise_if_cancelled()
             logger.info(f"  Training {type(node).__name__}...")
 
             # Create port-based input stream using upto_node
@@ -547,6 +571,8 @@ class StatisticalTrainer:
 
             # Initialize the node from data
             node.statistical_initialization(input_stream)
+
+        self._raise_if_cancelled()
 
     def validate(self) -> None:
         """Run validation on the validation dataset.
@@ -642,6 +668,8 @@ class StatisticalTrainer:
             Input dict with keys from target_node.INPUT_SPECS
         """
         for batch in dataloader:
+            self._raise_if_cancelled()
+
             # Move batch to pipeline device BEFORE calling forward
             batch = self._move_batch_to_device(batch)
 

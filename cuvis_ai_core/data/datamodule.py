@@ -81,6 +81,14 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
     #: Unique registry key; the manifest ``data_module_name`` must equal it.
     DATA_MODULE_NAME: ClassVar[str] = ""
 
+    #: Whether the module owns split semantics when ``DataConfig.splits`` is None
+    #: (e.g. a CSV split column). A module that merely enumerates a universe sets
+    #: this False: split-less training stages then raise instead of silently
+    #: serving every sample to fit/validate/test — which would let statistical
+    #: initialization (e.g. MinMax) ingest anomalous frames with no error.
+    #: Split-less ``setup("predict")`` stays valid for every module.
+    OWNS_SPLITS: ClassVar[bool] = True
+
     def __init__(
         self,
         *,
@@ -207,8 +215,16 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
     def setup(self, stage: str | None = None) -> None:
         if self.splits is not None:
             self._setup_from_selectors(stage)
-        else:
-            self._setup_module_owned(stage)
+            return
+        if not self.OWNS_SPLITS and stage != DataStage.PREDICT:
+            raise ValueError(
+                f"{type(self).__name__} does not own split semantics: a training "
+                f"stage (setup(stage={stage!r})) needs an explicit DataConfig.splits "
+                f"(e.g. a frozen splits.json via splits_path). Without splits only "
+                f"setup('predict') is valid — it serves the whole universe; a "
+                f"split-less training stage would silently fit on every sample."
+            )
+        self._setup_module_owned(stage)
 
     def _enumerate_once(self, wanted: frozenset[str]) -> list[SampleRef]:
         if self._refs is None:

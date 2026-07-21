@@ -369,13 +369,21 @@ def forward_restore_train_run(
 ) -> cuvis_ai_pb2.RestoreTrainRunResponse:
     """Parent's RestoreTrainRun path.
 
-    Allocates a fresh parent session, parses the trainrun yaml far
-    enough to learn which plugins the pipeline needs, composes the
-    venv, spawns the child via :func:`ensure_child_for_session`, then
-    forwards the request. The child's ``RestoreTrainRun`` attaches the
-    rebuilt pipeline to the same session_id, so the response we hand
-    back to the public caller stays the parent's session id.
+    Parses the trainrun yaml far enough to learn which plugins the pipeline
+    needs, composes the venv, spawns the child via
+    :func:`ensure_child_for_session`, then forwards the request. The child's
+    ``RestoreTrainRun`` attaches the rebuilt pipeline to the same session_id,
+    so the response we hand back to the public caller stays the parent's
+    session id.
+
+    With ``request.session_id`` set, the restore targets that existing
+    session: plugin resolution then uses the session's client-pushed catalog,
+    which is the only way to restore a trainrun whose pipeline declares
+    ``plugins:`` (CreateSession → LoadPlugin each manifest → RestoreTrainRun).
+    Empty keeps the fresh-session behavior; a server-created session has an
+    empty catalog, so only plugin-less pipelines can restore that way.
     """
+    from cuvis_ai_core.grpc.error_handling import get_session_or_error
     from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 
     from cuvis_ai_schemas.pipeline import PipelineConfig
@@ -397,10 +405,29 @@ def forward_restore_train_run(
     # learn the plugin set the child env needs.
     pipeline_config = PipelineConfig.load_from_file(pipeline_config_path)
 
-    # Allocate the parent's public session first so InitializeSession can
-    # pin the child to that id.
-    parent_session_id = session_manager.create_session()
+    if request.session_id:
+        # Restore into the caller-prepared session (its LoadPlugin catalog
+        # drives plugin resolution). The caller owns this session's lifecycle:
+        # it is never closed on failure here.
+        if get_session_or_error(session_manager, request.session_id, context) is None:
+            return cuvis_ai_pb2.RestoreTrainRunResponse()
+        parent_session_id = request.session_id
+        owns_session = False
+    else:
+        # Allocate the parent's public session first so InitializeSession can
+        # pin the child to that id.
+        parent_session_id = session_manager.create_session()
+        owns_session = True
     parent_session = session_manager.get_session(parent_session_id)
+
+    def _drop_owned_session() -> None:
+        """Close the fresh session this call created; never the caller's."""
+        if not owns_session:
+            return
+        try:
+            session_manager.close_session(parent_session_id)
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     trainrun_data_module = getattr(
         getattr(trainrun_config, "data", None), "data_module", None
@@ -413,33 +440,23 @@ def forward_restore_train_run(
             data_module=trainrun_data_module,
         )
     except PluginsNotRegisteredError as exc:
-        # Drop the empty session; the trainrun's pipeline needs plugins the
-        # client never registered. Surface as FAILED_PRECONDITION (call
-        # LoadPlugin first).
-        try:
-            session_manager.close_session(parent_session_id)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        # The trainrun's pipeline needs plugins the client never registered.
+        # Surface as FAILED_PRECONDITION (call LoadPlugin first).
+        _drop_owned_session()
         context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details(str(exc))
         return cuvis_ai_pb2.RestoreTrainRunResponse()
     except ValueError as exc:
-        # Drop the empty session; surface resolver errors as INVALID_ARGUMENT
-        # so callers don't have to dig through "UNKNOWN" wrapping.
-        try:
-            session_manager.close_session(parent_session_id)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        # Surface resolver errors as INVALID_ARGUMENT so callers don't have
+        # to dig through "UNKNOWN" wrapping.
+        _drop_owned_session()
         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
         context.set_details(str(exc))
         return cuvis_ai_pb2.RestoreTrainRunResponse()
     except Exception:
-        # Compose / spawn failed for some other reason; drop the empty
-        # session and re-raise so the grpc handler decorator surfaces it.
-        try:
-            session_manager.close_session(parent_session_id)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        # Compose / spawn failed for some other reason; re-raise so the grpc
+        # handler decorator surfaces it.
+        _drop_owned_session()
         raise
 
     child = parent_session.child_handle
@@ -623,6 +640,17 @@ def forward_get_train_status(session_manager, request, context):
     )
 
 
+def forward_stop_train(session_manager, request, context):
+    """Parent's StopTrain path: the stop flag lives in the child's session state."""
+    return _forward_pipeline_op(
+        session_manager,
+        request,
+        context,
+        stub_method="StopTrain",
+        empty_response_factory=cuvis_ai_pb2.StopTrainResponse,
+    )
+
+
 # ---------------------------------------------------------------------------
 # In-memory test seam — production code never instantiates these.
 # ---------------------------------------------------------------------------
@@ -634,6 +662,15 @@ class _InMemoryContext:
     def __init__(self) -> None:
         self._code: grpc.StatusCode | None = None
         self._details: str = ""
+        # Registered termination callbacks. The in-memory transport is
+        # synchronous, so nothing fires them automatically; tests invoke them
+        # to simulate a client-dropped stream.
+        self.callbacks: list[Callable[[], None]] = []
+
+    def add_callback(self, callback: Callable[[], None]) -> bool:
+        """Record an RPC-termination callback (mirrors grpc.ServicerContext)."""
+        self.callbacks.append(callback)
+        return True
 
     def set_code(self, code: grpc.StatusCode) -> None:
         self._code = code
@@ -712,6 +749,9 @@ class _InMemoryStub:
 
     def GetTrainStatus(self, request, timeout=None):
         return self._call("GetTrainStatus", request, timeout)
+
+    def StopTrain(self, request, timeout=None):
+        return self._call("StopTrain", request, timeout)
 
     def RestoreTrainRun(self, request, timeout=None):
         return self._call("RestoreTrainRun", request, timeout)

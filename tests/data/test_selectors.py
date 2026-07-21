@@ -224,3 +224,55 @@ def test_splits_io_roundtrip_and_universe_hash(tmp_path):
 def test_splits_io_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_splits(tmp_path / "nope.json")
+
+
+def _windows_universe():
+    """Universe whose sources are canonical absolute Windows-style paths."""
+    return [
+        SampleRef(source="D:/data/day2/a.cu3s", index=i, label_id=i, stem="a")
+        for i in range(3)
+    ]
+
+
+def test_file_indices_source_matches_across_path_forms():
+    """Separator style and drive-letter case must not zero out a selector.
+
+    A GUI author (Qt) and the module's enumerate() may format the same file
+    differently; comparison normalizes both sides. ``SampleRef.uid`` stays the
+    enumerated form.
+    """
+    refs = _windows_universe()
+    for authored in (
+        r"D:\data\day2\a.cu3s",  # backslashes
+        "d:/data/day2/a.cu3s",  # lower-case drive letter
+        "D:/data/day2/../day2/a.cu3s",  # unnormalized dot-dot form
+    ):
+        got = resolve_selectors(
+            [Selector(kind=SelectorKind.FILE_INDICES, source=authored, ids=[0, 2])],
+            refs,
+        )
+        assert _uids(got) == ["D:/data/day2/a.cu3s#0", "D:/data/day2/a.cu3s#2"]
+
+
+def test_files_selector_matches_across_path_forms():
+    refs = _windows_universe()
+    got = resolve_selectors(
+        [Selector(kind=SelectorKind.FILES, paths=[r"D:\data\day2\a.cu3s"])], refs
+    )
+    assert len(got) == 3
+
+
+def test_file_indices_different_file_still_matches_zero():
+    """Normalization must not make genuinely different paths equal."""
+    refs = _windows_universe()
+    with pytest.raises(ValueError, match="matched 0 samples"):
+        resolve_selectors(
+            [
+                Selector(
+                    kind=SelectorKind.FILE_INDICES,
+                    source="D:/data/day3/a.cu3s",
+                    ids=[0],
+                )
+            ],
+            refs,
+        )
