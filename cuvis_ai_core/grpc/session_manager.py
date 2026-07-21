@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import shutil
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -39,6 +40,15 @@ class SessionState:
     )
     is_training: bool = False
     trainer: Any | None = None
+    # Cooperative-cancel flag for the session's training run. Set by StopTrain
+    # (or a dropped Train stream); checked per batch / between statistical
+    # nodes / at Train-stream entry. Cleared ONLY at SetTrainRunConfig (the run
+    # boundary), never at Train-stream entry, so a stop issued between trainer
+    # phases still cancels the not-yet-started phase of the same run.
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    # Last TrainResponse yielded on this session's Train stream; what
+    # GetTrainStatus reports.
+    latest_train_response: Any | None = None
     # Plugins registered into this session's catalog. This dict tracks what
     # the session *knows about* (parsed manifest entries), NOT what has been
     # installed/imported. The full config of every known plugin lives in

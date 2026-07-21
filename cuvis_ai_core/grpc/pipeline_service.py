@@ -120,6 +120,11 @@ class PipelineService:
         session.data_config = trainrun_config.data
         session.training_config = trainrun_config.training
         session.trainrun_config = trainrun_config
+        # SetTrainRunConfig is the run boundary: a new run starts un-cancelled.
+        # This is the ONLY place the stop flag is cleared — a StopTrain that
+        # lands between two Train streams of the same run (statistical done,
+        # gradient not yet started) must still cancel the later stream.
+        session.stop_event.clear()
 
         return cuvis_ai_pb2.SetTrainRunConfigResponse(
             success=True, pipeline_from_config=False

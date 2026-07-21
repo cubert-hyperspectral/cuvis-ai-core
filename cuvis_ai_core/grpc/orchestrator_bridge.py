@@ -623,6 +623,17 @@ def forward_get_train_status(session_manager, request, context):
     )
 
 
+def forward_stop_train(session_manager, request, context):
+    """Parent's StopTrain path: the stop flag lives in the child's session state."""
+    return _forward_pipeline_op(
+        session_manager,
+        request,
+        context,
+        stub_method="StopTrain",
+        empty_response_factory=cuvis_ai_pb2.StopTrainResponse,
+    )
+
+
 # ---------------------------------------------------------------------------
 # In-memory test seam — production code never instantiates these.
 # ---------------------------------------------------------------------------
@@ -634,6 +645,15 @@ class _InMemoryContext:
     def __init__(self) -> None:
         self._code: grpc.StatusCode | None = None
         self._details: str = ""
+        # Registered termination callbacks. The in-memory transport is
+        # synchronous, so nothing fires them automatically; tests invoke them
+        # to simulate a client-dropped stream.
+        self.callbacks: list[Callable[[], None]] = []
+
+    def add_callback(self, callback: Callable[[], None]) -> bool:
+        """Record an RPC-termination callback (mirrors grpc.ServicerContext)."""
+        self.callbacks.append(callback)
+        return True
 
     def set_code(self, code: grpc.StatusCode) -> None:
         self._code = code
@@ -712,6 +732,9 @@ class _InMemoryStub:
 
     def GetTrainStatus(self, request, timeout=None):
         return self._call("GetTrainStatus", request, timeout)
+
+    def StopTrain(self, request, timeout=None):
+        return self._call("StopTrain", request, timeout)
 
     def RestoreTrainRun(self, request, timeout=None):
         return self._call("RestoreTrainRun", request, timeout)
