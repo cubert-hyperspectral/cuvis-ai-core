@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from cuvis_ai_core.data.selectors import (
+    SplitConstraintError,
     SplitLeakageError,
+    constraint_required_attrs,
+    enforce_constraints,
+    evaluate_constraints,
     required_attrs,
     resolve_selectors,
     validate_leakage,
@@ -18,11 +22,20 @@ from cuvis_ai_core.data.splits_io import (
     verify_universe,
 )
 from cuvis_ai_schemas.training.data import (
+    Constraint,
+    ConstraintKind,
+    ConstraintSeverity,
     DataSplitConfig,
     SampleRef,
     Selector,
     SelectorKind,
 )
+
+_CAT_IDS = frozenset({"category_ids"})
+
+
+def _con(kind, severity=ConstraintSeverity.ERROR):
+    return Constraint(kind=kind, severity=severity)
 
 
 def _universe():
@@ -203,6 +216,101 @@ def test_validate_leakage_modes():
     validate_leakage(train, [], test, mode="off")  # no raise
     # predict is excluded; train/val/test disjoint -> ok
     validate_leakage(refs[:1], refs[1:2], refs[2:3], mode="error")
+
+
+def test_constraint_required_attrs():
+    assert (
+        constraint_required_attrs([_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]) == _CAT_IDS
+    )
+    assert (
+        constraint_required_attrs([_con(ConstraintKind.NO_SOURCE_OVERLAP)])
+        == frozenset()
+    )
+    assert constraint_required_attrs([]) == frozenset()
+
+
+def test_evaluate_no_split_overlap():
+    refs = _universe()
+    con = [_con(ConstraintKind.NO_SPLIT_OVERLAP)]
+    # refs[1] shared between train and test -> violated on that uid.
+    r = evaluate_constraints(refs[:2], [], refs[1:3], constraints=con)[0]
+    assert r.status == "violated" and r.count == 1 and r.offending == (refs[1].uid,)
+    # disjoint -> satisfied.
+    r = evaluate_constraints(refs[:1], refs[1:2], refs[2:3], constraints=con)[0]
+    assert r.status == "satisfied" and r.count == 0
+
+
+def test_evaluate_no_source_overlap():
+    refs = _universe()
+    con = [_con(ConstraintKind.NO_SOURCE_OVERLAP)]
+    # a.cu3s frames in both train (idx 0) and test (idx 1): distinct uids, SAME source -> violated.
+    r = evaluate_constraints(refs[:1], [], refs[1:2], constraints=con)[0]
+    assert r.status == "violated" and r.offending == ("a.cu3s",)
+    # a.cu3s only in train, b.cu3s only in test -> no source spans two stages -> satisfied.
+    r = evaluate_constraints(refs[:1], [], refs[3:4], constraints=con)[0]
+    assert r.status == "satisfied"
+
+
+def test_evaluate_no_train_anomalous():
+    refs = _universe()
+    con = [_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+    # refs[1] has category_ids=[1] (anomalous) in train -> violated (offending source).
+    r = evaluate_constraints(
+        refs[1:2], [], [], constraints=con, available_attrs=_CAT_IDS
+    )[0]
+    assert r.status == "violated" and r.offending == ("a.cu3s",)
+    # refs[0] category_ids=[] (normal) in train -> satisfied.
+    r = evaluate_constraints(
+        refs[:1], [], [], constraints=con, available_attrs=_CAT_IDS
+    )[0]
+    assert r.status == "satisfied"
+
+
+def test_cat0_background_not_anomalous():
+    # A frame whose only annotation is category 0 (background) is NOT anomalous.
+    bg = SampleRef(source="c.cu3s", index=0, label_id=0, category_ids=[0])
+    con = [_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+    r = evaluate_constraints([bg], [], [], constraints=con, available_attrs=_CAT_IDS)[0]
+    assert r.status == "satisfied"
+
+
+def test_evaluate_no_train_anomalous_unavailable_without_attrs():
+    refs = _universe()
+    con = [_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+    # category_ids not populated (module can't supply): unavailable, never silently satisfied.
+    r = evaluate_constraints(
+        refs[1:2], [], [], constraints=con, available_attrs=frozenset()
+    )[0]
+    assert r.status == "unavailable" and r.count == 0
+
+
+def test_enforce_severity_semantics():
+    refs = _universe()
+    # error + violated -> raise.
+    with pytest.raises(SplitConstraintError):
+        results = evaluate_constraints(
+            refs[:1],
+            [],
+            refs[1:2],
+            constraints=[_con(ConstraintKind.NO_SOURCE_OVERLAP)],
+        )
+        enforce_constraints(results)
+    # error + unavailable -> raise (a required invariant that cannot be verified fails loud).
+    with pytest.raises(SplitConstraintError):
+        results = evaluate_constraints(
+            refs[1:2], [], [], constraints=[_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+        )
+        enforce_constraints(results)
+    # warn + violated -> logs, no raise.
+    results = evaluate_constraints(
+        refs[:1],
+        [],
+        refs[1:2],
+        constraints=[_con(ConstraintKind.NO_SOURCE_OVERLAP, ConstraintSeverity.WARN)],
+    )
+    enforce_constraints(results)  # no raise
+    # empty constraints -> nothing enforced.
+    enforce_constraints(evaluate_constraints(refs[:1], [], refs[1:2], constraints=[]))
 
 
 def test_splits_io_roundtrip_and_universe_hash(tmp_path):

@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from cuvis_ai_core.data.datamodule import create_data_module
-from cuvis_ai_core.data.selectors import SplitLeakageError
+from cuvis_ai_core.data.selectors import SplitConstraintError
 from cuvis_ai_schemas.training.data import (
+    Constraint,
+    ConstraintKind,
+    ConstraintSeverity,
     DataConfig,
     DataSplitConfig,
     Selector,
@@ -17,6 +20,10 @@ from tests.fixtures.fake_data_modules import FakeDataModule
 
 def _fi(ids):
     return Selector(kind=SelectorKind.FILE_INDICES, source="fake.cu3s", ids=ids)
+
+
+def _con(kind, severity=ConstraintSeverity.ERROR):
+    return Constraint(kind=kind, severity=severity)
 
 
 def test_setup_from_selectors_fit_and_test():
@@ -92,22 +99,55 @@ def test_selector_matching_zero_raises():
         dm.setup(stage="fit")
 
 
-def test_leakage_error_by_default():
+def test_no_split_overlap_error_raises():
     dm = FakeDataModule(
-        splits=DataSplitConfig(train=[_fi([0, 1])], test=[_fi([1, 2])]),
+        splits=DataSplitConfig(
+            train=[_fi([0, 1])],
+            test=[_fi([1, 2])],
+            constraints=[_con(ConstraintKind.NO_SPLIT_OVERLAP)],
+        ),
     )
-    with pytest.raises(SplitLeakageError, match="shared between train and test"):
+    with pytest.raises(SplitConstraintError, match="shared between train and test"):
         dm.setup(stage="fit")
 
 
-def test_leakage_warn_allows_overlap():
+def test_no_split_overlap_warn_allows_overlap():
     dm = FakeDataModule(
         splits=DataSplitConfig(
-            train=[_fi([0, 1])], test=[_fi([1, 2])], leakage_check="warn"
+            train=[_fi([0, 1])],
+            test=[_fi([1, 2])],
+            constraints=[
+                _con(ConstraintKind.NO_SPLIT_OVERLAP, ConstraintSeverity.WARN)
+            ],
         ),
     )
     dm.setup(stage="fit")  # logs, does not raise
     assert len(dm._train_ds) == 2
+
+
+def test_no_constraints_skips_all_checks():
+    # Empty constraints = "no checks declared": overlapping train/test does not raise.
+    dm = FakeDataModule(splits=DataSplitConfig(train=[_fi([0, 1])], test=[_fi([1, 2])]))
+    dm.setup(stage="fit")
+    assert len(dm._train_ds) == 2
+
+
+def test_no_train_anomalous_setup_path():
+    # Odd indices carry category_id 1 (anomalous); the module supplies category_ids.
+    anomalous = FakeDataModule(
+        splits=DataSplitConfig(
+            train=[_fi([1])], constraints=[_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+        ),
+    )
+    with pytest.raises(SplitConstraintError, match="anomalous frame in train"):
+        anomalous.setup(stage="fit")
+    normal = FakeDataModule(
+        splits=DataSplitConfig(
+            train=[_fi([0, 2])], constraints=[_con(ConstraintKind.NO_TRAIN_ANOMALOUS)]
+        ),
+    )
+    normal.setup(stage="fit")  # even indices are normal -> satisfied
+    assert len(normal._train_ds) == 2
 
 
 def test_predict_may_overlap_test():
@@ -185,27 +225,34 @@ def test_effective_splits_without_path_is_identity():
     assert dm._effective_splits() is splits  # no file load when splits_path unset
 
 
-def test_splits_path_leakage_check_is_file_owned(tmp_path):
-    """``leakage_check`` comes from the file even when also set inline.
+def test_splits_path_constraints_is_file_owned(tmp_path):
+    """``constraints`` come from the file even when also set inline.
 
-    Documents the file-owned limitation: the enum has a default so a plain ``or``
-    cannot distinguish "unset" from "default", so the file value wins. The inline
-    stages still merge, and the file's own stages survive the ``model_copy`` rebuild.
+    File-owned limitation: an inline list defaults to ``[]`` so a plain ``or`` cannot
+    distinguish "unset" from "explicitly none", so the file value wins. The inline stages
+    still merge, and the file's own stages survive the ``model_copy`` rebuild.
     """
     from cuvis_ai_core.data.splits_io import save_splits
 
     save_splits(
-        DataSplitConfig(train=[_fi([0, 1])], leakage_check="warn"),
+        DataSplitConfig(
+            train=[_fi([0, 1])],
+            constraints=[
+                _con(ConstraintKind.NO_SPLIT_OVERLAP, ConstraintSeverity.WARN)
+            ],
+        ),
         tmp_path / "splits.json",
     )
     dm = FakeDataModule(
         splits=DataSplitConfig(
             splits_path=str(tmp_path / "splits.json"),
-            leakage_check="off",  # inline value must NOT win
+            constraints=[],  # inline value must NOT win
         ),
     )
     effective = dm._effective_splits()
-    assert effective.leakage_check == "warn"  # file-owned, inline "off" ignored
+    assert effective.constraints == [
+        _con(ConstraintKind.NO_SPLIT_OVERLAP, ConstraintSeverity.WARN)
+    ]  # file-owned
     assert len(effective.train) == 1  # file stage survived the model_copy rebuild
 
 

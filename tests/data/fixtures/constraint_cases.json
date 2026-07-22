@@ -1,0 +1,103 @@
+{
+  "_comment": "Canonical cross-language golden fixture for split-constraint evaluation. Vendored byte-identical into cuvis-next (libs/pilot_utility/test) and cuvis-next-mock tests. Update ALL copies together and refresh each repo's SHA-pin. offending = uids for no_split_overlap, canonical sources for no_source_overlap / no_train_anomalous.",
+  "cases": [
+    {
+      "name": "split_overlap_violated",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": []},
+        {"source": "a.cu3s", "index": 1, "category_ids": []}
+      ],
+      "train": [["a.cu3s", 0], ["a.cu3s", 1]],
+      "val": [],
+      "test": [["a.cu3s", 1]],
+      "available_attrs": [],
+      "constraints": [{"kind": "no_split_overlap", "severity": "error"}],
+      "expected": [
+        {"kind": "no_split_overlap", "status": "violated", "count": 1, "offending": ["a.cu3s#1"]}
+      ]
+    },
+    {
+      "name": "source_overlap_violated_split_ok",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": []},
+        {"source": "a.cu3s", "index": 1, "category_ids": []},
+        {"source": "b.cu3s", "index": 0, "category_ids": []}
+      ],
+      "train": [["a.cu3s", 0]],
+      "val": [["b.cu3s", 0]],
+      "test": [["a.cu3s", 1]],
+      "available_attrs": [],
+      "constraints": [
+        {"kind": "no_split_overlap", "severity": "error"},
+        {"kind": "no_source_overlap", "severity": "error"}
+      ],
+      "expected": [
+        {"kind": "no_split_overlap", "status": "satisfied", "count": 0, "offending": []},
+        {"kind": "no_source_overlap", "status": "violated", "count": 1, "offending": ["a.cu3s"]}
+      ]
+    },
+    {
+      "name": "anomalous_in_train_cat0_not_flagged",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": [0]},
+        {"source": "a.cu3s", "index": 1, "category_ids": [2]},
+        {"source": "b.cu3s", "index": 0, "category_ids": []}
+      ],
+      "train": [["a.cu3s", 0], ["a.cu3s", 1], ["b.cu3s", 0]],
+      "val": [],
+      "test": [],
+      "available_attrs": ["category_ids"],
+      "constraints": [{"kind": "no_train_anomalous", "severity": "error"}],
+      "expected": [
+        {"kind": "no_train_anomalous", "status": "violated", "count": 1, "offending": ["a.cu3s"]}
+      ]
+    },
+    {
+      "name": "anomalous_unavailable_without_attrs",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": [2]}
+      ],
+      "train": [["a.cu3s", 0]],
+      "val": [],
+      "test": [],
+      "available_attrs": [],
+      "constraints": [{"kind": "no_train_anomalous", "severity": "error"}],
+      "expected": [
+        {"kind": "no_train_anomalous", "status": "unavailable", "count": 0, "offending": []}
+      ]
+    },
+    {
+      "name": "all_satisfied",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": []},
+        {"source": "b.cu3s", "index": 0, "category_ids": []}
+      ],
+      "train": [["a.cu3s", 0]],
+      "val": [["b.cu3s", 0]],
+      "test": [],
+      "available_attrs": ["category_ids"],
+      "constraints": [
+        {"kind": "no_split_overlap", "severity": "error"},
+        {"kind": "no_source_overlap", "severity": "error"},
+        {"kind": "no_train_anomalous", "severity": "warn"}
+      ],
+      "expected": [
+        {"kind": "no_split_overlap", "status": "satisfied", "count": 0, "offending": []},
+        {"kind": "no_source_overlap", "status": "satisfied", "count": 0, "offending": []},
+        {"kind": "no_train_anomalous", "status": "satisfied", "count": 0, "offending": []}
+      ]
+    },
+    {
+      "name": "empty_constraints_no_checks",
+      "universe": [
+        {"source": "a.cu3s", "index": 0, "category_ids": []}
+      ],
+      "train": [["a.cu3s", 0]],
+      "val": [],
+      "test": [["a.cu3s", 0]],
+      "available_attrs": [],
+      "constraints": [],
+      "expected": []
+    }
+  ]
+}

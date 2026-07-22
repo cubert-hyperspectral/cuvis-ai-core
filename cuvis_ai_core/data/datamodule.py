@@ -183,6 +183,16 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
             f"selector splits (DataConfig.splits), or build_stage_dataset() for module-owned splits."
         )
 
+    def supported_attrs(self) -> frozenset[str]:
+        """Optional ``SampleRef`` attrs ``enumerate`` can populate (subset of {tags, category_ids}).
+
+        Makes constraint evaluation opportunistic: a module that cannot supply an attribute
+        (e.g. an NPZ universe with no COCO category map) yields an ``unavailable`` constraint
+        result instead of forcing ``enumerate`` to raise. Default assumes a COCO-backed module
+        supplies both; override (return a smaller set) when the module cannot.
+        """
+        return frozenset({"tags", "category_ids"})
+
     def build_dataset_from_refs(self, refs: list[SampleRef]) -> Dataset:
         """Selector path: return the torch ``Dataset`` for an already-resolved subset.
 
@@ -238,10 +248,10 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         config and each **non-empty** inline stage (``train``/``val``/``test``/``predict``)
         overrides the file's stage. Empty inline stages keep their defined meaning
         (predict-empty -> whole universe; train/val-empty -> no fit), so "intentionally
-        empty" needs no special marker. ``leakage_check`` and ``universe_hash`` are
-        **file-owned**: they come from the loaded file, so an inline ``leakage_check`` is
-        ignored when ``splits_path`` is set (the enum has a default, so a plain ``or``
-        cannot tell "unset" from "default"; a real override would need a nullable field).
+        empty" needs no special marker. ``constraints`` and ``universe_hash`` are
+        **file-owned**: they come from the loaded file, so an inline ``constraints`` list is
+        ignored when ``splits_path`` is set (an empty inline list defaults, so a plain ``or``
+        cannot tell "unset" from "explicitly none"; a real override would need a nullable field).
         ``splits_path`` is used as given: an absolute path, or one relative to the current
         working directory for direct programmatic use. The restore layer rewrites a
         trainrun-relative path to absolute before construction, so resolution never depends
@@ -260,7 +270,7 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         # each non-empty inline stage. Keep the `x or base.x` form (NOT an unconditional
         # `splits.x`): DataSplitConfig stage lists default to [], so an unconditional
         # update would let a splits_path-only inline config silently wipe the file's
-        # stages. leakage_check / universe_hash stay file-owned (not in the update).
+        # stages. constraints / universe_hash stay file-owned (not in the update).
         return base.model_copy(
             update={
                 "splits_path": splits.splits_path,
@@ -273,15 +283,25 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
 
     def _setup_from_selectors(self, stage: str | None) -> None:
         from cuvis_ai_core.data.selectors import (
+            constraint_required_attrs,
+            enforce_constraints,
+            evaluate_constraints,
             required_attrs,
             resolve_selectors,
-            validate_leakage,
         )
         from cuvis_ai_core.data.splits_io import verify_universe
 
         splits = self._effective_splits()
         assert splits is not None
-        refs = self._enumerate_once(required_attrs(splits))
+        # Selector attrs are a hard requirement (enumerate raises if unmet); constraint
+        # attrs are opportunistic (only those the module can supply, so an unsupported
+        # attr yields an ``unavailable`` result instead of a crash).
+        selector_attrs = required_attrs(splits)
+        constraint_attrs = (
+            constraint_required_attrs(splits.constraints) & self.supported_attrs()
+        )
+        available_attrs = selector_attrs | constraint_attrs
+        refs = self._enumerate_once(available_attrs)
         verify_universe(splits, refs)
         name_to_id = self.category_name_to_id()
 
@@ -290,11 +310,18 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
                 return []
             return resolve_selectors(stage_selectors, refs, name_to_id=name_to_id)
 
-        # Leakage is a global property; resolve train/val/test and check before building.
+        # Constraints are a global property; resolve train/val/test and enforce before building.
         train = resolve(splits.train)
         val = resolve(splits.val)
         test = resolve(splits.test)
-        validate_leakage(train, val, test, mode=splits.leakage_check)
+        results = evaluate_constraints(
+            train,
+            val,
+            test,
+            constraints=splits.constraints,
+            available_attrs=available_attrs,
+        )
+        enforce_constraints(results)
 
         if stage in (DataStage.FIT, None) and train:
             self._train_ds = self.build_dataset_from_refs(train)
