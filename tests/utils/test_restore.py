@@ -511,7 +511,7 @@ def test_resolve_splits_path_rewrites_relative_to_base_dir(tmp_path: Path) -> No
     cfg = DataConfig(
         data_module="npz_multi",
         splits=DataSplitConfig(splits_path="splits.json"),
-        params={"index_csv": "x.csv"},
+        params={"universe_csv": "x.csv"},
     )
     out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=tmp_path)
     assert out.splits.splits_path == str(tmp_path / "splits.json")
@@ -531,7 +531,7 @@ def test_resolve_splits_path_relative_base_dir_becomes_absolute() -> None:
     cfg = DataConfig(
         data_module="npz_multi",
         splits=DataSplitConfig(splits_path="splits.json"),
-        params={"index_csv": "x.csv"},
+        params={"universe_csv": "x.csv"},
     )
     out = restore_mod._resolve_splits_path_in_config(cfg, base_dir=Path("configs/tr"))
     assert Path(out.splits.splits_path).is_absolute()
