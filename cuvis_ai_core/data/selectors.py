@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
+import posixpath
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -303,11 +304,18 @@ def _norm_source(path: str) -> str:
     ``files`` / ``file_indices`` selectors written by an external author (e.g.
     the CuvisNEXT split designer) may differ from the module's enumerated
     ``SampleRef.source`` in separator style or drive-letter case even when they
-    name the same file; on Windows that made an exact string match silently
-    select 0 samples. Comparison-only defense: ``SampleRef.uid`` derivation is
+    name the same file; that made an exact string match silently select 0
+    samples. Comparison-only defense: ``SampleRef.uid`` derivation is
     untouched, so frozen splits and hashes stay stable.
+
+    Deliberately host-independent (not ``os.path``): a splits.json authored on
+    Windows must resolve identically on a POSIX server. Backslashes count as
+    separators, ``.``/``..`` collapse lexically, and Windows-looking paths
+    (drive letter or backslashes) fold case; POSIX-style paths keep theirs.
     """
-    return os.path.normcase(os.path.normpath(path))
+    windowsish = bool(re.match(r"[A-Za-z]:[/\\]", path)) or "\\" in path
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    return normalized.casefold() if windowsish else normalized
 
 
 def _resolve_one(
