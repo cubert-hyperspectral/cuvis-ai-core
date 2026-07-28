@@ -216,6 +216,13 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         yield from self._training_service.train(request, context)
 
+    def StopTrain(
+        self,
+        request: cuvis_ai_pb2.StopTrainRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.StopTrainResponse:
+        return self._training_service.stop_train(request, context)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

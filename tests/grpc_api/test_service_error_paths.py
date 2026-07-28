@@ -608,14 +608,25 @@ class TestTrainingServiceStatus:
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
     def test_get_train_status_with_trainer(self):
-        """Session with trainer returns COMPLETE status (line 140)."""
+        """Status reflects recorded stream progress, not the trainer's presence."""
         session_id = self.session_manager.create_session()
         session = self.session_manager.get_session(session_id)
         session.trainer = Mock()
 
+        # A trainer alone (no recorded Train-stream progress) is UNSPECIFIED.
         request = cuvis_ai_pb2.GetTrainStatusRequest(session_id=session_id)
         response = self.service.get_train_status(request, self.ctx)
+        assert (
+            response.latest_progress.status == cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
+        )
+
+        # Once the Train stream recorded progress, that response is served.
+        session.latest_train_response = cuvis_ai_pb2.TrainResponse(
+            status=cuvis_ai_pb2.TRAIN_STATUS_COMPLETE, message="done"
+        )
+        response = self.service.get_train_status(request, self.ctx)
         assert response.latest_progress.status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+        assert response.latest_progress.message == "done"
 
 
 class TestPluginServiceClearCache:
@@ -637,15 +648,20 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
     """The gradient Train RPC seeds, derives callbacks from the config, and constructs
     the trainer before streaming. A mocked GradientTrainer makes fit() instant so the
     progress generator drains cleanly (no real training)."""
+    import threading
+
     service = TrainingService(SessionManager())
     monkeypatch.setattr(
         service, "_configure_gradient_components", lambda *a, **k: ([], [])
     )
     training_config = TrainingConfig(seed=7, max_epochs=1)
+    # A bare Mock's stop_event.is_set() would be truthy; the session needs the
+    # real (unset) event so the drained stream is not reported as cancelled.
+    session = Mock(stop_event=threading.Event())
 
     with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
         responses = list(
-            service._train_gradient(Mock(), Mock(), Mock(), training_config)
+            service._train_gradient(session, Mock(), Mock(), training_config)
         )
 
     mock_gt.assert_called_once()

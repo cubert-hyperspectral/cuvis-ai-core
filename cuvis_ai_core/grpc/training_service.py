@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import queue
 import threading
 from collections.abc import Iterator
@@ -9,15 +10,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import grpc
+import torch
 
-from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback
+from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback, StopTrainingCallback
 from cuvis_ai_core.training.config import (
     DataConfig,
     TrainingConfig,
     TrainRunConfig,
     create_callbacks_from_config,
 )
-from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
+from cuvis_ai_core.training.trainers import (
+    GradientTrainer,
+    StatisticalTrainer,
+    TrainingCancelled,
+)
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 
@@ -50,6 +56,37 @@ class TrainingService:
         if not require_pipeline(session, context):
             return
 
+        stop_event = session.stop_event
+
+        # A stop that landed before this stream opened still cancels it: the
+        # flag survives until the next SetTrainRunConfig, so a StopTrain
+        # issued between two trainer phases of one run (statistical done,
+        # gradient not yet started) terminates the later phase here instead
+        # of racing it.
+        if stop_event.is_set():
+            response = self._cancelled_response(
+                "Training run was cancelled; not starting this trainer phase"
+            )
+            session.latest_train_response = response
+            yield response
+            return
+
+        # Client-drop cancels: when the caller abandons the stream, the RPC
+        # terminates and this callback fires while training may still be
+        # executing between yields. Guarded so a normally-finished stream
+        # (which also terminates the RPC) does not cancel the run's next
+        # trainer phase.
+        stream_finished = threading.Event()
+
+        def _on_stream_terminated() -> None:
+            """Cancel the run when the stream died before finishing."""
+            if not stream_finished.is_set():
+                stop_event.set()
+
+        add_callback = getattr(context, "add_callback", None)
+        if callable(add_callback):
+            add_callback(_on_stream_terminated)
+
         # Get data config - either from request or from session's experiment config
         data_config_py: DataConfig | None = None
 
@@ -60,6 +97,7 @@ class TrainingService:
             # Use data config from session (loaded via RestoreTrainRun/SetTrainRunConfig)
             data_config_py = session.data_config
         else:
+            stream_finished.set()
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(
                 "Training requires data config to be provided either in request or loaded via RestoreTrainRun"
@@ -88,6 +126,7 @@ class TrainingService:
             # Create datamodule from data config via the registry dispatch
             datamodule = self._create_data_module(session, data_config_py)
             training_config_py: TrainingConfig | None = None
+            inner: Iterator[cuvis_ai_pb2.TrainResponse]
 
             if request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_STATISTICAL:
                 # Statistical training - single pass, no streaming
@@ -97,7 +136,7 @@ class TrainingService:
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                yield from self._train_statistical(session, datamodule)
+                inner = self._train_statistical(session, datamodule)
 
             elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_GRADIENT:
                 # Gradient training - streaming progress
@@ -118,7 +157,7 @@ class TrainingService:
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                yield from self._train_gradient(
+                inner = self._train_gradient(
                     session,
                     datamodule,
                     data_config_py,
@@ -130,6 +169,26 @@ class TrainingService:
                 context.set_details(f"Unknown trainer type: {request.trainer_type}")
                 return
 
+            # Every progress response is recorded before it goes on the wire so
+            # GetTrainStatus reports the latest state even after the stream ends.
+            for response in inner:
+                session.latest_train_response = response
+                yield response
+
+        except TrainingCancelled:
+            response = self._cancelled_response(
+                "Training cancelled; the pipeline holds the state of the last "
+                "completed step"
+            )
+            session.latest_train_response = response
+            yield response
+            return
+        except GeneratorExit:
+            # The caller closed the stream mid-run (tab closed, app quit,
+            # connection lost): cancel the run so the training thread does not
+            # keep the GPU busy to completion.
+            stop_event.set()
+            raise
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(str(exc))
@@ -138,6 +197,42 @@ class TrainingService:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Training failed: {str(exc)}")
             return
+        finally:
+            stream_finished.set()
+            # Best-effort VRAM trim after a run ends (complete, cancelled, or
+            # failed). The pipeline itself stays resident until CloseSession.
+            self._release_cuda_cache()
+
+    @grpc_handler("Failed to stop training")
+    def stop_train(
+        self,
+        request: cuvis_ai_pb2.StopTrainRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.StopTrainResponse:
+        """Request cooperative cancellation of the session's training run.
+
+        Sets the session's stop flag; training honors it at the next batch /
+        node boundary and the active Train stream ends with a terminal
+        TRAIN_STATUS_CANCELLED. The flag stays set until the next
+        SetTrainRunConfig, so a stop issued between trainer phases also
+        cancels the not-yet-started phase of the same run.
+        """
+        session = get_session_or_error(
+            self.session_manager, request.session_id, context
+        )
+        if session is None:
+            return cuvis_ai_pb2.StopTrainResponse(
+                accepted=False, message="Session not found"
+            )
+
+        session.stop_event.set()
+        return cuvis_ai_pb2.StopTrainResponse(
+            accepted=True,
+            message=(
+                "Stop requested; training stops at the next batch/node boundary "
+                "and the Train stream ends with TRAIN_STATUS_CANCELLED"
+            ),
+        )
 
     @grpc_handler("Failed to get status")
     def get_train_status(
@@ -145,34 +240,31 @@ class TrainingService:
         request: cuvis_ai_pb2.GetTrainStatusRequest,
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetTrainStatusResponse:
-        """Get current training status."""
+        """Get current training status (the latest progress the Train stream yielded)."""
         session = get_session_or_error(
             self.session_manager, request.session_id, context
         )
         if session is None:
             return cuvis_ai_pb2.GetTrainStatusResponse()
 
-        # Simple status tracking (can be enhanced with async training in future)
-        if session.trainer is None:
-            status = cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
-        else:
-            status = (
-                cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
-            )  # simplified: no async progress yet
+        if session.latest_train_response is not None:
+            return cuvis_ai_pb2.GetTrainStatusResponse(
+                latest_progress=session.latest_train_response
+            )
 
-        # Create a TrainResponse with the status
-        latest_progress = cuvis_ai_pb2.TrainResponse(
-            context=cuvis_ai_pb2.Context(
-                stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
-                epoch=0,
-                batch_idx=0,
-                global_step=0,
-            ),
-            status=status,
-            message="Training status query",
+        # No Train stream has produced progress in this session yet.
+        return cuvis_ai_pb2.GetTrainStatusResponse(
+            latest_progress=cuvis_ai_pb2.TrainResponse(
+                context=cuvis_ai_pb2.Context(
+                    stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
+                    epoch=0,
+                    batch_idx=0,
+                    global_step=0,
+                ),
+                status=cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED,
+                message="No training activity in this session yet",
+            )
         )
-
-        return cuvis_ai_pb2.GetTrainStatusResponse(latest_progress=latest_progress)
 
     @grpc_handler("Failed to get capabilities")
     def get_training_capabilities(
@@ -411,9 +503,12 @@ class TrainingService:
         trainer = StatisticalTrainer(
             pipeline=session.pipeline,
             datamodule=datamodule,
+            stop_event=session.stop_event,
         )
 
-        # Fit the pipeline (initializes normalizers, selectors, PCA, RX)
+        # Fit the pipeline (initializes normalizers, selectors, PCA, RX).
+        # Raises TrainingCancelled when the stop event fires; train() maps it
+        # to the terminal CANCELLED response.
         trainer.fit()
 
         # Store trainer in session for potential later use
@@ -464,7 +559,10 @@ class TrainingService:
                 )
             )
 
-        callback_list = [ProgressStreamCallback(progress_handler)]
+        callback_list = [
+            ProgressStreamCallback(progress_handler),
+            StopTrainingCallback(session.stop_event),
+        ]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
         trainer = GradientTrainer(
@@ -499,6 +597,11 @@ class TrainingService:
                 continue
             else:
                 yield progress
+
+        # A stop takes precedence over a late error: once cancellation fired,
+        # teardown noise from the winding-down trainer is not a real failure.
+        if session.stop_event.is_set():
+            raise TrainingCancelled("Gradient training stopped via StopTrain")
 
         if training_error is not None:
             raise training_error
@@ -591,6 +694,26 @@ class TrainingService:
 
         return loss_nodes, metric_nodes
 
+    def _cancelled_response(self, message: str) -> cuvis_ai_pb2.TrainResponse:
+        """Build the terminal CANCELLED response of a stopped run."""
+        return cuvis_ai_pb2.TrainResponse(
+            context=cuvis_ai_pb2.Context(
+                stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
+                epoch=0,
+                batch_idx=0,
+                global_step=0,
+            ),
+            status=cuvis_ai_pb2.TRAIN_STATUS_CANCELLED,
+            message=message,
+        )
+
+    @staticmethod
+    def _release_cuda_cache() -> None:
+        """Best-effort VRAM trim after a training run ends."""
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def _create_progress_response(
         self,
         context_obj: Context,
@@ -610,6 +733,7 @@ class TrainingService:
             "running": cuvis_ai_pb2.TRAIN_STATUS_RUNNING,
             "complete": cuvis_ai_pb2.TRAIN_STATUS_COMPLETE,
             "error": cuvis_ai_pb2.TRAIN_STATUS_ERROR,
+            "cancelled": cuvis_ai_pb2.TRAIN_STATUS_CANCELLED,
         }
 
         return cuvis_ai_pb2.TrainResponse(

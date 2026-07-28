@@ -11,18 +11,48 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import posixpath
+import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from cuvis_ai_core.utils.general import expand_range_selectors
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from cuvis_ai_schemas.training.data import DataSplitConfig, SampleRef, Selector
+    from cuvis_ai_schemas.training.data import (
+        Constraint,
+        DataSplitConfig,
+        SampleRef,
+        Selector,
+    )
 
 logger = logging.getLogger(__name__)
 
 
-class SplitLeakageError(RuntimeError):
-    """Raised when train/val/test splits share samples (by ``uid``)."""
+class SplitConstraintError(RuntimeError):
+    """Raised when an ``error``-severity split constraint is violated or unverifiable."""
+
+
+class SplitLeakageError(SplitConstraintError):
+    """Back-compat: raised by ``validate_leakage`` on train/val/test uid overlap."""
+
+
+@dataclass(frozen=True)
+class ConstraintResult:
+    """The outcome of evaluating one constraint (pure; ``enforce_constraints`` acts on these).
+
+    ``status`` is ``satisfied`` (green), ``violated`` (red), or ``unavailable`` (the data
+    module cannot supply the labels the constraint needs — never silently ``satisfied``).
+    ``offending`` is a sorted, deduped list of uids (``no_split_overlap``) or canonical
+    sources (``no_source_overlap`` / ``no_train_anomalous``); ``count`` is its length.
+    """
+
+    kind: str
+    severity: str
+    status: str
+    count: int = 0
+    offending: tuple[str, ...] = ()
+    reason: str = field(default="")
 
 
 def required_attrs(splits: DataSplitConfig) -> frozenset[str]:
@@ -76,6 +106,21 @@ def resolve_selectors(
     return out
 
 
+def _uid_overlaps(
+    train: list[SampleRef], val: list[SampleRef], test: list[SampleRef]
+) -> list[tuple[str, str, set[str]]]:
+    """Pairwise train/val/test uid intersections (``predict`` excluded); empty pairs dropped."""
+    train_u = {r.uid for r in train}
+    val_u = {r.uid for r in val}
+    test_u = {r.uid for r in test}
+    pairs = [
+        ("train", "val", train_u & val_u),
+        ("train", "test", train_u & test_u),
+        ("val", "test", val_u & test_u),
+    ]
+    return [(a, b, shared) for a, b, shared in pairs if shared]
+
+
 def validate_leakage(
     train: list[SampleRef],
     val: list[SampleRef],
@@ -86,19 +131,12 @@ def validate_leakage(
     """Assert train/val/test are pairwise disjoint by ``uid`` (per ``mode``).
 
     ``error`` raises ``SplitLeakageError``; ``warn`` logs and continues; ``off`` skips.
-    ``predict`` is intentionally excluded (it may overlap ``test``).
+    ``predict`` is intentionally excluded (it may overlap ``test``). Retained for direct
+    callers; the ``no_split_overlap`` constraint shares the same ``_uid_overlaps`` core.
     """
     if mode == "off":
         return
-    train_u = {r.uid for r in train}
-    val_u = {r.uid for r in val}
-    test_u = {r.uid for r in test}
-    pairs = [
-        ("train", "val", train_u & val_u),
-        ("train", "test", train_u & test_u),
-        ("val", "test", val_u & test_u),
-    ]
-    leaks = [(a, b, shared) for a, b, shared in pairs if shared]
+    leaks = _uid_overlaps(train, val, test)
     if not leaks:
         return
     msg = "; ".join(
@@ -110,7 +148,174 @@ def validate_leakage(
     raise SplitLeakageError(f"split leakage: {msg}")
 
 
+def constraint_required_attrs(constraints: list[Constraint]) -> frozenset[str]:
+    """Which ``SampleRef`` attributes the constraints *would like* populated.
+
+    Only ``no_train_anomalous`` reads metadata (``category_ids``). This is
+    **opportunistic**: the datamodule intersects it with what the module can supply
+    (``supported_attrs``), so an unsupported attribute yields an ``unavailable`` result
+    rather than forcing ``enumerate`` to raise.
+    """
+    from cuvis_ai_schemas.training.data import ConstraintKind
+
+    for c in constraints:
+        if c.kind == ConstraintKind.NO_TRAIN_ANOMALOUS:
+            return frozenset({"category_ids"})
+    return frozenset()
+
+
+def _is_anomalous(ref: SampleRef) -> bool:
+    """A sample is anomalous iff it carries an annotation with ``category_id != 0`` (0 = background)."""
+    return any(c != 0 for c in ref.category_ids)
+
+
+def _sources_spanning_stages(
+    train: list[SampleRef], val: list[SampleRef], test: list[SampleRef]
+) -> list[str]:
+    """Canonical sources whose frames land in more than one of train/val/test (sorted)."""
+    stages = (("train", train), ("val", val), ("test", test))
+    spans: dict[str, set[str]] = {}
+    repr_src: dict[str, str] = {}
+    for stage_name, refs in stages:
+        for r in refs:
+            key = _norm_source(r.source)
+            spans.setdefault(key, set()).add(stage_name)
+            repr_src.setdefault(key, r.source)
+    return sorted(repr_src[key] for key, seen in spans.items() if len(seen) > 1)
+
+
+def evaluate_constraints(
+    train: list[SampleRef],
+    val: list[SampleRef],
+    test: list[SampleRef],
+    *,
+    constraints: list[Constraint],
+    available_attrs: frozenset[str] = frozenset(),
+) -> list[ConstraintResult]:
+    """Evaluate every constraint against the resolved stages (pure; never raises).
+
+    Returns one :class:`ConstraintResult` per constraint. ``no_train_anomalous`` is
+    ``unavailable`` when ``category_ids`` was not populated (a module that cannot supply
+    labels), so a skipped check never reads as ``satisfied``. Call
+    :func:`enforce_constraints` to act on the results.
+    """
+    from cuvis_ai_schemas.training.data import ConstraintKind
+
+    results: list[ConstraintResult] = []
+    for c in constraints:
+        kind = c.kind
+        kv = kind.value
+        sev = c.severity.value
+        if kind == ConstraintKind.NO_SPLIT_OVERLAP:
+            leaks = _uid_overlaps(train, val, test)
+            offending = tuple(sorted({uid for _, _, shared in leaks for uid in shared}))
+            if offending:
+                reason = "; ".join(
+                    f"{len(shared)} shared between {a} and {b}"
+                    for a, b, shared in leaks
+                )
+                results.append(
+                    ConstraintResult(
+                        kv, sev, "violated", len(offending), offending, reason
+                    )
+                )
+            else:
+                results.append(ConstraintResult(kv, sev, "satisfied"))
+        elif kind == ConstraintKind.NO_SOURCE_OVERLAP:
+            offending = tuple(_sources_spanning_stages(train, val, test))
+            if offending:
+                results.append(
+                    ConstraintResult(
+                        kv,
+                        sev,
+                        "violated",
+                        len(offending),
+                        offending,
+                        f"{len(offending)} source(s) span >1 of train/val/test",
+                    )
+                )
+            else:
+                results.append(ConstraintResult(kv, sev, "satisfied"))
+        elif kind == ConstraintKind.NO_TRAIN_ANOMALOUS:
+            if "category_ids" not in available_attrs:
+                results.append(
+                    ConstraintResult(
+                        kv,
+                        sev,
+                        "unavailable",
+                        reason="data module cannot supply category labels",
+                    )
+                )
+            else:
+                offending = tuple(sorted({r.source for r in train if _is_anomalous(r)}))
+                if offending:
+                    results.append(
+                        ConstraintResult(
+                            kv,
+                            sev,
+                            "violated",
+                            len(offending),
+                            offending,
+                            f"{len(offending)} source(s) with an anomalous frame in train",
+                        )
+                    )
+                else:
+                    results.append(ConstraintResult(kv, sev, "satisfied"))
+        else:  # pragma: no cover - schema validates the kind set
+            results.append(
+                ConstraintResult(kv, sev, "unavailable", reason=f"unknown kind {kv}")
+            )
+    return results
+
+
+def enforce_constraints(results: list[ConstraintResult]) -> None:
+    """Raise on any ``error``-severity ``violated``/``unavailable`` result; ``warn`` logs.
+
+    ``unavailable`` is treated like a failure at ``error`` severity (Codex): a required
+    invariant that cannot be verified must fail loud, never silently permit the run.
+    """
+    hard = [
+        r
+        for r in results
+        if r.severity == "error" and r.status in ("violated", "unavailable")
+    ]
+    for r in results:
+        if r.severity == "warn" and r.status in ("violated", "unavailable"):
+            logger.warning(
+                "split constraint %s %s: %s",
+                r.kind,
+                r.status,
+                r.reason or f"{r.count} offending",
+            )
+    if hard:
+        msg = "; ".join(
+            f"{r.kind} {r.status}" + (f" ({r.reason})" if r.reason else "")
+            for r in hard
+        )
+        raise SplitConstraintError(f"split constraint(s) failed: {msg}")
+
+
 # -- internals ----------------------------------------------------------------
+
+
+def _norm_source(path: str) -> str:
+    """Normalize a source path for comparison (never for identity).
+
+    ``files`` / ``file_indices`` selectors written by an external author (e.g.
+    the CuvisNEXT split designer) may differ from the module's enumerated
+    ``SampleRef.source`` in separator style or drive-letter case even when they
+    name the same file; that made an exact string match silently select 0
+    samples. Comparison-only defense: ``SampleRef.uid`` derivation is
+    untouched, so frozen splits and hashes stay stable.
+
+    Deliberately host-independent (not ``os.path``): a splits.json authored on
+    Windows must resolve identically on a POSIX server. Backslashes count as
+    separators, ``.``/``..`` collapse lexically, and Windows-looking paths
+    (drive letter or backslashes) fold case; POSIX-style paths keep theirs.
+    """
+    windowsish = bool(re.match(r"[A-Za-z]:[/\\]", path)) or "\\" in path
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    return normalized.casefold() if windowsish else normalized
 
 
 def _resolve_one(
@@ -122,11 +327,16 @@ def _resolve_one(
     if kind == SelectorKind.ALL:
         return list(refs)
     if kind == SelectorKind.FILES:
-        wanted = set(sel.paths)
-        return [r for r in refs if r.source in wanted]
+        wanted = {_norm_source(p) for p in sel.paths}
+        return [r for r in refs if _norm_source(r.source) in wanted]
     if kind == SelectorKind.FILE_INDICES:
         wanted_ids = set(_expand_int_ids(sel.ids, sel))
-        return [r for r in refs if r.source == sel.source and r.index in wanted_ids]
+        wanted_source = _norm_source(sel.source)
+        return [
+            r
+            for r in refs
+            if _norm_source(r.source) == wanted_source and r.index in wanted_ids
+        ]
     if kind == SelectorKind.DIR_INDICES:
         positions = _expand_int_ids(sel.ids, sel)
         size = len(refs)
@@ -218,8 +428,13 @@ def _names_to_ids(names: list[str], name_to_id: dict[str, int] | None) -> list[i
 
 
 __all__ = [
+    "SplitConstraintError",
     "SplitLeakageError",
+    "ConstraintResult",
     "required_attrs",
+    "constraint_required_attrs",
     "resolve_selectors",
     "validate_leakage",
+    "evaluate_constraints",
+    "enforce_constraints",
 ]
