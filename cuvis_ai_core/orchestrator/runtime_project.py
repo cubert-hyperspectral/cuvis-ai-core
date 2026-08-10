@@ -8,9 +8,12 @@ key is then immutable even if the upstream tag is force-pushed.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tomllib
+from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Mapping
 
@@ -38,6 +41,41 @@ RUNTIME_PROJECT_NAME = "cuvis-ai-runtime-project"
 RUNTIME_PROJECT_VERSION = "0.0.0"
 # git ls-remote lists annotated tags twice; the peeled form has this suffix.
 _PEELED_TAG_SUFFIX = "^{}"
+
+_TORCH_PACKAGES = ("torch", "torchvision")
+# A PEP 440 local segment that names a real PyTorch wheel index: 2.11.0+cu128 -> cu128.
+# Allowlisted rather than interpolated blindly, because it ends up in a URL.
+_PYTORCH_INDEX_TAG = re.compile(r"^(cpu|cu\d+|rocm[\d.]+|xpu)$")
+_PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/{tag}"
+
+
+@lru_cache(maxsize=1)
+def host_torch_pins() -> tuple[Mapping[str, str], str | None]:
+    """Installed torch versions on the composing host, and the wheel-index tag they came from.
+
+    uv honours ``[tool.uv.sources]`` index pins only for DIRECT dependencies. A child
+    that picks torch up transitively therefore resolves it from PyPI, whose Windows
+    wheels are CPU-only, which is how a CUDA host ends up running a CPU build.
+    Declaring the parent's exact versions is what makes the index entry apply at all.
+
+    Mirroring the composing interpreter rather than hardcoding a CUDA version keeps a
+    CPU-only or ROCm host correct too: whatever torch the parent env was provisioned
+    with is by definition the one this machine is meant to run.
+    """
+    installed = {}
+    for name in _TORCH_PACKAGES:
+        try:
+            installed[name] = version(name)
+        except PackageNotFoundError:
+            continue
+    if not installed:
+        return {}, None
+
+    # A split flavour (torch+cu128 next to torchvision+cpu) is not a coherent host
+    # setup; pin the versions but name no index rather than guess which one wins.
+    tags = {v.partition("+")[2] for v in installed.values()}
+    tag = tags.pop() if len(tags) == 1 else ""
+    return installed, tag if _PYTORCH_INDEX_TAG.match(tag) else None
 
 
 class RuntimeProjectError(RuntimeError):
@@ -206,7 +244,23 @@ def build_runtime_pyproject(
         dependencies.append(dependency_string)
         sources[source_key] = source_entry
 
+    torch_versions, torch_index_tag = host_torch_pins()
+    dependencies.extend(f"{name}=={v}" for name, v in torch_versions.items())
+
     uv_table: dict = {}
+    if torch_index_tag:
+        index_name = f"pytorch-{torch_index_tag}"
+        # explicit: the PyTorch index is a partial mirror of PyPI, so leaving it open
+        # would let unrelated dependencies shadow to whatever copy it happens to carry.
+        # Only packages that name it may resolve there.
+        uv_table["index"] = [
+            {
+                "name": index_name,
+                "url": _PYTORCH_INDEX_URL.format(tag=torch_index_tag),
+                "explicit": True,
+            }
+        ]
+        sources.update({name: {"index": index_name} for name in torch_versions})
     if sources:
         uv_table["sources"] = sources
     uv_table["required-environments"] = _host_required_environments()
