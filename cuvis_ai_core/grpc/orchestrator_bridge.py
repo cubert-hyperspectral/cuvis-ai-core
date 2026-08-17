@@ -101,14 +101,29 @@ def reset_spawner() -> None:
 
 
 def detect_core_source() -> CoreSource:
-    """Infer how ``cuvis-ai-core`` is installed in the parent process."""
+    """Infer how ``cuvis-ai-core`` is installed in the parent process.
+
+    ``uv`` records a VCS install in the distribution's ``direct_url.json``.
+    Preserve its resolved commit when composing the child project; falling back
+    to the package version would otherwise make a parent pinned to a local
+    branch silently produce a child using the PyPI release with that version.
+    """
     import cuvis_ai_core
 
     init_path = Path(cuvis_ai_core.__file__).resolve()
     project_root = init_path.parents[1]
     if "site-packages" in str(init_path).lower():
         try:
-            from importlib.metadata import version
+            from importlib.metadata import distribution, version
+
+            direct_url = distribution("cuvis-ai-core").read_text("direct_url.json")
+            if direct_url:
+                source = json.loads(direct_url)
+                vcs_info = source.get("vcs_info") or {}
+                repo = source.get("url")
+                revision = vcs_info.get("commit_id")
+                if vcs_info.get("vcs") == "git" and repo and revision:
+                    return CoreSource(kind="git", identity=f"{repo}@{revision}")
 
             return CoreSource(
                 kind="pypi", identity=f"cuvis-ai-core=={version('cuvis-ai-core')}"

@@ -247,6 +247,23 @@ def test_build_runtime_pyproject_local_core_uses_path_source():
     }
 
 
+def test_build_runtime_pyproject_git_core_supports_ssh_url():
+    content = build_runtime_pyproject(
+        core_source=CoreSource(
+            kind="git", identity="ssh://git@github.com/org/cuvis-ai-core.git@" + "a" * 40
+        ),
+        plugins=(),
+        python_requires=">=3.11,<3.14",
+    )
+
+    doc = tomllib.loads(content)
+
+    assert doc["tool"]["uv"]["sources"]["cuvis-ai-core"] == {
+        "git": "ssh://git@github.com/org/cuvis-ai-core.git",
+        "rev": "a" * 40,
+    }
+
+
 def test_build_runtime_pyproject_ssh_plugin_normalised_to_ssh_url():
     plugins = (
         ResolvedGitPlugin(

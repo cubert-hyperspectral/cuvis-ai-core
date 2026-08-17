@@ -294,7 +294,9 @@ def _host_required_environments() -> list[str]:
 def _core_source_entry(core_source: CoreSource) -> dict | None:
     """uv ``tool.uv.sources`` entry for core, or None for a plain PyPI pin."""
     if core_source.kind == "git":
-        repo, _, sha = core_source.identity.partition("@")
+        # URLs may themselves contain ``@`` (for example ``ssh://git@...``),
+        # while the resolved revision is always the final component.
+        repo, _, sha = core_source.identity.rpartition("@")
         return {"git": repo, "rev": sha}
     if core_source.kind == "local":
         return {"path": core_source.identity, "editable": True}
