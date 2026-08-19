@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1 - 2026-08-19
+
+- Composed child environments now mirror the host's exact `torch` / `torchvision` builds and route them through the matching PyTorch wheel index (`explicit = true`), so a CUDA host no longer resolves CPU-only Windows wheels from PyPI for transitively-pulled torch. The host's torch version thereby becomes a hard constraint for plugin resolution: a plugin needing a newer torch fails composition until the host env is upgraded. Mixed or unrecognised torch flavours pin versions without naming an index and log a compose-time warning.
+- A git-installed `cuvis-ai-core` propagates its resolved commit (PEP 610 `direct_url.json`) into child environments instead of degrading to a PyPI version pin, so branch installs run the branch under test. Git URLs containing `@` (e.g. SSH) now parse correctly in the core source entry.
+- `COMPOSER_SCHEMA_VERSION` bumped to 4, so cached child environments composed without the torch pins are rebuilt.
+
 ## 0.12.0 - 2026-07-28
 
 - **Typed split constraints are evaluated and enforced at `setup()` (schemas' `constraints` replaces `leakage_check`).** New pure `evaluate_constraints(train, val, test, *, constraints, available_attrs)` in `data/selectors.py` returns one `ConstraintResult` per declared constraint (`satisfied` / `violated` / `unavailable`, with a violation count and deduped, sorted offending uids/sources); the thin `enforce_constraints` raises `SplitConstraintError` on an `error`-severity violation **and** on an `error`-severity constraint that cannot be evaluated (never silently permits training), and logs a warning for `warn` severity. `no_train_anomalous` treats a sample as anomalous iff it carries a `category_id != 0` (category 0 = background). Data modules declare which sample attrs they can supply via the new `BaseCuvisAIDataModule.supported_attrs()` (default `{tags, category_ids}`); `_setup_from_selectors` fetches constraint-only attrs opportunistically and evaluates + enforces the file-owned `constraints` from `splits.json`. `SplitLeakageError` is now a subclass of `SplitConstraintError`; `validate_leakage` remains for existing callers. Ships the cross-language golden fixture `tests/data/fixtures/constraint_cases.json` (vendored byte-identical into cuvis-next and cuvis-next-mock, LF-normalized SHA-256 pinned in each suite).
