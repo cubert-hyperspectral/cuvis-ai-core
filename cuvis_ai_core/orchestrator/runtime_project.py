@@ -74,8 +74,19 @@ def host_torch_pins() -> tuple[Mapping[str, str], str | None]:
     # A split flavour (torch+cu128 next to torchvision+cpu) is not a coherent host
     # setup; pin the versions but name no index rather than guess which one wins.
     tags = {v.partition("+")[2] for v in installed.values()}
-    tag = tags.pop() if len(tags) == 1 else ""
-    return installed, tag if _PYTORCH_INDEX_TAG.match(tag) else None
+    tag = next(iter(tags)) if len(tags) == 1 else ""
+    if _PYTORCH_INDEX_TAG.match(tag):
+        return installed, tag
+    if any(tags):
+        # Without an index the pinned local versions resolve nowhere on PyPI, so
+        # the child's lock fails with a bare no-candidates error; name the cause
+        # here where the decision is made.
+        logger.warning(
+            f"Host torch builds {installed} carry local version tags that map to "
+            f"no single PyTorch wheel index; pinning versions without an index. "
+            f"Child resolution will fail unless PyPI serves these exact versions."
+        )
+    return installed, None
 
 
 class RuntimeProjectError(RuntimeError):
