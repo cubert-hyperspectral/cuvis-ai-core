@@ -1,10 +1,11 @@
 # Changelog
 
-## 0.12.1 - 2026-08-19
+## 0.12.1 - 2026-08-20
 
 - Composed child environments now mirror the host's exact `torch` / `torchvision` builds and route them through the matching PyTorch wheel index (`explicit = true`), so a CUDA host no longer resolves CPU-only Windows wheels from PyPI for transitively-pulled torch. The host's torch version thereby becomes a hard constraint for plugin resolution: a plugin needing a newer torch fails composition until the host env is upgraded. Mixed or unrecognised torch flavours pin versions without naming an index and log a compose-time warning.
 - A git-installed `cuvis-ai-core` propagates its resolved commit (PEP 610 `direct_url.json`) into child environments instead of degrading to a PyPI version pin, so branch installs run the branch under test. Git URLs containing `@` (e.g. SSH) now parse correctly in the core source entry.
 - `COMPOSER_SCHEMA_VERSION` bumped to 4, so cached child environments composed without the torch pins are rebuilt.
+- CI: bumped `actions/checkout` to v7, `actions/setup-python` to v6, and `codecov/codecov-action` to v7.
 
 ## 0.12.0 - 2026-07-28
 
