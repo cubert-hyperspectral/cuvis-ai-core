@@ -29,6 +29,26 @@ from cuvis_ai_schemas.plugin import GitPluginSource, LocalPluginSource
 
 PYPI_CORE = CoreSource(kind="pypi", identity="cuvis-ai-core==0.7.3")
 
+_TORCH_PINS = "cuvis_ai_core.orchestrator.runtime_project.host_torch_pins"
+# Bound before the autouse fixture below can patch the module attribute, so the
+# tests that exercise the detection itself reach the real implementation.
+from cuvis_ai_core.orchestrator.runtime_project import (  # noqa: E402
+    host_torch_pins as _real_host_torch_pins,
+)
+
+
+@pytest.fixture(autouse=True)
+def no_host_torch():
+    """Default every test to a torch-less host.
+
+    The generator mirrors the composing interpreter's torch, so without this the
+    output would differ between a CI runner and a developer box and these
+    assertions would be about the machine rather than the code. Tests that care
+    about torch patch it themselves.
+    """
+    with patch(_TORCH_PINS, return_value=({}, None)):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # git_source_url — URL scheme preservation
@@ -227,6 +247,24 @@ def test_build_runtime_pyproject_local_core_uses_path_source():
     }
 
 
+def test_build_runtime_pyproject_git_core_supports_ssh_url():
+    content = build_runtime_pyproject(
+        core_source=CoreSource(
+            kind="git",
+            identity="ssh://git@github.com/org/cuvis-ai-core.git@" + "a" * 40,
+        ),
+        plugins=(),
+        python_requires=">=3.11,<3.14",
+    )
+
+    doc = tomllib.loads(content)
+
+    assert doc["tool"]["uv"]["sources"]["cuvis-ai-core"] == {
+        "git": "ssh://git@github.com/org/cuvis-ai-core.git",
+        "rev": "a" * 40,
+    }
+
+
 def test_build_runtime_pyproject_ssh_plugin_normalised_to_ssh_url():
     plugins = (
         ResolvedGitPlugin(
@@ -314,6 +352,97 @@ def test_build_runtime_pyproject_is_byte_stable_for_same_input(tmp_path: Path):
         core_source=PYPI_CORE, plugins=plugins, python_requires=">=3.11,<3.14"
     )
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# torch mirroring - the child must not silently resolve CPU wheels from PyPI
+# ---------------------------------------------------------------------------
+
+
+def _pyproject_with_torch(versions, tag):
+    with patch(_TORCH_PINS, return_value=(versions, tag)):
+        return tomllib.loads(
+            build_runtime_pyproject(
+                core_source=PYPI_CORE, plugins=(), python_requires=">=3.11,<3.14"
+            )
+        )
+
+
+def test_build_runtime_pyproject_mirrors_host_cuda_torch():
+    """Exact pins AND an explicit index: uv applies index pins only to direct
+    dependencies, so declaring one without the other silently does nothing."""
+    doc = _pyproject_with_torch(
+        {"torch": "2.11.0+cu128", "torchvision": "0.26.0+cu128"}, "cu128"
+    )
+    assert doc["project"]["dependencies"] == [
+        "cuvis-ai-core==0.7.3",
+        "torch==2.11.0+cu128",
+        "torchvision==0.26.0+cu128",
+    ]
+    assert doc["tool"]["uv"]["index"] == [
+        {
+            "name": "pytorch-cu128",
+            "url": "https://download.pytorch.org/whl/cu128",
+            "explicit": True,
+        }
+    ]
+    sources = doc["tool"]["uv"]["sources"]
+    assert sources["torch"] == {"index": "pytorch-cu128"}
+    assert sources["torchvision"] == {"index": "pytorch-cu128"}
+
+
+def test_build_runtime_pyproject_mirrors_host_cpu_torch():
+    doc = _pyproject_with_torch({"torch": "2.13.0+cpu"}, "cpu")
+    assert "torch==2.13.0+cpu" in doc["project"]["dependencies"]
+    assert doc["tool"]["uv"]["index"][0]["url"] == (
+        "https://download.pytorch.org/whl/cpu"
+    )
+    assert "torchvision" not in doc["tool"]["uv"]["sources"]
+
+
+def test_build_runtime_pyproject_pins_plain_torch_without_naming_an_index():
+    """A PyPI-sourced torch has no local tag, so there is no index to name -
+    but the version is still pinned so the child matches the parent."""
+    doc = _pyproject_with_torch({"torch": "2.13.0"}, None)
+    assert "torch==2.13.0" in doc["project"]["dependencies"]
+    assert "index" not in doc["tool"]["uv"]
+    assert "torch" not in doc["tool"]["uv"].get("sources", {})
+
+
+def test_build_runtime_pyproject_omits_torch_when_host_has_none():
+    doc = _pyproject_with_torch({}, None)
+    assert doc["project"]["dependencies"] == ["cuvis-ai-core==0.7.3"]
+    assert "index" not in doc["tool"]["uv"]
+
+
+def test_host_torch_pins_rejects_unknown_local_tag(monkeypatch):
+    """An unrecognised local segment must not be interpolated into an index URL."""
+    from cuvis_ai_core.orchestrator import runtime_project
+
+    monkeypatch.setattr(
+        runtime_project, "version", lambda name: "2.11.0+nightly20260101"
+    )
+    _real_host_torch_pins.cache_clear()
+    try:
+        versions, tag = _real_host_torch_pins()
+    finally:
+        _real_host_torch_pins.cache_clear()
+    assert versions["torch"] == "2.11.0+nightly20260101"
+    assert tag is None
+
+
+def test_host_torch_pins_names_no_index_for_mismatched_flavours(monkeypatch):
+    """torch+cu128 beside torchvision+cpu is not a coherent host; pin, do not guess."""
+    from cuvis_ai_core.orchestrator import runtime_project
+
+    installed = {"torch": "2.11.0+cu128", "torchvision": "0.26.0+cpu"}
+    monkeypatch.setattr(runtime_project, "version", lambda name: installed[name])
+    _real_host_torch_pins.cache_clear()
+    try:
+        _, tag = _real_host_torch_pins()
+    finally:
+        _real_host_torch_pins.cache_clear()
+    assert tag is None
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ from typing import Literal
 # Bump when the composer's logic changes shape (key fields, hashing
 # convention, atomic-publish protocol, etc.) so existing cache entries
 # are naturally invalidated.
-COMPOSER_SCHEMA_VERSION = 3
+COMPOSER_SCHEMA_VERSION = 4
 
 # The directory name is the digest alone, so it is the sole on-disk
 # identity. 12 hex chars (48 bits) sizes it to make collisions negligible.

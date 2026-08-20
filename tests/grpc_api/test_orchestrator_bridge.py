@@ -9,6 +9,7 @@ in-memory mode used by the rest of the suite.
 from __future__ import annotations
 
 import json
+import importlib.metadata
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -506,6 +507,35 @@ def test_detect_core_source_site_packages_reports_pypi(monkeypatch):
     source = orchestrator_bridge.detect_core_source()
     assert source.kind == "pypi"
     assert "cuvis-ai-core==" in source.identity
+
+
+def test_detect_core_source_site_packages_preserves_uv_git_pin(monkeypatch):
+    import cuvis_ai_core
+
+    monkeypatch.setattr(
+        cuvis_ai_core,
+        "__file__",
+        "/opt/venv/lib/site-packages/cuvis_ai_core/__init__.py",
+    )
+    direct_url = json.dumps(
+        {
+            "url": "https://github.com/cubert-hyperspectral/cuvis-ai-core.git",
+            "vcs_info": {"vcs": "git", "commit_id": "a" * 40},
+        }
+    )
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda _: SimpleNamespace(read_text=lambda _: direct_url),
+    )
+
+    source = orchestrator_bridge.detect_core_source()
+
+    assert source == orchestrator_bridge.CoreSource(
+        kind="git",
+        identity="https://github.com/cubert-hyperspectral/cuvis-ai-core.git@"
+        + "a" * 40,
+    )
 
 
 # ---------------------------------------------------------------------------
