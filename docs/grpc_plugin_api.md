@@ -347,6 +347,16 @@ inside the composed environment. A pipeline that names a plugin which was never 
 `LoadPipeline` with `FAILED_PRECONDITION` (call `LoadPlugin` for it first). None of these surface in
 `LoadPlugin.error`.
 
+**A child runtime that dies mid-run** (out of memory, a native crash in a plugin or torch, an
+external kill) fails the in-flight `Train` / `Inference` / pipeline RPC with `INTERNAL` and details
+`child runtime exited unexpectedly (exit code N): <tail of the child's stderr log>` — not with the
+raw transport error. The dead handle stays attached to the session; re-issue `LoadPipeline` or
+`RestoreTrainRun` to spawn a fresh child, or close the session. On session close, a child that
+exited on its own with a nonzero code has its `child.stdout.log` / `child.stderr.log` preserved
+under `<cache root>/.crash_logs/<timestamp>-<session-id>/` (override the location with
+`CUVIS_RUNTIME_CRASH_DIR`; the store keeps the newest five crashes) together with a
+`crash_info.txt` naming the exit code — the session's scratch tree itself is still deleted.
+
 ## Best practices
 
 - **Pin Git plugins by tag.** Branches/commits are not supported; a tag is reproducible.

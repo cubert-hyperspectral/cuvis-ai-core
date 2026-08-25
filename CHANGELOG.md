@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **A crashed child runtime now reports itself instead of a bare transport error.** When a
+  forwarded RPC (`Train`, `Inference`, `LoadPipeline`, `RestoreTrainRun`, and the other pipeline
+  ops) fails because the child process exited, the parent answers `INTERNAL` with
+  `child runtime exited unexpectedly (exit code N)` plus the tail of the child's stderr log,
+  instead of copying through the transport's `UNAVAILABLE` "connection refused" - which named the
+  wrong problem and, for in-app training, let the GUI blame the app-server connection. Exit codes
+  render with their platform reading (Windows NTSTATUS hex such as `0xC0000409`, POSIX signal
+  names). A live child's own status codes still pass through verbatim. Integrators that matched
+  on `UNAVAILABLE` for this failure (none known) must match `INTERNAL` now.
+- **Child crash logs survive session teardown.** `close_session` used to delete the session
+  scratch tree - including `child.stdout.log` / `child.stderr.log`, the only postmortem evidence -
+  unconditionally. A child that exited on its own with a nonzero code now gets both logs copied to
+  `<cache root>/.crash_logs/<timestamp>-<session-id>/` first (new `orchestrator/crash_logs.py`;
+  override the store with `CUVIS_RUNTIME_CRASH_DIR`, bounded to the newest five crashes), with a
+  `crash_info.txt` naming the exit code and endpoint. Parent-initiated termination of a live child
+  is not a crash and preserves nothing; the scratch tree is deleted either way.
+- `ChildHandle.terminate()` logs at warning level when the child was already dead (previously a
+  silent early return), and a failed graceful `StopRun` logs at info instead of debug.
+
 ## 0.13.0 - 2026-08-25
 
 - **Fixed profiling for child-hosted sessions** (broken since the 0.7.0 child-env orchestrator): `SetProfiling` and `GetProfilingSummary` now forward through the orchestrator bridge to the child runtime, where the live pipeline - and with it all profiling state - actually lives. The parent's local `ProfilingService` required `session.pipeline`, which the orchestrator parent never sets, so every profiling call failed with FAILED_PRECONDITION ("No pipeline is available for this session") and callers such as CuvisNEXT always saw an empty profiling summary. The child `RunRuntimeServicer` gains both RPCs as one-line delegates onto the existing `ProfilingService`, which is correct unchanged on the child side. A session without an attached child now reports "No child runtime is attached to this session" like every other pipeline op. Covered by a new end-to-end test that enables profiling, runs inference, and asserts per-node stats across the parent-child seam.

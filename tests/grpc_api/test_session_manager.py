@@ -332,3 +332,91 @@ def test_close_session_isolates_trainer_cleanup_failure():
     manager.close_session(sid)
     assert sid not in manager.list_sessions()
     trainer.cleanup.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# close_session: crash-log preservation for a child that died on its own
+# ---------------------------------------------------------------------------
+
+
+def _session_with_child(tmp_path, *, returncode, terminate_result):
+    """Session with a fake child handle and a real runtime tree on disk."""
+    manager = SessionManager()
+    sid = manager.create_session()
+    state = manager.get_session(sid)
+
+    runtime = tmp_path / "session_root" / "scratch" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "child.stdout.log").write_text("nodes registered", encoding="utf-8")
+    (runtime / "child.stderr.log").write_text(
+        "Fatal Python error: Aborted", encoding="utf-8"
+    )
+
+    child = MagicMock()
+    child.returncode = returncode
+    child.terminate.return_value = terminate_result
+    child.endpoint = "127.0.0.1:9"
+    child.stdout_log = runtime / "child.stdout.log"
+    child.stderr_log = runtime / "child.stderr.log"
+
+    state.child_handle = child
+    state.runtime_base_dir = tmp_path / "session_root"
+    return manager, sid
+
+
+def test_close_session_preserves_logs_when_child_died_on_its_own(monkeypatch, tmp_path):
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager, sid = _session_with_child(tmp_path, returncode=3, terminate_result=3)
+
+    manager.close_session(sid)
+
+    # The copies happened BEFORE the rmtree: crash dir populated, tree gone.
+    crash_dirs = list(crash_root.iterdir())
+    assert len(crash_dirs) == 1
+    assert (crash_dirs[0] / "child.stderr.log").exists()
+    assert (crash_dirs[0] / "child.stdout.log").exists()
+    assert "exit_code: 3" in (crash_dirs[0] / "crash_info.txt").read_text(
+        encoding="utf-8"
+    )
+    assert not (tmp_path / "session_root").exists()
+
+
+def test_close_session_normal_exit_leaves_no_crash_dir(monkeypatch, tmp_path):
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager, sid = _session_with_child(tmp_path, returncode=None, terminate_result=0)
+
+    manager.close_session(sid)
+
+    assert not crash_root.exists()
+    assert not (tmp_path / "session_root").exists()
+
+
+def test_close_session_no_crash_dir_for_parent_terminated_child(monkeypatch, tmp_path):
+    # A child alive at close (returncode None) that terminate() kills exits
+    # nonzero (TerminateProcess reports 1) — that is NOT a crash.
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager, sid = _session_with_child(tmp_path, returncode=None, terminate_result=1)
+
+    manager.close_session(sid)
+
+    assert not crash_root.exists()
+    assert not (tmp_path / "session_root").exists()
+
+
+def test_close_session_without_child_handle_reaps_tree(monkeypatch, tmp_path):
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager = SessionManager()
+    sid = manager.create_session()
+    base = tmp_path / "session_root"
+    base.mkdir()
+    (base / "leftover.txt").write_text("x", encoding="utf-8")
+    manager.get_session(sid).runtime_base_dir = base
+
+    manager.close_session(sid)
+
+    assert not base.exists()
+    assert not crash_root.exists()

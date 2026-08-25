@@ -26,6 +26,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     _prepend_path,
     _read_stderr_log,
     _timeout_from_env,
+    dead_child_details,
 )
 
 
@@ -322,6 +323,76 @@ def test_terminate_returns_returncode_when_already_dead():
     assert handle.terminate() == 4
     proc.terminate.assert_not_called()
     proc.kill.assert_not_called()
+
+
+def test_terminate_logs_already_dead_child():
+    from loguru import logger as loguru_logger
+
+    records: list[str] = []
+    sink_id = loguru_logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
+        proc = _fake_proc(poll=4, returncode=4)
+        handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+        assert handle.terminate() == 4
+    finally:
+        loguru_logger.remove(sink_id)
+    assert any("already dead" in record for record in records)
+
+
+# ---------------------------------------------------------------------------
+# dead_child_details: the post-mortem check the bridge runs after a
+# forwarded RPC fails at the transport level.
+# ---------------------------------------------------------------------------
+
+
+def test_dead_child_details_returns_none_while_alive():
+    proc = _fake_proc(poll=None, returncode=None)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    assert dead_child_details(handle, wait_s=0.01) is None
+    proc.wait.assert_called_once()
+
+
+def test_dead_child_details_reports_exit_code_and_stderr_tail(tmp_path):
+    log = tmp_path / "child.stderr.log"
+    log.write_text("...\nRuntimeError: CUDA out of memory\n", encoding="utf-8")
+    proc = _fake_proc(poll=7, returncode=7)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=log)
+
+    details = dead_child_details(handle)
+
+    assert details is not None
+    assert "exit code 7" in details
+    assert "CUDA out of memory" in details
+    proc.wait.assert_not_called()
+
+
+def test_dead_child_details_waits_for_late_reap():
+    # Field-observed race: the endpoint already refuses connections while
+    # poll() still reports None; the short wait harvests the exit code.
+    proc = _fake_proc(poll=[None, 3], returncode=3)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+
+    details = dead_child_details(handle, wait_s=0.01)
+
+    assert details is not None
+    assert "exit code 3" in details
+    proc.wait.assert_called_once()
+
+
+def test_dead_child_details_missing_stderr_log():
+    proc = _fake_proc(poll=9, returncode=9)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=None)
+    details = dead_child_details(handle)
+    assert details is not None
+    assert "no stderr was captured" in details
+
+
+def test_dead_child_details_tolerates_handle_without_process():
+    from types import SimpleNamespace
+
+    # Mirrors _InMemoryChildHandle: no process, no stderr_log attributes.
+    assert dead_child_details(SimpleNamespace(returncode=None)) is None
+    assert dead_child_details(SimpleNamespace()) is None
 
 
 def test_terminate_graceful_stop_then_clean_exit(monkeypatch):

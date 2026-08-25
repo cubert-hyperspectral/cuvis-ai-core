@@ -434,10 +434,12 @@ def test_call_child_with_error_propagation_surfaces_rpc_error():
         def SomeMethod(self, request):
             raise _InMemoryRpcError(grpc.StatusCode.INTERNAL, "boom")
 
+    # Handle-shaped double: a live child (returncode None) whose stub raises.
+    child = SimpleNamespace(stub=_RaisingStub, returncode=None)
     ctx = _InMemoryContext()
     factory = MagicMock(return_value="empty")
     out = orchestrator_bridge._call_child_with_error_propagation(
-        _RaisingStub(), "SomeMethod", object(), ctx, factory
+        child, "SomeMethod", object(), ctx, factory
     )
     assert out == "empty"
     assert ctx.code() is grpc.StatusCode.INTERNAL
@@ -638,6 +640,79 @@ def test_forward_train_propagates_stream_error():
     assert out == []
     assert ctx.code() is grpc.StatusCode.INTERNAL
     assert ctx.details() == "stream blew up"
+
+
+def test_forward_train_live_child_status_passes_through_verbatim():
+    # A live child's own status must NOT be rewritten by the crash check.
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.Train.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.INVALID_ARGUMENT, "bad trainrun"
+    )
+    out = list(
+        orchestrator_bridge.forward_train(
+            sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+        )
+    )
+    assert out == []
+    assert ctx.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert ctx.details() == "bad trainrun"
+
+
+def _make_child_dead(handle, tmp_path, *, exit_code=9):
+    """Flip an attached fake child into the 'process exited' state."""
+    stderr = tmp_path / "child.stderr.log"
+    stderr.write_text("...\nRuntimeError: CUDA out of memory\n", encoding="utf-8")
+    handle.process = None  # dead_child_details reads returncode directly
+    handle.returncode = exit_code
+    handle.stderr_log = stderr
+    return stderr
+
+
+def test_forward_train_reports_child_crash_when_child_has_exited(tmp_path):
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path)
+    handle.stub.return_value.Train.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.UNAVAILABLE, "failed to connect to all addresses"
+    )
+
+    out = list(
+        orchestrator_bridge.forward_train(
+            sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+        )
+    )
+
+    assert out == []
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert "child runtime exited unexpectedly" in ctx.details()
+    assert "exit code 9" in ctx.details()
+    assert "CUDA out of memory" in ctx.details()
+    # The useless transport text is replaced, not appended to.
+    assert "failed to connect" not in ctx.details()
+
+
+def test_forward_inference_reports_child_crash_when_child_has_exited(tmp_path):
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path, exit_code=3221226505)
+    handle.stub.return_value.Inference.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.UNAVAILABLE, "Socket closed"
+    )
+
+    resp = orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+
+    assert resp == cuvis_ai_pb2.InferenceResponse()
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert "0xC0000409" in ctx.details()
 
 
 # ---------------------------------------------------------------------------
