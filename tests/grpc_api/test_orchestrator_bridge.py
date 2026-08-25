@@ -572,6 +572,31 @@ def test_forward_inference_forwards_to_child():
     handle.stub.return_value.Inference.assert_called_once()
 
 
+def test_forward_profiling_forwards_to_child():
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.SetProfiling.return_value = (
+        cuvis_ai_pb2.SetProfilingResponse(profiling_enabled=True)
+    )
+    handle.stub.return_value.GetProfilingSummary.return_value = (
+        cuvis_ai_pb2.GetProfilingSummaryResponse()
+    )
+
+    set_resp = orchestrator_bridge.forward_set_profiling(
+        sm, cuvis_ai_pb2.SetProfilingRequest(session_id=sid, enabled=True), ctx
+    )
+    assert set_resp.profiling_enabled is True
+    handle.stub.return_value.SetProfiling.assert_called_once()
+
+    summary_resp = orchestrator_bridge.forward_get_profiling_summary(
+        sm, cuvis_ai_pb2.GetProfilingSummaryRequest(session_id=sid), ctx
+    )
+    assert summary_resp == cuvis_ai_pb2.GetProfilingSummaryResponse()
+    handle.stub.return_value.GetProfilingSummary.assert_called_once()
+
+
 def test_forward_train_unknown_session_yields_empty():
     sm = SessionManager()
     ctx = _InMemoryContext()
@@ -803,6 +828,8 @@ def test_forward_restore_train_run_keeps_caller_session_on_error(monkeypatch, tm
             cuvis_ai_pb2.GetPipelineVisualizationRequest,
         ),
         ("forward_get_train_status", cuvis_ai_pb2.GetTrainStatusRequest),
+        ("forward_set_profiling", cuvis_ai_pb2.SetProfilingRequest),
+        ("forward_get_profiling_summary", cuvis_ai_pb2.GetProfilingSummaryRequest),
     ],
 )
 def test_pipeline_op_wrappers_without_child(fn_name, request_cls):
@@ -887,6 +914,11 @@ def test_inmemory_stub_methods_invoke_servicer():
         (
             "RestoreTrainRun",
             cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path="absent.yaml"),
+        ),
+        ("SetProfiling", cuvis_ai_pb2.SetProfilingRequest(session_id="x")),
+        (
+            "GetProfilingSummary",
+            cuvis_ai_pb2.GetProfilingSummaryRequest(session_id="x"),
         ),
     ]
     for method_name, request in calls:

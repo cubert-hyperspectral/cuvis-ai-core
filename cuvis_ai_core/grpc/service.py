@@ -236,12 +236,22 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Profiling
     # ------------------------------------------------------------------
     def SetProfiling(self, request, context) -> cuvis_ai_pb2.SetProfilingResponse:
-        return self.profiling_service.set_profiling(request, context)
+        # Profiling state lives on the live pipeline, which the child holds;
+        # the parent never has one, so both profiling RPCs are proxied.
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_set_profiling(
+            self.session_manager, request, context
+        )
 
     def GetProfilingSummary(
         self, request, context
     ) -> cuvis_ai_pb2.GetProfilingSummaryResponse:
-        return self.profiling_service.get_profiling_summary(request, context)
+        from . import orchestrator_bridge
+
+        return orchestrator_bridge.forward_get_profiling_summary(
+            self.session_manager, request, context
+        )
 
 
 __all__ = ["CuvisAIService"]

@@ -318,6 +318,11 @@ def test_unary_delegates_forward_to_services():
         ),
         ("GetTrainStatus", cuvis_ai_pb2.GetTrainStatusRequest(session_id="ghost")),
         ("Inference", cuvis_ai_pb2.InferenceRequest(session_id="ghost")),
+        ("SetProfiling", cuvis_ai_pb2.SetProfilingRequest(session_id="ghost")),
+        (
+            "GetProfilingSummary",
+            cuvis_ai_pb2.GetProfilingSummaryRequest(session_id="ghost"),
+        ),
     ]
     for handler, request in cases:
         getattr(servicer, handler)(request, FakeContext())
