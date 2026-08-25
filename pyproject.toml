@@ -125,6 +125,7 @@ restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
 download-model = "cuvis_ai_core.data.model_weights:download_model_cli"
 suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
+clean-run-cache = "cuvis_ai_core.orchestrator.clean_run_cache:main"
 audit-plugin-deps = "scripts.audit_plugin_deps:main"
 provision = "scripts.provision:main"
 
