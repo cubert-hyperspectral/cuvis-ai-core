@@ -39,7 +39,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 from loguru import logger
 
 from cuvis_ai_core.grpc.session_manager import SessionManager, SessionState
-from cuvis_ai_core.orchestrator.cache_key import CoreSource
+from cuvis_ai_core.orchestrator.cache_key import CoreSource, pyproject_sha256_of
 from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
 from cuvis_ai_core.orchestrator.spawner import (
     ChildHandle,
@@ -134,7 +134,15 @@ def detect_core_source() -> CoreSource:
                 f"Could not read installed cuvis-ai-core version: {exc}; "
                 f"falling back to local-editable source."
             )
-    return CoreSource(kind="local", identity=str(project_root))
+    # A local core is installed editable into the child, so its own
+    # pyproject.toml is the only tree content that shapes the venv —
+    # hash it into the identity or a dependency edit would silently
+    # reuse a stale child env.
+    return CoreSource(
+        kind="local",
+        identity=str(project_root),
+        pyproject_sha256=pyproject_sha256_of(project_root),
+    )
 
 
 class PluginsNotRegisteredError(Exception):

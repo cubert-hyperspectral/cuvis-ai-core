@@ -72,9 +72,9 @@ class ComposerError(RuntimeError):
 # map from growing without bound on a long-lived server: while a build
 # holds (or waits on) a key's lock the caller's local reference keeps it
 # alive, so concurrent callers share the same object; once no one holds
-# it the entry is garbage-collected. Dirty local plugins mint a fresh
-# digest per run, so an unevicted dict would otherwise leak one lock per
-# run forever.
+# it the entry is garbage-collected — the digest space is unbounded over
+# a server's lifetime (every new dependency set mints one), so an
+# unevicted dict would slowly leak locks.
 _in_process_locks: "weakref.WeakValueDictionary[str, threading.Lock]" = (
     weakref.WeakValueDictionary()
 )

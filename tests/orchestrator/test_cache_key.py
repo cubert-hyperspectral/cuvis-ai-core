@@ -134,7 +134,8 @@ def test_schema_version_change_changes_key():
     assert base != other
 
 
-def test_dirty_local_plugin_forces_unique_directory(tmp_path: Path):
+def test_dirty_local_plugin_reuses_directory(tmp_path: Path):
+    """Dirty working trees reuse one env: editable installs never bake source state."""
     dirty = ResolvedLocalPlugin(
         name="local_plugin",
         path=tmp_path,
@@ -157,7 +158,103 @@ def test_dirty_local_plugin_forces_unique_directory(tmp_path: Path):
         python_version="3.11.12",
         platform_tag="win-amd64",
     ).directory_name()
-    assert a != b  # dirty_suffix is random per call
+    assert a == b
+
+
+def _local_plugin_key(plugin: ResolvedLocalPlugin) -> str:
+    """Directory name for a single-local-plugin key with fixed env facts."""
+    return compute_cache_key(
+        core_source=CORE,
+        plugins=(plugin,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).directory_name()
+
+
+def test_digest_invariant_to_git_head_and_dirty(tmp_path: Path):
+    """Commits (HEAD change) and dirty-flag flips reuse the same env."""
+    base = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=False,
+    )
+    other_head = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="e" * 40,
+        dirty=False,
+    )
+    now_dirty = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=True,
+    )
+    assert _local_plugin_key(base) == _local_plugin_key(other_head)
+    assert _local_plugin_key(base) == _local_plugin_key(now_dirty)
+
+
+def test_digest_sensitive_to_local_pyproject_and_path(tmp_path: Path):
+    """The dependency identity — pyproject hash and path — still splits the cache."""
+    base = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=False,
+    )
+    other_pyproject = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="y" * 64,
+        git_head="d" * 40,
+        dirty=False,
+    )
+    other_path = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path / "elsewhere",
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=False,
+    )
+    assert _local_plugin_key(base) != _local_plugin_key(other_pyproject)
+    assert _local_plugin_key(base) != _local_plugin_key(other_path)
+
+
+def test_digest_sensitive_to_local_core_pyproject():
+    """Editing a local core's dependencies must mint a new env (editable core)."""
+    core_a = CoreSource(
+        kind="local", identity="/somewhere/core", pyproject_sha256="a" * 64
+    )
+    core_b = CoreSource(
+        kind="local", identity="/somewhere/core", pyproject_sha256="b" * 64
+    )
+    a = compute_cache_key(
+        core_source=core_a,
+        plugins=(PLUGIN_A,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).directory_name()
+    b = compute_cache_key(
+        core_source=core_b,
+        plugins=(PLUGIN_A,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).directory_name()
+    assert a != b
 
 
 def test_clean_local_plugin_caches_normally(tmp_path: Path):
@@ -198,6 +295,28 @@ def test_serialise_roundtrip_is_canonical():
     assert payload["schema_version"] == COMPOSER_SCHEMA_VERSION
 
 
+def test_serialise_keeps_provenance_forensics(tmp_path: Path):
+    """key.json still records git_head/dirty even though the digest ignores them."""
+    local = ResolvedLocalPlugin(
+        name="local_plugin",
+        path=tmp_path,
+        package_name="local-plugin",
+        pyproject_sha256="x" * 64,
+        git_head="d" * 40,
+        dirty=True,
+    )
+    payload = compute_cache_key(
+        core_source=CORE,
+        plugins=(local,),
+        spec_hash=SPEC_HASH,
+        python_version="3.11.12",
+        platform_tag="win-amd64",
+    ).serialise()
+    (entry,) = payload["plugins"]
+    assert entry["git_head"] == "d" * 40
+    assert entry["dirty"] is True
+
+
 def test_spec_hash_of_is_stable_and_content_sensitive():
     a = spec_hash_of("[project]\nname = 'x'\n")
     b = spec_hash_of("[project]\nname = 'x'\n")
@@ -209,7 +328,7 @@ def test_spec_hash_of_is_stable_and_content_sensitive():
 
 def test_directory_name_is_hash_only():
     name = _base_key().directory_name()
-    assert re.fullmatch(r"[0-9a-f]{12}", name), name
+    assert re.fullmatch(r"[0-9a-f]{16}", name), name
     # No human-readable prefix or separator leaks into the name, however
     # many plugins the pipeline declares.
     assert "__" not in name
@@ -306,11 +425,12 @@ def test_human_manifest_marks_dirty_local_plugin(tmp_path: Path):
         python_version="3.11.12",
         platform_tag="win-amd64",
     )
-    # A dirty local plugin mints a per-run suffix and stamps the dev-mode note.
-    assert key.dirty_suffix is not None
+    # Dirty state is a human-facing forensics marker only — no per-run
+    # suffix, no dev-mode block.
     manifest = key.human_manifest()
-    assert "Dev mode" in manifest
     assert "local (dirty)" in manifest
+    assert "unique per run" not in manifest
+    assert "Dev mode" not in manifest
 
 
 def test_short_core_identity_handles_git_and_local():

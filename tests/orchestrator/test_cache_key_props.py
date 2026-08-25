@@ -183,6 +183,32 @@ def test_cache_key_directory_name_is_idempotent(core: CoreSource, spec: str) -> 
     assert key.directory_name() == key.directory_name()
 
 
+@given(plugin=_local_plugin(), spec=_spec_hash_text)
+@settings(max_examples=50)
+def test_digest_invariant_to_local_provenance(
+    plugin: ResolvedLocalPlugin, spec: str
+) -> None:
+    """Flipping dirty or moving HEAD never changes the digest (editable installs)."""
+    import dataclasses
+
+    flipped = dataclasses.replace(plugin, dirty=not plugin.dirty, git_head="f" * 40)
+    key_a = compute_cache_key(
+        core_source=CoreSource(kind="pypi", identity="cuvis-ai-core==1.0.0"),
+        plugins=(plugin,),
+        spec_hash=spec,
+        python_version="3.11.0",
+        platform_tag="linux-x86_64",
+    )
+    key_b = compute_cache_key(
+        core_source=CoreSource(kind="pypi", identity="cuvis-ai-core==1.0.0"),
+        plugins=(flipped,),
+        spec_hash=spec,
+        python_version="3.11.0",
+        platform_tag="linux-x86_64",
+    )
+    assert key_a.directory_name() == key_b.directory_name()
+
+
 @given(core=_core_source(), spec=_spec_hash_text)
 @settings(max_examples=50)
 def test_cache_key_serialise_round_trips_via_json(core: CoreSource, spec: str) -> None:
