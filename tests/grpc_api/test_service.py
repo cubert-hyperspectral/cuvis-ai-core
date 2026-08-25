@@ -50,6 +50,11 @@ def test_delegating_handlers_forward_without_error():
             cuvis_ai_pb2.ListAvailableNodesRequest(session_id="ghost"),
         ),
         ("ClearPluginCache", cuvis_ai_pb2.ClearPluginCacheRequest()),
+        ("SetProfiling", cuvis_ai_pb2.SetProfilingRequest(session_id="ghost")),
+        (
+            "GetProfilingSummary",
+            cuvis_ai_pb2.GetProfilingSummaryRequest(session_id="ghost"),
+        ),
     ]
     for handler, request in unary_calls:
         result = getattr(service, handler)(request, ctx)

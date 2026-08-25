@@ -666,6 +666,27 @@ def forward_stop_train(session_manager, request, context):
     )
 
 
+def forward_set_profiling(session_manager, request, context):
+    """Parent's SetProfiling path: profiling state lives on the child's pipeline."""
+    return _forward_pipeline_op(
+        session_manager,
+        request,
+        context,
+        stub_method="SetProfiling",
+        empty_response_factory=cuvis_ai_pb2.SetProfilingResponse,
+    )
+
+
+def forward_get_profiling_summary(session_manager, request, context):
+    return _forward_pipeline_op(
+        session_manager,
+        request,
+        context,
+        stub_method="GetProfilingSummary",
+        empty_response_factory=cuvis_ai_pb2.GetProfilingSummaryResponse,
+    )
+
+
 # ---------------------------------------------------------------------------
 # In-memory test seam — production code never instantiates these.
 # ---------------------------------------------------------------------------
@@ -785,6 +806,12 @@ class _InMemoryStub:
                 raise _InMemoryRpcError(code, ctx.details())
 
         return _iter()
+
+    def SetProfiling(self, request, timeout=None):
+        return self._call("SetProfiling", request, timeout)
+
+    def GetProfilingSummary(self, request, timeout=None):
+        return self._call("GetProfilingSummary", request, timeout)
 
     def CloseSession(self, request, timeout=None):
         return self._call("CloseSession", request, timeout)

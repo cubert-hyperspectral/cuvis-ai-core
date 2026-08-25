@@ -24,6 +24,7 @@ from loguru import logger
 from cuvis_ai_core.grpc.inference_service import InferenceService
 from cuvis_ai_core.grpc.introspection_service import IntrospectionService
 from cuvis_ai_core.grpc.pipeline_service import PipelineService
+from cuvis_ai_core.grpc.profiling_service import ProfilingService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.training_service import TrainingService
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
@@ -45,6 +46,7 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         self._training_service = TrainingService(self._session_manager)
         self._trainrun_service = TrainRunService(self._session_manager)
         self._introspection_service = IntrospectionService(self._session_manager)
+        self._profiling_service = ProfilingService(self._session_manager)
         # Session id the parent handed us via InitializeSession. The
         # child runs at most one session per process, so caching the id
         # here lets RestoreTrainRun attach its pipeline to that exact
@@ -222,6 +224,24 @@ class RunRuntimeServicer(cuvis_ai_pb2_grpc.RunRuntimeServicer):
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.StopTrainResponse:
         return self._training_service.stop_train(request, context)
+
+    # ------------------------------------------------------------------
+    # Profiling
+    # ------------------------------------------------------------------
+
+    def SetProfiling(
+        self,
+        request: cuvis_ai_pb2.SetProfilingRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.SetProfilingResponse:
+        return self._profiling_service.set_profiling(request, context)
+
+    def GetProfilingSummary(
+        self,
+        request: cuvis_ai_pb2.GetProfilingSummaryRequest,
+        context: grpc.ServicerContext,
+    ) -> cuvis_ai_pb2.GetProfilingSummaryResponse:
+        return self._profiling_service.get_profiling_summary(request, context)
 
     # ------------------------------------------------------------------
     # Lifecycle

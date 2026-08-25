@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.0 - 2026-08-25
+
+- **Fixed profiling for child-hosted sessions** (broken since the 0.7.0 child-env orchestrator): `SetProfiling` and `GetProfilingSummary` now forward through the orchestrator bridge to the child runtime, where the live pipeline - and with it all profiling state - actually lives. The parent's local `ProfilingService` required `session.pipeline`, which the orchestrator parent never sets, so every profiling call failed with FAILED_PRECONDITION ("No pipeline is available for this session") and callers such as CuvisNEXT always saw an empty profiling summary. The child `RunRuntimeServicer` gains both RPCs as one-line delegates onto the existing `ProfilingService`, which is correct unchanged on the child side. A session without an attached child now reports "No child runtime is attached to this session" like every other pipeline op. Covered by a new end-to-end test that enables profiling, runs inference, and asserts per-node stats across the parent-child seam.
+- Raised the `cuvis-ai-schemas[proto]` floor to 0.10.0 - the release that adds the two profiling RPCs to the `RunRuntime` proto service. An older child env (composed before this release) answers the forwarded calls with UNIMPLEMENTED, which propagates to the caller unchanged.
+
 ## 0.12.1 - 2026-08-20
 
 - Composed child environments now mirror the host's exact `torch` / `torchvision` builds and route them through the matching PyTorch wheel index (`explicit = true`), so a CUDA host no longer resolves CPU-only Windows wheels from PyPI for transitively-pulled torch. The host's torch version thereby becomes a hard constraint for plugin resolution: a plugin needing a newer torch fails composition until the host env is upgraded. Mixed or unrecognised torch flavours pin versions without naming an index and log a compose-time warning.
