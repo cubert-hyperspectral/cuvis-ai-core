@@ -47,6 +47,24 @@ pytest_plugins = [
 ]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_run_cache(tmp_path_factory):
+    """Point the composed-env cache at a throwaway root for the whole suite.
+
+    The production server's maintenance loop (orphan reaping + cache
+    eviction) acts on ``CUVIS_RUN_CACHE_DIR``; without this isolation any
+    test that starts a server would run destructive maintenance against
+    the developer's real ``~/.cuvis_runs``. ``setdefault`` keeps explicit
+    per-test monkeypatches authoritative.
+    """
+    import os
+
+    root = tmp_path_factory.mktemp("run_cache")
+    os.environ.setdefault("CUVIS_RUN_CACHE_DIR", str(root))
+    os.environ.setdefault("CUVIS_RUN_CACHE_MAINTENANCE", "0")
+    yield
+
+
 @pytest.fixture(scope="session")
 def test_data_path():
     """Path to test data directory.

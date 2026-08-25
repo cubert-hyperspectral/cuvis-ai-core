@@ -39,6 +39,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 from loguru import logger
 
 from cuvis_ai_core.grpc.session_manager import SessionManager, SessionState
+from cuvis_ai_core.orchestrator import leases
 from cuvis_ai_core.orchestrator.cache_key import CoreSource, pyproject_sha256_of
 from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
 from cuvis_ai_core.orchestrator.spawner import (
@@ -190,6 +191,11 @@ def ensure_child_for_session(
             f"(returncode={existing.returncode}); re-spawning a fresh child."
         )
         session.child_handle = None
+        # This path never reaches close_session, so the dead child's lease
+        # would otherwise linger until an eviction pass GCs it.
+        if session.lease_cache_root is not None:
+            leases.remove_lease(session.lease_cache_root, session_id)
+            session.lease_cache_root = None
 
     resolved = _resolve_plugins(pipeline_config, session, data_module)
     core_source = detect_core_source()
@@ -201,19 +207,62 @@ def ensure_child_for_session(
     venv = _composer(resolved, core_source=core_source, active_data_module=data_module)
 
     declared = _default_declared_paths(session_id)
-    handle = get_spawner().spawn(
-        venv,
-        # Run the child with the server's own working directory so a
-        # config's relative data/output paths resolve exactly as they did
-        # under the in-process server. declared_paths still drives HOME/TEMP
-        # redirection and the future sandbox bind-mount set — it is
-        # intentionally not the cwd.
-        cwd=Path(os.getcwd()),
-        declared_paths=declared,
-        request_gpu=_gpu_requested(),
+    cache_root = venv.parent.parent
+    entry_digest = venv.parent.name
+    # Lease lifecycle applies only to real composed cache entries — the
+    # root carries the composer's marker file. Test seams (the in-memory
+    # composer) return dummy paths with no cache behind them to protect.
+    lease_root: Path | None = (
+        cache_root if (cache_root / leases.ROOT_MARKER_NAME).is_file() else None
     )
+    if lease_root is not None:
+        # Intent lease BEFORE the spawn: endpoint/health polling can take
+        # minutes and the freshly composed entry must already be protected
+        # from eviction. A lease-write failure fails the whole spawn — an
+        # unprotected child is worse than a clean error.
+        leases.write_intent_lease(lease_root, session_id, entry_digest)
+        session.lease_cache_root = lease_root
+    try:
+        handle = get_spawner().spawn(
+            venv,
+            # Run the child with the server's own working directory so a
+            # config's relative data/output paths resolve exactly as they did
+            # under the in-process server. declared_paths still drives HOME/TEMP
+            # redirection and the future sandbox bind-mount set — it is
+            # intentionally not the cwd.
+            cwd=Path(os.getcwd()),
+            declared_paths=declared,
+            request_gpu=_gpu_requested(),
+        )
+    except Exception:
+        if lease_root is not None:
+            leases.remove_lease(lease_root, session_id)
+            session.lease_cache_root = None
+        raise
 
-    _initialize_child_session(handle, session_id, session, resolved, declared)
+    try:
+        _initialize_child_session(handle, session_id, session, resolved, declared)
+        if lease_root is not None:
+            leases.finalize_lease(
+                lease_root,
+                session_id,
+                entry_digest,
+                child_pid=handle.process.pid,
+                session_root=declared.output_dir.parent,
+            )
+    except Exception:
+        # The handshake helper already terminated the child on rejection;
+        # a finalize failure leaves it running — stop it before dropping
+        # the lease so no unprotected child survives (terminate is
+        # idempotent on a dead process).
+        try:
+            handle.terminate(grace_s=2.0)
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning(f"Child terminate during spawn-failure cleanup: {exc}")
+        if lease_root is not None:
+            leases.remove_lease(lease_root, session_id)
+            session.lease_cache_root = None
+        raise
 
     session.child_handle = handle
     session.resolved_plugins = dict(resolved)

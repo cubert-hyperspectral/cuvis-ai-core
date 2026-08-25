@@ -9,6 +9,7 @@ external git remote.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -17,7 +18,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cuvis_ai_core.orchestrator import composer as composer_mod
-from cuvis_ai_core.orchestrator.cache_key import CoreSource
+from cuvis_ai_core.orchestrator import leases as leases_mod
+from cuvis_ai_core.orchestrator.cache_key import COMPOSER_SCHEMA_VERSION, CoreSource
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
 from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
 from cuvis_ai_schemas.plugin import GitPluginSource
@@ -33,6 +35,18 @@ def _isolate_in_process_locks():
     composer_mod._in_process_locks.clear()
     yield
     composer_mod._in_process_locks.clear()
+
+
+@pytest.fixture(autouse=True)
+def _never_shell_to_real_uv_prune(monkeypatch):
+    """The deleter's post-batch prune must never hit the real uv binary.
+
+    A real ``uv cache prune`` walks the user's multi-GB uv cache and can
+    run for minutes on the single deleter thread, starving every later
+    ``wait_for_deleter`` call in the suite. Tests that assert prune
+    behaviour override this stub with their own recorder.
+    """
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda: None)
 
 
 def _simple_plugin() -> dict:
@@ -429,3 +443,382 @@ def test_rmtree_swallows_oserror(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(composer_mod.shutil, "rmtree", _boom)
     # Logged, not raised.
     composer_mod._rmtree(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# evict_run_cache — candidate policies, protection stack, deletion protocol
+# ---------------------------------------------------------------------------
+
+# Far above any real pid on Windows or Linux; psutil raises NoSuchProcess.
+DEAD_PID = 0x7FFF_FFF0
+
+
+def _marked_root(tmp_path: Path) -> Path:
+    """A cache root carrying the composer marker (eviction allowed)."""
+    root = tmp_path / "cache"
+    root.mkdir()
+    leases_mod.ensure_root_marker(root)
+    return root
+
+
+def _make_entry(
+    root: Path,
+    name: str,
+    *,
+    age_seconds: float = 0.0,
+    schema_version: int = COMPOSER_SCHEMA_VERSION,
+    key_json: str | None = None,
+) -> Path:
+    """A published cache entry; ``key_json`` overrides the payload verbatim."""
+    entry = root / name
+    (entry / ".venv").mkdir(parents=True)
+    if key_json is not None:
+        (entry / "key.json").write_text(key_json, encoding="utf-8")
+    else:
+        (entry / "key.json").write_text(
+            json.dumps({"schema_version": schema_version}), encoding="utf-8"
+        )
+    ready = entry / ".ready"
+    ready.write_text("ok", encoding="utf-8")
+    if age_seconds:
+        stamp = time.time() - age_seconds
+        os.utime(ready, (stamp, stamp))
+    return entry
+
+
+def _raw_final_lease(
+    root: Path, session_id: str, digest: str, *, child_pid: int
+) -> Path:
+    """A final lease written directly (finalize_lease refuses dead children)."""
+    leases_mod.write_intent_lease(root, session_id, digest)
+    path = leases_mod.leases_dir(root) / f"{session_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(phase="final", child_pid=child_pid, child_create_time=time.time())
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def fast_snapshot(monkeypatch):
+    """Replace the psutil process scan with an empty snapshot.
+
+    Keeps each eviction test milliseconds instead of a full same-user
+    process walk; the scan itself is exercised by the dedicated
+    live-process-protection test below.
+    """
+    monkeypatch.setattr(
+        composer_mod.leases,
+        "take_process_snapshot",
+        lambda: leases_mod.ProcessSnapshot(infos=()),
+    )
+
+
+def _evict(root: Path, **policy) -> list[str]:
+    """One eviction pass, deleter drained so filesystem asserts are stable.
+
+    Unspecified policies default to 0 (disabled) so each test opts into
+    exactly the policy under test.
+    """
+    policy.setdefault("max_entries", 0)
+    policy.setdefault("max_age_days", 0)
+    policy.setdefault("min_idle_seconds", 0)
+    evicted = composer_mod.evict_run_cache(root, **policy)
+    assert composer_mod.wait_for_deleter(15)
+    return evicted
+
+
+def test_evict_count_cap_lru_oldest_first(tmp_path: Path, fast_snapshot):
+    """The count cap drops the least-recently-used entries by .ready mtime."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "aaa", age_seconds=300)
+    _make_entry(root, "bbb", age_seconds=200)
+    _make_entry(root, "ccc", age_seconds=100)
+    # Pre-existing lock files of entries the pass does not evict must
+    # survive it: the evictor itself never unlinks lock files (on POSIX
+    # that would split the lock domain and allow duplicate builds; the
+    # filelock library's own Windows release-time delete is handle-safe).
+    locks_dir = root / ".locks"
+    locks_dir.mkdir()
+    (locks_dir / "bbb.lock").touch()
+    (locks_dir / "ccc.lock").touch()
+    assert _evict(root, max_entries=2) == ["aaa"]
+    assert not (root / "aaa").exists()
+    assert (root / "bbb").exists()
+    assert (root / "ccc").exists()
+    assert not [p for p in root.iterdir() if ".evicting." in p.name]
+    assert (locks_dir / "bbb.lock").exists()
+    assert (locks_dir / "ccc.lock").exists()
+
+
+def test_evict_age_cap(tmp_path: Path, fast_snapshot):
+    """Entries older than the age cap are evicted; younger ones stay."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "old", age_seconds=40 * 86_400)
+    _make_entry(root, "young", age_seconds=5 * 86_400)
+    assert _evict(root, max_age_days=30) == ["old"]
+    assert (root / "young").exists()
+
+
+def test_evict_schema_stale_immediately(tmp_path: Path, fast_snapshot):
+    """Pre-v-current entries are candidates regardless of age or count."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "stale", schema_version=COMPOSER_SCHEMA_VERSION - 1)
+    _make_entry(root, "current")
+    assert _evict(root) == ["stale"]
+    assert (root / "current").exists()
+
+
+def test_evict_zero_policies_disable_eviction(tmp_path: Path, fast_snapshot):
+    """max_entries=0 and max_age_days=0 switch those policies off."""
+    root = _marked_root(tmp_path)
+    for offset, name in enumerate(["a1", "b2", "c3"]):
+        _make_entry(root, name, age_seconds=(400 - offset) * 86_400)
+    assert _evict(root) == []
+
+
+def test_evict_hot_floor_protects_recent_entries(tmp_path: Path, fast_snapshot):
+    """An entry used within the hot floor survives even the schema policy."""
+    root = _marked_root(tmp_path)
+    _make_entry(
+        root, "stale", schema_version=COMPOSER_SCHEMA_VERSION - 1, age_seconds=100
+    )
+    assert _evict(root, min_idle_seconds=3600) == []
+    assert (root / "stale").exists()
+
+
+def test_evict_policy_resolved_from_env_knobs(
+    tmp_path: Path, fast_snapshot, monkeypatch
+):
+    """Without explicit args the pass reads the CUVIS_RUN_CACHE_* knobs."""
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAX_ENTRIES", "1")
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAX_AGE_DAYS", "0")
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MIN_IDLE_SECONDS", "0")
+    root = _marked_root(tmp_path)
+    _make_entry(root, "older", age_seconds=200)
+    _make_entry(root, "newer", age_seconds=100)
+    evicted = composer_mod.evict_run_cache(root)
+    assert composer_mod.wait_for_deleter(15)
+    assert evicted == ["older"]
+
+
+def test_evict_final_lease_with_live_child_protects(tmp_path: Path, fast_snapshot):
+    """A final lease keyed to a live child pins its entry."""
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "leased", age_seconds=90 * 86_400)
+    leases_mod.write_intent_lease(root, "sid-live", "leased")
+    leases_mod.finalize_lease(
+        root,
+        "sid-live",
+        "leased",
+        child_pid=os.getpid(),
+        session_root=tmp_path / "sess",
+    )
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+
+
+def test_evict_intent_lease_with_live_parent_protects(tmp_path: Path, fast_snapshot):
+    """An intent lease protects through the compose-to-spawn window."""
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "spawning", age_seconds=90 * 86_400)
+    leases_mod.write_intent_lease(root, "sid-intent", "spawning")
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+
+
+def test_evict_gcs_dead_child_lease_and_reclaims_entry(tmp_path: Path, fast_snapshot):
+    """A final lease whose child died (parent alive) is garbage-collected."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "was-leased", age_seconds=90 * 86_400)
+    lease_path = _raw_final_lease(root, "sid-dead", "was-leased", child_pid=DEAD_PID)
+    assert _evict(root, max_age_days=30) == ["was-leased"]
+    assert not lease_path.exists()
+
+
+def test_evict_live_process_scan_protects_unleased_children(
+    tmp_path: Path, monkeypatch
+):
+    """A live process executing from the entry protects it without any lease.
+
+    This is the guard for children that predate leases (schema v4 era),
+    mid-spawn children, and torn leases.
+    """
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "v4child", age_seconds=90 * 86_400)
+    snapshot = leases_mod.ProcessSnapshot(
+        infos=(
+            leases_mod.ProcessInfo(
+                pid=1,
+                create_time=0.0,
+                ppid=0,
+                exe=str(entry / ".venv" / "python.exe"),
+                cwd=None,
+                is_run_runtime=True,
+            ),
+        )
+    )
+    monkeypatch.setattr(composer_mod.leases, "take_process_snapshot", lambda: snapshot)
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+
+
+def test_evict_never_considers_model_cache(tmp_path: Path, fast_snapshot):
+    """model_cache holds shared weights and is never an eviction candidate."""
+    root = _marked_root(tmp_path)
+    model = root / "model_cache"
+    model.mkdir()
+    ready = model / ".ready"
+    ready.write_text("ok", encoding="utf-8")
+    stamp = time.time() - 400 * 86_400
+    os.utime(ready, (stamp, stamp))
+    _make_entry(root, "real", age_seconds=400 * 86_400)
+    assert _evict(root, max_age_days=30, max_entries=1) == ["real"]
+    assert model.exists()
+
+
+def test_evict_os_replace_failure_skips_entry(
+    tmp_path: Path, fast_snapshot, monkeypatch
+):
+    """Windows refuses to rename an in-use dir — the pass skips, never fails."""
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "busy", age_seconds=90 * 86_400)
+
+    def _refuse(src, dst):
+        raise OSError("directory in use")
+
+    monkeypatch.setattr(composer_mod.os, "replace", _refuse)
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+
+
+def test_evict_skips_entry_whose_lock_is_held(tmp_path: Path, fast_snapshot):
+    """A held digest lock (builder or sibling evictor) means non-blocking skip."""
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "locked", age_seconds=90 * 86_400)
+    lock = composer_mod._in_process_lock_for("locked")
+    lock.acquire()
+    try:
+        assert _evict(root, max_age_days=30) == []
+    finally:
+        lock.release()
+    assert entry.exists()
+
+
+def test_evict_corrupt_key_json_not_immortal(tmp_path: Path, fast_snapshot):
+    """Corrupt key.json exempts only the schema policy — age still applies."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "corrupt-old", key_json="{not json", age_seconds=40 * 86_400)
+    _make_entry(root, "corrupt-new", key_json="{not json")
+    assert _evict(root, max_age_days=30) == ["corrupt-old"]
+    assert (root / "corrupt-new").exists()
+
+
+def test_evict_reverify_under_lock_aborts_on_new_lease(
+    tmp_path: Path, fast_snapshot, monkeypatch
+):
+    """A lease that lands between the scan and the lock wins the race."""
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "racy", age_seconds=90 * 86_400)
+    calls = {"n": 0}
+
+    def _racing(root_arg):
+        calls["n"] += 1
+        return set() if calls["n"] == 1 else {"racy"}
+
+    monkeypatch.setattr(composer_mod, "_lease_protected_digests", _racing)
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+    assert calls["n"] >= 2
+
+
+def test_evict_prunes_uv_cache_once_after_batch_drains(
+    tmp_path: Path, fast_snapshot, monkeypatch
+):
+    """One prune per batch, strictly after the rmtrees (hardlinks pin blobs)."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "one", age_seconds=90 * 86_400)
+    _make_entry(root, "two", age_seconds=90 * 86_400)
+    events: list[str] = []
+    monkeypatch.setattr(composer_mod, "_rmtree", lambda path: events.append("rmtree"))
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda: events.append("prune"))
+    evicted = _evict(root, max_age_days=30)
+    assert sorted(evicted) == ["one", "two"]
+    assert events == ["rmtree", "rmtree", "prune"]
+
+
+def test_evict_prune_failure_is_non_fatal(tmp_path: Path, fast_snapshot, monkeypatch):
+    """A busy global uv-cache lock must not kill the deleter worker."""
+    root = _marked_root(tmp_path)
+    _make_entry(root, "gone", age_seconds=90 * 86_400)
+
+    def _busy():
+        raise UvRunnerError("uv cache lock busy")
+
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", _busy)
+    assert _evict(root, max_age_days=30) == ["gone"]
+
+
+def test_evict_refuses_unmarked_root(tmp_path: Path, fast_snapshot):
+    """No composer marker means no eviction — mispointed roots stay intact."""
+    root = tmp_path / "not-a-cache"
+    root.mkdir()
+    entry = _make_entry(root, "data", age_seconds=90 * 86_400)
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+    # The guard fires before any side effect on the foreign directory.
+    assert not (root / ".locks").exists()
+
+
+def test_evict_adopts_marker_on_composer_shaped_root(tmp_path: Path, fast_snapshot):
+    """A legacy pre-marker cache root (has .locks) is adopted, then bounded."""
+    root = tmp_path / "legacy"
+    (root / ".locks").mkdir(parents=True)
+    _make_entry(root, "v4", schema_version=4, age_seconds=90 * 86_400)
+    assert _evict(root) == ["v4"]
+    assert (root / leases_mod.ROOT_MARKER_NAME).exists()
+
+
+def test_evict_missing_root_is_noop(tmp_path: Path):
+    """A cache root that does not exist yields an empty pass, no error."""
+    assert composer_mod.evict_run_cache(tmp_path / "never") == []
+
+
+def test_evict_pass_sweeps_stale_broken_and_evicting_dirs(
+    tmp_path: Path, fast_snapshot
+):
+    """Old .broken/.evicting remnants drain through the deleter queue."""
+    root = _marked_root(tmp_path)
+    old_broken = root / "x.broken.123"
+    old_evicting = root / "y.evicting.123.abc"
+    fresh_broken = root / "z.broken.456"
+    for path in (old_broken, old_evicting, fresh_broken):
+        path.mkdir()
+    stamp = time.time() - composer_mod._STALE_PARTIAL_AGE_SECONDS - 100
+    os.utime(old_broken, (stamp, stamp))
+    os.utime(old_evicting, (stamp, stamp))
+    assert _evict(root) == []
+    assert not old_broken.exists()
+    assert not old_evicting.exists()
+    assert fresh_broken.exists()
+
+
+def test_compose_build_runs_eviction_pass_hit_does_not(tmp_path: Path, monkeypatch):
+    """A publish triggers one eviction pass; a cache hit triggers none."""
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        composer_mod,
+        "evict_run_cache",
+        lambda root, **kwargs: calls.append(root),
+    )
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch, sync_patch as sync_mock:
+        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
+            exist_ok=True
+        )
+        compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
+    assert calls == [tmp_path]
+
+    resolve_patch2, lock_patch2, sync_patch2 = _patch_resolve_and_uv()
+    with resolve_patch2, lock_patch2, sync_patch2:
+        compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
+    assert calls == [tmp_path]

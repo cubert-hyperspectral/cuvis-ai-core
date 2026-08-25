@@ -32,4 +32,6 @@ def test_zero_allowed_by_default_disallowed_for_timeouts(monkeypatch):
     # Cache knobs: 0 is the conventional "disabled" value.
     assert number_from_env("CUVIS_TEST_NUMBER", 7, cast=int) == 0
     # Timeouts: 0 makes no sense, fall back.
-    assert number_from_env("CUVIS_TEST_NUMBER", 7.0, cast=float, allow_zero=False) == 7.0
+    assert (
+        number_from_env("CUVIS_TEST_NUMBER", 7.0, cast=float, allow_zero=False) == 7.0
+    )

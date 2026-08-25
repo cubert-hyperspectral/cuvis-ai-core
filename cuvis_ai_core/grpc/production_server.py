@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from concurrent import futures
 from pathlib import Path
@@ -19,6 +20,17 @@ from grpc_health.v1 import health_pb2_grpc
 from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
 from cuvis_ai_core.grpc.health import HealthService
 from cuvis_ai_core.grpc.service import CuvisAIService
+from cuvis_ai_core.orchestrator.composer import evict_run_cache, resolve_cache_root
+from cuvis_ai_core.orchestrator.leases import reap_orphans, take_process_snapshot
+
+# Cadence of the background cache-maintenance pass (orphan reaping +
+# eviction). Startup-only reaping would leave a permanent hole: a sibling
+# server crashing right after our one pass would leak its children until
+# some server restarts.
+_MAINTENANCE_INTERVAL_SECONDS = 3600.0
+# Kill switch: "0" disables the maintenance loop entirely (test suites and
+# operators who want eviction to run only via the explicit CLI).
+_MAINTENANCE_ENV = "CUVIS_RUN_CACHE_MAINTENANCE"
 
 
 class JSONFormatter(logging.Formatter):
@@ -110,6 +122,8 @@ class ProductionServer:
         self.cuvis_service: CuvisAIService | None = None
         self.logger = logging.getLogger(__name__)
         self._shutdown_requested = False
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread: threading.Thread | None = None
 
     def _setup_signal_handlers(self) -> None:
         """Set up signal handlers for graceful shutdown."""
@@ -176,6 +190,55 @@ class ProductionServer:
 
         self.logger.info("Server started successfully")
         self._setup_signal_handlers()
+        self._start_maintenance_thread()
+
+    def _start_maintenance_thread(self) -> None:
+        """Kick off the background cache-maintenance loop (post-bind).
+
+        Runs orphan reaping + cache eviction immediately, then hourly.
+        Deliberately AFTER the server reports SERVING: reaping can spend
+        seconds per orphan (terminate → wait → kill), and blocking the
+        bind would trip the host app's startup health polling exactly on
+        recovery from a crash — the scenario the reaper exists for.
+        """
+        if os.environ.get(_MAINTENANCE_ENV, "1").strip() == "0":
+            self.logger.info(
+                "Cache maintenance disabled (%s=0); clean-run-cache remains "
+                "the manual path",
+                _MAINTENANCE_ENV,
+            )
+            return
+        if self._maintenance_thread is not None and self._maintenance_thread.is_alive():
+            return
+
+        def _loop() -> None:
+            """Reap orphans + evict the run cache; repeat until shutdown."""
+            # psutil's first full process scan in a process is slow on
+            # Windows (tens of seconds for a few hundred processes) and its
+            # process objects are cached afterwards. Paying it here keeps it
+            # off the first compose, whose eviction pass needs the same scan.
+            try:
+                started = time.monotonic()
+                take_process_snapshot()
+                self.logger.debug(
+                    "Process scan warmed in %.1fs", time.monotonic() - started
+                )
+            except Exception:
+                self.logger.exception("Process scan warm-up failed")
+            while True:
+                try:
+                    root = resolve_cache_root(None)
+                    reap_orphans(root)
+                    evict_run_cache(root)
+                except Exception:
+                    self.logger.exception("Cache maintenance pass failed")
+                if self._maintenance_stop.wait(_MAINTENANCE_INTERVAL_SECONDS):
+                    return
+
+        self._maintenance_thread = threading.Thread(
+            target=_loop, daemon=True, name="cuvis-cache-maintenance"
+        )
+        self._maintenance_thread.start()
 
     def wait_for_termination(self) -> None:
         """Block until a shutdown signal is received."""
@@ -194,6 +257,7 @@ class ProductionServer:
 
         self.logger.info("Initiating graceful shutdown")
         self._shutdown_requested = True
+        self._maintenance_stop.set()
 
         if self.health_service:
             self.health_service.set_not_serving()

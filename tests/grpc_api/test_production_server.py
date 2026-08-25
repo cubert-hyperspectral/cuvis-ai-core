@@ -1,11 +1,13 @@
 import json
 import logging
 import sys
+import threading
 from unittest.mock import MagicMock, Mock
 
 import pytest
 from grpc_health.v1 import health_pb2
 
+from cuvis_ai_core.grpc import production_server as production_server_mod
 from cuvis_ai_core.grpc.production_server import (
     JSONFormatter,
     ProductionServer,
@@ -282,3 +284,129 @@ def test_wait_for_termination_handles_keyboard_interrupt(monkeypatch) -> None:
         Mock(side_effect=KeyboardInterrupt),
     )
     server.wait_for_termination()
+
+
+# ---------------------------------------------------------------------------
+# Cache-maintenance loop wiring (reap + evict, hourly, post-bind)
+# ---------------------------------------------------------------------------
+
+
+def _patch_maintenance(
+    monkeypatch, tmp_path, *, reap, evict, warm=lambda: None
+) -> None:
+    """Wire fast fakes into the maintenance loop (10ms interval)."""
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "1")
+    monkeypatch.setattr(
+        production_server_mod, "resolve_cache_root", lambda override: tmp_path
+    )
+    monkeypatch.setattr(production_server_mod, "take_process_snapshot", warm)
+    monkeypatch.setattr(production_server_mod, "reap_orphans", reap)
+    monkeypatch.setattr(production_server_mod, "evict_run_cache", evict)
+    monkeypatch.setattr(production_server_mod, "_MAINTENANCE_INTERVAL_SECONDS", 0.01)
+
+
+def test_maintenance_warms_process_scan_before_first_pass(
+    monkeypatch, tmp_path
+) -> None:
+    """The slow first psutil scan runs on the maintenance thread ahead of any pass."""
+    events: list[str] = []
+    first_pass = threading.Event()
+
+    def _warm() -> None:
+        events.append("warm")
+
+    def _reap(root) -> None:
+        events.append("reap")
+        first_pass.set()
+
+    _patch_maintenance(
+        monkeypatch, tmp_path, reap=_reap, evict=lambda root: None, warm=_warm
+    )
+    server = ProductionServer(port=0)
+    server._start_maintenance_thread()
+    assert server._maintenance_thread is not None
+    try:
+        assert first_pass.wait(10)
+    finally:
+        server._maintenance_stop.set()
+        server._maintenance_thread.join(timeout=10)
+    assert events[:2] == ["warm", "reap"]
+    assert events.count("warm") == 1
+
+
+def test_maintenance_kill_switch_disables_thread(monkeypatch) -> None:
+    """CUVIS_RUN_CACHE_MAINTENANCE=0 keeps the loop entirely off."""
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "0")
+    server = ProductionServer(port=0)
+    server._start_maintenance_thread()
+    assert server._maintenance_thread is None
+
+
+def test_maintenance_loop_reaps_then_evicts_each_pass(monkeypatch, tmp_path) -> None:
+    """Each pass runs reap before evict and repeats on the interval."""
+    events: list[str] = []
+    second_pass = threading.Event()
+
+    def _fake_reap(root) -> None:
+        events.append("reap")
+
+    def _fake_evict(root) -> None:
+        events.append("evict")
+        if events.count("evict") >= 2:
+            second_pass.set()
+
+    _patch_maintenance(monkeypatch, tmp_path, reap=_fake_reap, evict=_fake_evict)
+    server = ProductionServer(port=0)
+    server._start_maintenance_thread()
+    assert server._maintenance_thread is not None
+    try:
+        assert second_pass.wait(10)
+    finally:
+        server._maintenance_stop.set()
+        server._maintenance_thread.join(timeout=10)
+    assert not server._maintenance_thread.is_alive()
+    assert events[:2] == ["reap", "evict"]
+
+
+def test_maintenance_loop_survives_pass_failure(monkeypatch, tmp_path) -> None:
+    """A failing pass is logged and the loop keeps running."""
+    later_pass = threading.Event()
+    calls = {"n": 0}
+
+    def _flaky_reap(root) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first pass fails")
+        later_pass.set()
+
+    _patch_maintenance(monkeypatch, tmp_path, reap=_flaky_reap, evict=lambda root: None)
+    server = ProductionServer(port=0)
+    server._start_maintenance_thread()
+    assert server._maintenance_thread is not None
+    try:
+        assert later_pass.wait(10)
+    finally:
+        server._maintenance_stop.set()
+        server._maintenance_thread.join(timeout=10)
+
+
+def test_start_launches_maintenance_and_shutdown_stops_it(
+    monkeypatch, tmp_path
+) -> None:
+    """start() launches the loop post-bind; shutdown() terminates it."""
+    first_pass = threading.Event()
+
+    def _fake_reap(root) -> None:
+        first_pass.set()
+
+    _patch_maintenance(monkeypatch, tmp_path, reap=_fake_reap, evict=lambda root: None)
+    server = ProductionServer(port=0, max_workers=2)
+    try:
+        server.start()
+        assert server._maintenance_thread is not None
+        assert server._maintenance_thread.is_alive()
+        assert first_pass.wait(10)
+    finally:
+        server.shutdown()
+    server._maintenance_thread.join(timeout=10)
+    assert not server._maintenance_thread.is_alive()
