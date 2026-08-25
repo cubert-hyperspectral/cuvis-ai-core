@@ -184,7 +184,14 @@ def _build_or_reuse(
 ) -> Path:
     ready = final_dir / _READY_MARKER
     if ready.exists():
-        logger.debug(f"Cache hit: {final_dir.name}")
+        # The .ready mtime is the entry's last-used timestamp — eviction
+        # orders by it (LRU) and the hot floor reads it, so every hit must
+        # touch it. Best-effort: a read-only cache still serves hits.
+        try:
+            os.utime(ready)
+        except OSError as exc:
+            logger.warning(f"Could not touch {ready}: {exc}")
+        logger.info(f"Cache hit: {final_dir.name}")
         return venv_dir
 
     # Defense in depth: a published directory without ``.ready`` is

@@ -70,7 +70,7 @@ def test_in_process_lock_map_is_weak_and_evicts_unreferenced_locks():
     """Same digest shares one lock while referenced; the map evicts it after.
 
     Guards against the lock map growing without bound on a long-lived
-    server — dirty local plugins mint a fresh digest per run.
+    server — every new dependency set mints a fresh digest.
     """
     import gc
 
@@ -141,6 +141,51 @@ def test_compose_env_cache_hit_skips_uv(tmp_path: Path):
         )
         assert lock_mock2.call_count == 0
         assert sync_mock2.call_count == 0
+    assert first == second
+
+
+def test_compose_env_cache_hit_touches_ready_mtime(tmp_path: Path):
+    """Every hit refreshes the .ready mtime — the LRU timestamp for eviction."""
+    import os
+
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch, sync_patch as sync_mock:
+        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        venv = compose_env(
+            _simple_plugin(),
+            core_source=PYPI_CORE,
+            cache_root=tmp_path,
+        )
+    ready = venv.parent / ".ready"
+    old = time.time() - 10_000
+    os.utime(ready, (old, old))
+
+    resolve_patch2, lock_patch2, sync_patch2 = _patch_resolve_and_uv()
+    with resolve_patch2, lock_patch2, sync_patch2:
+        compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
+    assert ready.stat().st_mtime > old + 5_000
+
+
+def test_compose_env_cache_hit_survives_utime_failure(tmp_path: Path, monkeypatch):
+    """A read-only cache still serves hits: the touch is best-effort."""
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch, sync_patch as sync_mock:
+        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        first = compose_env(
+            _simple_plugin(),
+            core_source=PYPI_CORE,
+            cache_root=tmp_path,
+        )
+
+    def _refuse(*args, **kwargs):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(composer_mod.os, "utime", _refuse)
+    resolve_patch2, lock_patch2, sync_patch2 = _patch_resolve_and_uv()
+    with resolve_patch2, lock_patch2, sync_patch2:
+        second = compose_env(
+            _simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path
+        )
     assert first == second
 
 

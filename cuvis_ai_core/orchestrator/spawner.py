@@ -51,6 +51,7 @@ import grpc
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 from loguru import logger
 
+from cuvis_ai_core.orchestrator.env_config import number_from_env
 from cuvis_ai_core.orchestrator.model_cache import model_cache_env
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 
@@ -87,18 +88,7 @@ _CUDA_VARS = (
 
 def _timeout_from_env(env_name: str, default: float) -> float:
     """Read a positive float timeout from ``env_name``; fall back to ``default``."""
-    raw = os.environ.get(env_name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning(f"{env_name}={raw!r} is not a number; using {default}s.")
-        return default
-    if value <= 0:
-        logger.warning(f"{env_name}={raw!r} must be > 0; using {default}s.")
-        return default
-    return value
+    return number_from_env(env_name, default, cast=float, allow_zero=False)
 
 
 # Env vars that must never leak from the parent into the child, stripped
@@ -299,9 +289,12 @@ class ChildHandle:
         try:
             return self.process.wait(timeout=grace_s)
         except subprocess.TimeoutExpired:
+            # Popen.terminate() is SIGTERM on POSIX but TerminateProcess on
+            # Windows — say "terminating", not "SIGTERM", so Windows logs
+            # don't suggest a graceful signal that never existed.
             logger.warning(
                 f"Child runtime at {self.endpoint} did not exit within "
-                f"{grace_s}s; sending SIGTERM."
+                f"{grace_s}s; terminating the process."
             )
 
         self.process.terminate()
@@ -309,7 +302,8 @@ class ChildHandle:
             return self.process.wait(timeout=max(grace_s, _GRACEFUL_WAIT_FLOOR_SECONDS))
         except subprocess.TimeoutExpired:
             logger.warning(
-                f"Child runtime at {self.endpoint} still alive after SIGTERM; killing."
+                f"Child runtime at {self.endpoint} still alive after terminate; "
+                f"killing."
             )
         return self.kill()
 
