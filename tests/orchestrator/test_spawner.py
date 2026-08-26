@@ -19,6 +19,7 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.orchestrator.spawner import (
+    _CRASH_STDERR_TAIL_CHARS,
     ChildHandle,
     DeclaredPaths,
     LocalChildRuntimeSpawner,
@@ -301,6 +302,19 @@ def test_read_stderr_log_reads_existing_file(tmp_path: Path):
     assert _read_stderr_log(log) == "traceback here"
 
 
+def test_read_stderr_log_reads_only_the_tail(tmp_path: Path):
+    """A log larger than the tail window yields only its tail, never the head."""
+    log = tmp_path / "stderr.log"
+    window = _CRASH_STDERR_TAIL_CHARS * 4
+    log.write_text(
+        "HEAD-MARKER " + "x" * (window * 2) + " TAIL-MARKER", encoding="utf-8"
+    )
+    out = _read_stderr_log(log)
+    assert out.endswith("TAIL-MARKER")
+    assert "HEAD-MARKER" not in out
+    assert len(out.encode("utf-8")) <= window
+
+
 def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
     log = tmp_path / "stderr.log"
     log.write_text("x", encoding="utf-8")
@@ -308,7 +322,7 @@ def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
     def _boom(*args, **kwargs):
         raise OSError("disk gone")
 
-    monkeypatch.setattr(Path, "read_text", _boom)
+    monkeypatch.setattr(Path, "open", _boom)
     out = _read_stderr_log(log)
     assert out.startswith("<unreadable stderr log")
     assert "disk gone" in out

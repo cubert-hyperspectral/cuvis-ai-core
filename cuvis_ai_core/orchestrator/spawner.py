@@ -172,15 +172,22 @@ def format_exit_code(code: int) -> str:
 
 
 def _read_stderr_log(path: Path | None) -> str:
-    """Read the child's captured stderr file for post-mortem display.
+    """Read the tail of the child's captured stderr file for post-mortem display.
 
-    Returns ``""`` if the file is missing — callers fall back to a
-    generic crash message in that case.
+    Only the last ``_CRASH_STDERR_TAIL_CHARS * 4`` bytes are read (4 is
+    the widest UTF-8 codepoint), so retries against an already-dead child
+    never re-read a huge log end to end. The seek can land mid-codepoint,
+    hence the byte-level read decoded with ``errors="replace"``. Returns
+    ``""`` if the file is missing — callers fall back to a generic crash
+    message in that case.
     """
     if path is None or not path.exists():
         return ""
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - _CRASH_STDERR_TAIL_CHARS * 4))
+            return fh.read().decode("utf-8", errors="replace")
     except OSError as exc:
         return f"<unreadable stderr log {path}: {exc}>"
 
