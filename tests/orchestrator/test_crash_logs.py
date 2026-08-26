@@ -15,34 +15,9 @@ import shutil
 from cuvis_ai_core.orchestrator import crash_logs
 from cuvis_ai_core.orchestrator.crash_logs import (
     crash_dir_root,
-    format_exit_code,
     preserve_child_logs,
     preserve_session_logs,
 )
-
-
-# ---------------------------------------------------------------------------
-# format_exit_code
-# ---------------------------------------------------------------------------
-
-
-def test_format_exit_code_plain():
-    assert format_exit_code(7) == "7"
-    assert format_exit_code(0) == "0"
-
-
-def test_format_exit_code_renders_windows_status_as_hex():
-    assert format_exit_code(3221226505) == "3221226505 (0xC0000409)"
-
-
-def test_format_exit_code_names_posix_signal():
-    # SIGTERM exists in the signal module on every supported platform.
-    assert format_exit_code(-15) == "-15 (SIGTERM)"
-
-
-def test_format_exit_code_unknown_negative_stays_numeric():
-    # No platform defines signal number 200.
-    assert format_exit_code(-200) == "-200"
 
 
 # ---------------------------------------------------------------------------

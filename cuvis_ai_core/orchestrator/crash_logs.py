@@ -7,23 +7,22 @@ module copies those logs aside first, into ``.crash_logs/`` under the
 composer cache root (dot-prefixed, never a cache entry), so a crash can
 still be diagnosed after cleanup.
 
-Import-light on purpose: module-level imports are stdlib plus loguru, and
-the composer cache-root lookup is imported lazily inside the function, so
-the session store (shared parent/child code) can import this module
-without paying the composer's import cost.
+The composer cache-root lookup stays a lazy import inside
+:func:`crash_dir_root`, so importing this module never pays the
+composer's (and its transitive) import cost.
 """
 
 from __future__ import annotations
 
-import contextlib
 import os
 import shutil
-import signal
 import time
 from collections.abc import Iterable
 from pathlib import Path
 
 from loguru import logger
+
+from cuvis_ai_core.orchestrator.spawner import format_exit_code
 
 # Operator override for where preserved logs land. When unset they live
 # under the composer's cache root so an operator finds them next to the
@@ -37,22 +36,6 @@ _LOG_GLOB = "child.*.log"
 
 _MARKER_NAME = "crash_info.txt"
 _MAX_CRASH_DIRS = 5
-
-
-def format_exit_code(code: int) -> str:
-    """Render a child exit code with its platform-specific reading.
-
-    Windows fatal exceptions surface as large unsigned ints — append the
-    NTSTATUS hex (``3221226505 (0xC0000409)``); POSIX signal deaths are
-    negative — append the signal name (``-9 (SIGKILL)``).
-    """
-    if code < 0:
-        with contextlib.suppress(ValueError):
-            return f"{code} ({signal.Signals(-code).name})"
-        return str(code)
-    if code > 255:
-        return f"{code} (0x{code & 0xFFFFFFFF:08X})"
-    return str(code)
 
 
 def crash_dir_root() -> Path:

@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -50,7 +51,6 @@ import grpc
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 from loguru import logger
 
-from cuvis_ai_core.orchestrator.crash_logs import format_exit_code
 from cuvis_ai_core.orchestrator.model_cache import model_cache_env
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 
@@ -153,6 +153,22 @@ _DENY_PREFIXES = (
     "CLOUDFLARE_",
     "DIGITALOCEAN_",
 )
+
+
+def format_exit_code(code: int) -> str:
+    """Render a child exit code with its platform-specific reading.
+
+    Windows fatal exceptions surface as large unsigned ints — append the
+    NTSTATUS hex (``3221226505 (0xC0000409)``); POSIX signal deaths are
+    negative — append the signal name (``-9 (SIGKILL)``).
+    """
+    if code < 0:
+        with contextlib.suppress(ValueError):
+            return f"{code} ({signal.Signals(-code).name})"
+        return str(code)
+    if code > 255:
+        return f"{code} (0x{code & 0xFFFFFFFF:08X})"
+    return str(code)
 
 
 def _read_stderr_log(path: Path | None) -> str:

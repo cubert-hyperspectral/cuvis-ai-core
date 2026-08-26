@@ -287,11 +287,9 @@ class SessionManager:
         if died_on_its_own and isinstance(exit_code, int) and exit_code != 0:
             # The child's logs live under runtime_base_dir, which is deleted
             # just below — copy them aside first so the crash stays
-            # diagnosable. Lazy import: crash_logs is parent-side only.
-            from cuvis_ai_core.orchestrator.crash_logs import (
-                format_exit_code,
-                preserve_child_logs,
-            )
+            # diagnosable. Lazy imports: crash_logs is parent-side only.
+            from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
+            from cuvis_ai_core.orchestrator.spawner import format_exit_code
 
             crash_dir = preserve_child_logs(
                 (
