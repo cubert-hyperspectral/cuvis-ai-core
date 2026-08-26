@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 - 2026-08-26
 
 - **`restore-trainrun --mode validate` / `--mode test` now evaluate the trained weights** (#63).
   Exactly one weight source is used, in the precedence `--checkpoint-path` (Lightning `.ckpt`,
