@@ -540,10 +540,14 @@ def _propagate_child_failure(
     (UNAVAILABLE "connection refused") that tells the caller nothing. When
     :func:`dead_child_details` confirms the child process exited, the
     parent answers ``INTERNAL`` naming the exit code and the tail of the
-    child's stderr log instead; while the child is alive its own status is
-    copied through unchanged.
+    child's stderr log instead. The probe runs only for ``UNAVAILABLE`` —
+    any other code came from a live child that answered the RPC, and
+    probing it would stall every business error on the probe's reap wait —
+    so a live child's own status is copied through unchanged.
     """
-    details = dead_child_details(child)
+    details = (
+        dead_child_details(child) if exc.code() == grpc.StatusCode.UNAVAILABLE else None
+    )
     if details is None:
         _propagate_rpc_error(exc, context)
         return
