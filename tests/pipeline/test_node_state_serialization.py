@@ -220,6 +220,71 @@ class TestNodeStateSerialization:
         assert isinstance(loaded_node.linear_weight, nn.Parameter)
         assert isinstance(loaded_node.linear_bias, nn.Parameter)
 
+    def test_restore_weights_round_trip_marks_statistical_initialization(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """save -> rebuild from YAML -> _restore_weights_from_checkpoint restores
+        the exact fitted buffers and marks the node statistically initialized,
+        so evaluation can skip re-deriving statistics."""
+        pipeline = CuvisPipeline("roundtrip")
+        node = mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        pipeline._graph.add_node(node)
+        node.statistical_initialization(iter([{"data": torch.randn(1, 4, 4, 3)}]))
+
+        config_path = tmp_path / "roundtrip.yaml"
+        pipeline.save_to_file(config_path)
+        weights_path = config_path.with_suffix(".pt")
+
+        # Rebuild from config only: fresh node, no weights, not initialized.
+        rebuilt = CuvisPipeline.load_pipeline(config_path)
+        rebuilt_node = list(rebuilt.nodes)[0]
+        assert rebuilt_node._statistically_initialized is False
+        assert not torch.equal(rebuilt_node.fitted_mean, node.fitted_mean)
+
+        missing = rebuilt._restore_weights_from_checkpoint(weights_path)
+
+        assert missing == []
+        assert rebuilt_node._statistically_initialized is True
+        assert torch.equal(rebuilt_node.fitted_mean, node.fitted_mean)
+        assert torch.equal(rebuilt_node.fitted_std, node.fitted_std)
+        assert torch.equal(rebuilt_node.fitted_transform, node.fitted_transform)
+
+    def test_restore_weights_returns_missing_nodes(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """Nodes absent from the checkpoint are returned to the caller (a
+        stale or renamed pipeline must be detectable, not silent)."""
+        pipeline = CuvisPipeline("missing")
+        node = mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        pipeline._graph.add_node(node)
+        node.statistical_initialization(iter([{"data": torch.randn(1, 4, 4, 3)}]))
+
+        config_path = tmp_path / "missing.yaml"
+        pipeline.save_to_file(config_path)
+        weights_path = config_path.with_suffix(".pt")
+
+        checkpoint = torch.load(weights_path, weights_only=False)
+        checkpoint["state_dict"].pop(node.name)
+        torch.save(checkpoint, weights_path)
+
+        assert pipeline._restore_weights_from_checkpoint(weights_path) == [node.name]
+
+    def test_restore_weights_corrupt_file_raises(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """A file that is not a torch checkpoint fails loudly, not silently."""
+        import pickle
+
+        pipeline = CuvisPipeline("corrupt")
+        pipeline._graph.add_node(
+            mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        )
+        bad = tmp_path / "bad.pt"
+        bad.write_bytes(b"this is not a torch checkpoint")
+
+        with pytest.raises((RuntimeError, pickle.UnpicklingError, EOFError)):
+            pipeline._restore_weights_from_checkpoint(bad)
+
     def test_save_pipeline_yaml_only(self, mock_statistical_trainable_node, tmp_path):
         """Test save_to_file(save_weights=False) writes only YAML config."""
         pipeline = CuvisPipeline("test_pipeline_yaml_only")

@@ -105,7 +105,9 @@ def test_configure_optimizers_attaches_scheduler_when_configured():
 
 def test_configure_optimizers_without_scheduler_returns_bare_optimizer():
     """No scheduler configured -> plain optimizer, no lr_scheduler dict."""
-    cfg = TrainingConfig(max_epochs=3, optimizer=OptimizerConfig(name="adamw", lr=0.001))
+    cfg = TrainingConfig(
+        max_epochs=3, optimizer=OptimizerConfig(name="adamw", lr=0.001)
+    )
     result = _trainer(cfg).configure_optimizers()
     assert isinstance(result, torch.optim.Optimizer)
 
@@ -147,6 +149,54 @@ def test_fit_enables_checkpointing_with_explicit_callbacks():
     kwargs = mock_trainer_cls.call_args.kwargs
     assert kwargs["enable_checkpointing"] is True
     assert kwargs["callbacks"] == trainer.callbacks
+
+
+def test_test_without_fit_lazily_builds_trainer_and_drops_best():
+    """test() without a prior fit() builds a trainer from the config, and the
+    'best' default degrades to None (no ModelCheckpoint ever ran, so Lightning
+    would otherwise error on ckpt_path='best')."""
+    trainer = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        inst = MagicMock()
+        mock_trainer_cls.return_value = inst
+        trainer.test()
+    mock_trainer_cls.assert_called_once()
+    assert inst.test.call_args.kwargs["ckpt_path"] is None
+
+
+def test_test_without_fit_honors_explicit_ckpt_path():
+    """An explicit ckpt_path survives the lazy-construction path untouched."""
+    trainer = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        inst = MagicMock()
+        mock_trainer_cls.return_value = inst
+        trainer.test(ckpt_path="epoch01.ckpt")
+    assert inst.test.call_args.kwargs["ckpt_path"] == "epoch01.ckpt"
+
+
+def test_validate_without_fit_lazily_builds_trainer():
+    """validate() without a prior fit() no longer raises; it evaluates the
+    current model state with a config-built trainer."""
+    trainer = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        inst = MagicMock()
+        mock_trainer_cls.return_value = inst
+        trainer.validate()
+    mock_trainer_cls.assert_called_once()
+    assert inst.validate.call_args.kwargs["ckpt_path"] is None
+
+
+def test_test_after_fit_reuses_trainer_and_keeps_best_default():
+    """Fit-first flow unchanged: the fit() trainer is reused (no rebuild) and
+    the 'best' checkpoint default is preserved."""
+    trainer = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        inst = MagicMock()
+        mock_trainer_cls.return_value = inst
+        trainer.fit()
+        trainer.test()
+    mock_trainer_cls.assert_called_once()
+    assert inst.test.call_args.kwargs["ckpt_path"] == "best"
 
 
 def test_fit_builds_callbacks_from_config_and_logs_early_stopping():

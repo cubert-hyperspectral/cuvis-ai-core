@@ -84,6 +84,30 @@ class FakeRestorePipeline:
         self.save_to_file_calls: list[str] = []
         self.unfreeze_calls: list[list[str]] = []
         self.visualize_calls: list[dict] = []
+        self.restore_weights_calls: list[dict] = []
+        # Node names _restore_weights_from_checkpoint reports as absent from
+        # the checkpoint. Tests set this to simulate a partial weights file.
+        self.missing_nodes: list[str] = []
+
+    def _restore_weights_from_checkpoint(
+        self,
+        weights_path,
+        strict_weight_loading: bool = True,
+        device: str | None = None,
+    ) -> list[str]:
+        """Record the call and mark covered nodes statistically initialized.
+
+        Mirrors the real loader's contract: every node not listed in
+        ``missing_nodes`` counts as loaded, and loading marks it
+        ``_statistically_initialized`` (as ``Node.load_state_dict`` does).
+        """
+        self.restore_weights_calls.append(
+            {"weights_path": str(weights_path), "device": device}
+        )
+        for node in self.nodes:
+            if node.name not in self.missing_nodes:
+                node._statistically_initialized = True
+        return list(self.missing_nodes)
 
     def set_profiling(self, *, enabled: bool) -> None:
         self.profiling_enabled.append(enabled)
@@ -164,13 +188,16 @@ class RecordingTrainer:
 
     def __init__(self, **kwargs) -> None:
         self.calls: list[str] = []
+        self.eval_ckpt_paths: list[str | None] = []
         self.__class__.all_instances.append(self)
 
     def fit(self) -> None:
         self.calls.append("fit")
 
-    def validate(self) -> None:
+    def validate(self, ckpt_path: str | None = None) -> None:
         self.calls.append("validate")
+        self.eval_ckpt_paths.append(ckpt_path)
 
-    def test(self) -> None:
+    def test(self, ckpt_path: str | None = None) -> None:
         self.calls.append("test")
+        self.eval_ckpt_paths.append(ckpt_path)

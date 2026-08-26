@@ -157,7 +157,19 @@ class GradientTrainer(pl.LightningModule):
             )
         logger.info("=" * 60)
 
-        # The pl.Trainer keyword arguments (explicit allowlist; callbacks handled below).
+        self.trainer = self._build_trainer()
+        self.trainer.fit(model=self, datamodule=self.datamodule)
+
+    def _build_trainer(self) -> pl.Trainer:
+        """Construct a ``pl.Trainer`` from the stored training configuration.
+
+        Used by ``fit()`` and lazily by ``validate()``/``test()`` when no
+        trainer exists in this process yet (evaluating a restored pipeline).
+        """
+        config_callbacks = self.training_config.callbacks
+
+        # The pl.Trainer keyword arguments (explicit allowlist; callbacks
+        # handled below).
         trainer_kwargs = self.training_config.to_lightning_kwargs()
 
         # Callbacks: explicit ones passed to __init__ win (e.g. the gRPC progress
@@ -172,11 +184,38 @@ class GradientTrainer(pl.LightningModule):
         if config_callbacks is not None and config_callbacks.checkpoint is not None:
             trainer_kwargs["enable_checkpointing"] = True
 
-        self.trainer = pl.Trainer(**trainer_kwargs)
-        self.trainer.fit(model=self, datamodule=self.datamodule)
+        return pl.Trainer(**trainer_kwargs)
+
+    def _ensure_trainer(self) -> bool:
+        """Lazily build the trainer for evaluation without a prior ``fit()``.
+
+        Returns True when a trainer had to be built (no ``fit()`` ran in this
+        process). The caller owns the model state in that case: restored
+        weights are evaluated as-is, untrained weights score garbage.
+        """
+        # LightningModule.trainer is a property that RAISES when the module is
+        # not attached to a trainer yet (it never returns the None assigned in
+        # __init__), so "no trainer" must be detected via the exception.
+        try:
+            attached = self.trainer
+        except RuntimeError:
+            attached = None
+        if attached is not None:
+            return False
+        logger.warning(
+            "Evaluation requested without a prior fit() in this process; "
+            "evaluating the current model state. Make sure trained weights "
+            "were loaded into the pipeline (or pass a Lightning ckpt_path)."
+        )
+        self.trainer = self._build_trainer()
+        return True
 
     def validate(self, ckpt_path: str | None = None) -> Sequence[Mapping[str, float]]:
         """Run validation evaluation.
+
+        Works without a prior ``fit()``: a trainer is then built lazily from
+        the training config and the *current* model state is evaluated, so the
+        caller must have loaded trained weights first.
 
         Parameters
         ----------
@@ -189,10 +228,7 @@ class GradientTrainer(pl.LightningModule):
         Sequence[Mapping[str, float]]
             Sequence of mappings containing validation metrics.
         """
-        if self.trainer is None:
-            raise RuntimeError(
-                "validate() called before fit(). Please call fit() first."
-            )
+        self._ensure_trainer()
 
         self.datamodule.setup(stage="val")
         return self.trainer.validate(
@@ -205,6 +241,12 @@ class GradientTrainer(pl.LightningModule):
         Reuses the trainer instance from fit() to maintain callback state and
         enable checkpoint loading. If a ModelCheckpoint callback was used during
         training, this will automatically load the best checkpoint.
+
+        Works without a prior ``fit()``: a trainer is then built lazily from
+        the training config and the *current* model state is evaluated (the
+        ``"best"`` default degrades to ``None``, since a trainer that never
+        ran fit() has no best checkpoint), so the caller must have loaded
+        trained weights first.
 
         Parameters
         ----------
@@ -219,11 +261,6 @@ class GradientTrainer(pl.LightningModule):
             metric names (e.g., 'test_loss', 'metrics_anomaly/iou') to their float values.
             Typically contains one mapping with all test metrics.
 
-        Raises
-        ------
-        RuntimeError
-            If test() is called before fit()
-
         Examples
         --------
         >>> grad_trainer = GradientTrainer(...)
@@ -231,10 +268,8 @@ class GradientTrainer(pl.LightningModule):
         >>> test_results = grad_trainer.test()  # Loads best checkpoint if available
         >>> # test_results = [{'test_loss': 0.123, 'metrics_anomaly/iou': 0.95, ...}]
         """
-        if self.trainer is None:
-            raise RuntimeError(
-                "test() called before fit(). Please call fit() first to initialize the trainer."
-            )
+        if self._ensure_trainer() and ckpt_path == "best":
+            ckpt_path = None
 
         self.datamodule.setup(stage="test")
         return self.trainer.test(
