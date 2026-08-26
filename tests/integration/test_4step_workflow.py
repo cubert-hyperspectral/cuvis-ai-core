@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
+from tests.fixtures.grpc import register_pipeline_plugins
 
 pytest.importorskip("hydra")
 
@@ -87,6 +88,8 @@ def test_complete_four_step_flow(grpc_stub, minimal_pipeline_dict, tmp_path):
             path="pipeline.yaml",
         )
     )
+    # LoadPipeline resolves plugins from the session's client-pushed catalog.
+    register_pipeline_plugins(grpc_stub, session_id, pipeline_resolved.config_bytes)
     load_response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,

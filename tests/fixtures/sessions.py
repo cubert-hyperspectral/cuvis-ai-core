@@ -1,6 +1,5 @@
 """Centralized session management fixtures for gRPC tests."""
 
-import json
 import logging
 import tempfile
 import time
@@ -15,43 +14,14 @@ import yaml
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import DataConfig, TrainRunConfig
 from cuvis_ai_schemas.training import DataSplitConfig, Selector, SelectorKind
+from tests.fixtures.grpc import (
+    register_pipeline_plugins,
+    restore_trainrun_into_prepared_session,
+)
 
 # Configure logging for session management
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-# Bundled per-plugin manifests this repo's own pipelines reference (e.g.
-# cuvis_ai_test_nodes for the mock-node configs under configs/pipeline).
-_PLUGINS_DIR = Path(__file__).resolve().parents[2] / "configs" / "plugins"
-
-
-def _register_pipeline_plugins(
-    grpc_stub: Any, session_id: str, pipeline_config_bytes: bytes
-) -> None:
-    """Register the plugins a pipeline declares, as a real client would.
-
-    ``LoadPipeline`` resolves a pipeline's ``plugins:`` against the session's
-    client-pushed catalog (``LoadPlugin``), not a server-side directory scan,
-    so every declared plugin must be registered first. Each bundled manifest
-    in ``configs/plugins`` is sent with its local ``path`` resolved to absolute
-    (the server rejects a client-relative path over gRPC).
-    """
-    config = json.loads(pipeline_config_bytes)
-    for name in config.get("plugins") or []:
-        manifest_path = _PLUGINS_DIR / f"{name}.yaml"
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(manifest, dict) and "repo" not in manifest:
-            raw_path = Path(manifest.get("path", "."))
-            if not raw_path.is_absolute():
-                manifest["path"] = str((manifest_path.parent / raw_path).resolve())
-        grpc_stub.LoadPlugin(
-            cuvis_ai_pb2.LoadPluginRequest(
-                session_id=session_id,
-                manifest=cuvis_ai_pb2.PluginManifest(
-                    config_bytes=json.dumps(manifest).encode("utf-8")
-                ),
-            )
-        )
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -65,11 +35,32 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return merged
 
 
+def _absolutize_pipeline_reference(config: dict, trainrun_dir: Path) -> None:
+    """Rewrite a relative ``pipeline:`` reference against the source trainrun's dir.
+
+    ``materialize_trainrun_config`` dumps the resolved trainrun into a tempfile
+    outside the config tree, so a reference like ``../pipeline/gradient_based.yaml``
+    can no longer resolve relative to the dumped file. Rewrites in place, and only
+    when the value is a relative path string whose resolved candidate exists;
+    anything else is left untouched for the server-side resolver to handle.
+    """
+    reference = config.get("pipeline")
+    if not isinstance(reference, str) or not reference:
+        return
+    if Path(reference).is_absolute():
+        return
+    candidate = (trainrun_dir / reference).resolve()
+    if candidate.exists():
+        config["pipeline"] = str(candidate)
+
+
 def materialize_trainrun_config(trainrun_path: str) -> str:
     """Resolve Hydra-style defaults into a concrete trainrun YAML for testing."""
     trainrun_file = Path(trainrun_path)
     raw = yaml.safe_load(trainrun_file.read_text())
     if not isinstance(raw, dict) or "defaults" not in raw:
+        if isinstance(raw, dict):
+            _absolutize_pipeline_reference(raw, trainrun_file.parent)
         tmp = tempfile.NamedTemporaryFile(
             delete=False, suffix=".yaml", mode="w", encoding="utf-8"
         )
@@ -127,6 +118,8 @@ def materialize_trainrun_config(trainrun_path: str) -> str:
                 )
             else:
                 training_cfg["scheduler"] = scheduler_cfg
+
+    _absolutize_pipeline_reference(resolved, trainrun_file.parent)
 
     tmp = tempfile.NamedTemporaryFile(
         delete=False, suffix=".yaml", mode="w", encoding="utf-8"
@@ -202,6 +195,9 @@ def trained_pipeline_session(
                 path=f"pipeline/{pipeline_path}",
             )
         )
+        # Register the pipeline's declared plugins before loading it: the
+        # orchestrator resolves plugins from the session's pushed catalog.
+        register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
@@ -280,7 +276,7 @@ def session(grpc_stub: Any) -> Generator[Callable[[str], str], None, None]:
         )
         # Register the pipeline's declared plugins before loading it: the
         # orchestrator resolves plugins from the session's pushed catalog.
-        _register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
+        register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=session_id,
@@ -325,8 +321,11 @@ def trained_session(
     ) -> tuple[str, cuvis_ai_pb2.DataConfig]:
         # Resolve Hydra defaults for tests, then RestoreTrainRun to load full config
         resolved_path = materialize_trainrun_config(trainrun_path)
-        restore_req = cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=resolved_path)
-        response = grpc_stub.RestoreTrainRun(restore_req)
+
+        # Restore into a caller-prepared session: plugin resolution runs against
+        # the session's client-pushed catalog (a fresh server-created session
+        # has an empty catalog and only plugin-less pipelines restore that way).
+        response = restore_trainrun_into_prepared_session(grpc_stub, resolved_path)
         session_id = response.session_id
         created_sessions.append(session_id)
 

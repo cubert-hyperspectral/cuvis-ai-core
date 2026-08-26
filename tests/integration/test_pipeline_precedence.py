@@ -16,15 +16,19 @@ def _build_pipeline(stub, session_id: str, pipeline_dict: dict) -> None:
 
     import json
 
+    from tests.fixtures.grpc import register_pipeline_plugins
+
     payload = copy.deepcopy(pipeline_dict)
     payload.pop("version", None)
+
+    # LoadPipeline resolves plugins from the session's client-pushed catalog.
+    config_bytes = json.dumps(payload).encode("utf-8")
+    register_pipeline_plugins(stub, session_id, config_bytes)
 
     response = stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(
-                config_bytes=json.dumps(payload).encode("utf-8")
-            ),
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_bytes),
         )
     )
     assert response.success

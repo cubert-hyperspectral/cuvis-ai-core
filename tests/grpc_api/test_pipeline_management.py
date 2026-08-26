@@ -8,6 +8,7 @@ import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from tests.fixtures.grpc import pipeline_bytes_from_path as _pipeline_bytes_from_path
+from tests.fixtures.grpc import register_pipeline_plugins
 
 DEFAULT_CHANNELS = 61
 
@@ -328,13 +329,15 @@ class TestPipelineRoundTrip:
         new_session_id = new_session_response.session_id
         assert new_session_id  # Verify session was created successfully
 
-        # Load the saved pipeline
+        # Load the saved pipeline; it re-emits its `plugins:` list, so register
+        # those in the fresh session first (LoadPipeline resolves from the
+        # client-pushed catalog).
+        saved_bytes = _pipeline_bytes_from_path(save_response.pipeline_path)
+        register_pipeline_plugins(grpc_stub, new_session_id, saved_bytes)
         load_response = grpc_stub.LoadPipeline(
             cuvis_ai_pb2.LoadPipelineRequest(
                 session_id=new_session_id,
-                pipeline=cuvis_ai_pb2.PipelineConfig(
-                    config_bytes=_pipeline_bytes_from_path(save_response.pipeline_path)
-                ),
+                pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=saved_bytes),
             )
         )
         assert load_response.success

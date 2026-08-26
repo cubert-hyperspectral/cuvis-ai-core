@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
-from tests.fixtures.sessions import _register_pipeline_plugins
+from tests.fixtures.grpc import register_pipeline_plugins
 
 DEFAULT_CHANNELS = 61
 _WEIGHTS = Path("configs/pipeline/gradient_based.pt")
@@ -32,7 +32,7 @@ def test_profiling_end_to_end_through_child(grpc_stub, create_test_cube):
             path="pipeline/gradient_based",
         )
     )
-    _register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
+    register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
     load_response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,

@@ -14,6 +14,7 @@ import yaml
 from cuvis_ai_core.grpc import cuvis_ai_pb2
 from cuvis_ai_core.training.config import TrainRunConfig
 from tests.fixtures.grpc import pipeline_bytes_from_path as _pipeline_bytes_from_path
+from tests.fixtures.grpc import restore_trainrun_into_prepared_session
 
 DEFAULT_CHANNELS = 61
 
@@ -48,8 +49,7 @@ def shared_trained_session(grpc_server, test_data_files_cached):
         resolved_path = materialize_trainrun_config(
             "configs/trainrun/gradient_based.yaml"
         )
-        restore_req = cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=resolved_path)
-        response = stub.RestoreTrainRun(restore_req)
+        response = restore_trainrun_into_prepared_session(stub, resolved_path)
         session_id = response.session_id
 
         # Get data config from the restored trainrun
@@ -143,11 +143,19 @@ class TestSaveTrainRun:
         with open(response.trainrun_path) as f:
             trainrun_config = yaml.safe_load(f)
 
-        # Should contain pipeline config with proper structure
+        # A saved trainrun references its pipeline by path (sibling convention),
+        # never embeds it; the referenced yaml carries the full structure.
         assert "pipeline" in trainrun_config
-        assert "metadata" in trainrun_config["pipeline"]
-        assert "nodes" in trainrun_config["pipeline"]
-        assert "connections" in trainrun_config["pipeline"]
+        pipeline_ref = trainrun_config["pipeline"]
+        assert isinstance(pipeline_ref, str)
+        pipeline_path = Path(pipeline_ref)
+        if not pipeline_path.is_absolute():
+            pipeline_path = Path(response.trainrun_path).parent / pipeline_path
+        assert pipeline_path.exists()
+        pipeline_config = yaml.safe_load(pipeline_path.read_text(encoding="utf-8"))
+        assert "metadata" in pipeline_config
+        assert "nodes" in pipeline_config
+        assert "connections" in pipeline_config
 
     def test_save_trainrun_without_training(self, grpc_stub, tmp_path, session):
         """Test that saving trainrun before training either succeeds or fails gracefully."""
@@ -218,11 +226,7 @@ class TestRestoreTrainRun:
 
     def test_restore_trainrun_creates_session(self, grpc_stub, experiment_file):
         """Test that RestoreTrainRun creates a new session."""
-        response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=experiment_file,
-            )
-        )
+        response = restore_trainrun_into_prepared_session(grpc_stub, experiment_file)
 
         assert response.session_id
 
@@ -241,11 +245,7 @@ class TestRestoreTrainRun:
         self, grpc_stub, experiment_file, create_test_cube
     ):
         """Test that pipeline is correctly loaded and can perform inference."""
-        response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=experiment_file,
-            )
-        )
+        response = restore_trainrun_into_prepared_session(grpc_stub, experiment_file)
 
         assert response.session_id
 
@@ -326,11 +326,7 @@ class TestRestoreTrainRun:
             yaml.dump(bad_trainrun, f)
 
         with pytest.raises(grpc.RpcError) as exc:
-            grpc_stub.RestoreTrainRun(
-                cuvis_ai_pb2.RestoreTrainRunRequest(
-                    trainrun_path=str(bad_trainrun_path),
-                )
-            )
+            restore_trainrun_into_prepared_session(grpc_stub, str(bad_trainrun_path))
         assert exc.value.code() in [
             grpc.StatusCode.NOT_FOUND,
             grpc.StatusCode.INVALID_ARGUMENT,
@@ -344,12 +340,11 @@ class TestRestoreTrainRun:
         saved_data = shared_saved_trainrun_with_weights
 
         # Restore with weights
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=saved_data["trainrun_path"],
-                weights_path=saved_data["weights_path"],
-                strict=True,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub,
+            saved_data["trainrun_path"],
+            weights_path=saved_data["weights_path"],
+            strict=True,
         )
 
         assert restore_response.session_id
@@ -383,12 +378,11 @@ class TestRestoreTrainRun:
 
         # Try to restore with non-existent weights path
         with pytest.raises(grpc.RpcError) as exc:
-            grpc_stub.RestoreTrainRun(
-                cuvis_ai_pb2.RestoreTrainRunRequest(
-                    trainrun_path=saved_data["trainrun_path"],
-                    weights_path="/nonexistent/weights.pt",
-                    strict=True,
-                )
+            restore_trainrun_into_prepared_session(
+                grpc_stub,
+                saved_data["trainrun_path"],
+                weights_path="/nonexistent/weights.pt",
+                strict=True,
             )
 
         assert exc.value.code() == grpc.StatusCode.NOT_FOUND
@@ -412,12 +406,11 @@ class TestWeightTransfer:
         saved_data = shared_saved_trainrun_with_weights
 
         # Restore with weights
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=saved_data["trainrun_path"],
-                weights_path=saved_data["weights_path"],
-                strict=True,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub,
+            saved_data["trainrun_path"],
+            weights_path=saved_data["weights_path"],
+            strict=True,
         )
 
         # Create test data
@@ -457,12 +450,11 @@ class TestWeightTransfer:
         saved_data = shared_saved_trainrun_with_weights
 
         # Restore with specified strictness
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=saved_data["trainrun_path"],
-                weights_path=saved_data["weights_path"],
-                strict=strict,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub,
+            saved_data["trainrun_path"],
+            weights_path=saved_data["weights_path"],
+            strict=strict,
         )
         assert restore_response.session_id
 
@@ -484,12 +476,11 @@ class TestWeightTransfer:
         saved_data = shared_saved_trainrun_with_weights
 
         # Restore with weights
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=saved_data["trainrun_path"],
-                weights_path=saved_data["weights_path"],
-                strict=True,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub,
+            saved_data["trainrun_path"],
+            weights_path=saved_data["weights_path"],
+            strict=True,
         )
 
         # Verify statistical nodes are initialized
@@ -579,10 +570,8 @@ class TestExperimentWorkflow:
         assert trainrun_response.success
 
         # Restore trainrun (creates new session)
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=trainrun_response.trainrun_path,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub, trainrun_response.trainrun_path
         )
 
         restored_session_id = restore_response.session_id
@@ -640,11 +629,7 @@ class TestExperimentWorkflow:
     def test_experiment_reproducibility(self, grpc_stub, experiment_file):
         """Test that restored experiment config is accessible for re-training."""
         # Restore experiment
-        response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=experiment_file,
-            )
-        )
+        response = restore_trainrun_into_prepared_session(grpc_stub, experiment_file)
 
         session_id = response.session_id
 
@@ -666,12 +651,11 @@ class TestExperimentWorkflow:
         saved_data = shared_saved_trainrun_with_weights
 
         # Restore trainrun with weights
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=saved_data["trainrun_path"],
-                weights_path=saved_data["weights_path"],
-                strict=True,
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub,
+            saved_data["trainrun_path"],
+            weights_path=saved_data["weights_path"],
+            strict=True,
         )
         restored_session_id = restore_response.session_id
         assert restored_session_id
