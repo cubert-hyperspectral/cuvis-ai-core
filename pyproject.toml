@@ -73,7 +73,7 @@ dependencies = [
     # Child-lease liveness checks and orphan reaping (pid + create_time
     # identity, process-tree termination) — os.kill(pid, 0) is not a
     # liveness probe on Windows.
-    "psutil>=5.9",
+    "psutil>=7.2.1",
 ]
 
 [project.optional-dependencies]
