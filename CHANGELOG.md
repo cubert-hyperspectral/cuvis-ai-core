@@ -20,6 +20,7 @@
   is not a crash and preserves nothing; the scratch tree is deleted either way.
 - `ChildHandle.terminate()` logs at warning level when the child was already dead (previously a
   silent early return), and a failed graceful `StopRun` logs at info instead of debug.
+- `LoadPipeline` no longer crashes on a pipeline config carrying an explicit `metadata: null` (previously `AttributeError: 'NoneType' object has no attribute 'get'`, observed via a child runtime's preserved stderr log); the pipeline name falls back to `Pipeline`.
 
 ## 0.13.0 - 2026-08-25
 
