@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`restore-trainrun --mode validate` / `--mode test` now evaluate the trained weights** (#63).
+  Exactly one weight source is used, in the precedence `--checkpoint-path` (Lightning `.ckpt`,
+  restored by the gradient trainer) > `--weights-path` (pipeline `.pt`) > the auto-located
+  `<output_dir>/trained_models/<pipeline>_restored.pt` that `--mode train` writes. A gradient
+  trainrun with no weight source fails with `FileNotFoundError` instead of scoring untrained
+  state (previously statistical-only runs silently re-derived their buffers from the train split
+  and gradient runs crashed on the missing `pl.Trainer`). Nodes covered by the loaded weights skip
+  statistical re-initialization; only uncovered nodes are refit. Both flags together,
+  `--checkpoint-path` on a statistical-only trainrun, and `--weights-path` outside validate/test
+  are errors, and validate/test fail up front when the data config resolves no matching split.
+  `GradientTrainer.validate()` / `test()` build a `pl.Trainer` lazily when no `fit()` ran in the
+  process (`"best"` degrades to `None` on that path), and
+  `CuvisPipeline._restore_weights_from_checkpoint` returns the nodes missing from the checkpoint.
 - **A crashed child runtime now reports itself instead of a bare transport error.** When a
   forwarded RPC (`Train`, `Inference`, `LoadPipeline`, `RestoreTrainRun`, and the other pipeline
   ops) fails because the child process exited, the parent answers `INTERNAL` with
