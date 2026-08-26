@@ -9,7 +9,11 @@ import pytest
 import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
-from tests.fixtures.grpc import load_pipeline_from_file, resolve_and_load_pipeline
+from tests.fixtures.grpc import (
+    load_pipeline_from_file,
+    resolve_and_load_pipeline,
+    restore_trainrun_into_prepared_session,
+)
 
 DEFAULT_CHANNELS = 61
 
@@ -221,11 +225,8 @@ class TestWorkflow3_ResumeTraining:
             yaml.dump(exp_config, f)
 
         # Step 1: RestoreTrainRun (weights ride on the request, not the pipeline ref)
-        restore_response = grpc_stub.RestoreTrainRun(
-            cuvis_ai_pb2.RestoreTrainRunRequest(
-                trainrun_path=str(exp_path),
-                weights_path=str(weights_path),
-            )
+        restore_response = restore_trainrun_into_prepared_session(
+            grpc_stub, str(exp_path), weights_path=str(weights_path)
         )
         session_id = restore_response.session_id
         assert session_id

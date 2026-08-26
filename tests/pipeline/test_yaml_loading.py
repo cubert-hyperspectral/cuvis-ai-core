@@ -116,6 +116,22 @@ connections: []
         # Verify node was created successfully
         assert len(list(pipeline.nodes)) == 1
 
+    def test_metadata_null_falls_back_to_default_name(self, simple_pipeline_config):
+        """An explicit ``metadata: null`` must not crash and uses the default name.
+
+        A saved config can carry ``metadata: null`` (not just a missing key);
+        building it used to raise ``AttributeError: 'NoneType' object has no
+        attribute 'get'``.
+        """
+        config = dict(simple_pipeline_config)
+        config["metadata"] = None
+
+        builder = PipelineBuilder()
+        pipeline = builder.build_from_config(config)
+
+        assert pipeline is not None
+        assert pipeline.name == "Pipeline"
+
     def test_missing_node_raises_error(self):
         """Test that missing node class raises error."""
         config = {

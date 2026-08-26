@@ -3,6 +3,7 @@
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2
+from tests.fixtures.grpc import register_pipeline_plugins
 
 
 def _load_pipeline(
@@ -16,6 +17,8 @@ def _load_pipeline(
             path=f"pipeline/{pipeline_name}",
         )
     )
+    # LoadPipeline resolves plugins from the session's client-pushed catalog.
+    register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,

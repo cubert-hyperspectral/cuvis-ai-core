@@ -14,3 +14,9 @@ capabilities:
   - class_name: tests.fixtures.mock_nodes.SimpleLossNode
   - class_name: tests.fixtures.mock_nodes.MockMetricNode
   - class_name: tests.fixtures.mock_nodes.MinMaxNormalizer
+  # The suite installs neither the cuvis SDK nor cuvis-ai-dataloader, so the
+  # shipped test configs' `data_module: cu3s` dispatches to a synthetic
+  # stand-in that serves deterministic cubes in the same batch layout.
+  - class_name: tests.fixtures.fake_data_modules.FakeCu3sDataModule
+    kind: data_module
+    data_module_name: cu3s

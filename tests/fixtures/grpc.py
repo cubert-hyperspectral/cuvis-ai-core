@@ -5,6 +5,7 @@ import logging
 from collections.abc import Generator
 from concurrent import futures
 from pathlib import Path
+from typing import Any
 
 import grpc
 import pytest
@@ -15,6 +16,69 @@ from cuvis_ai_core.grpc.session_manager import SessionManager
 
 # Keep a handle on the service so tests can introspect the live SessionManager
 SERVICE_INSTANCE: CuvisAIService | None = None
+
+# Bundled per-plugin manifests this repo's own pipelines reference (e.g.
+# cuvis_ai_test_nodes for the mock-node configs under configs/pipeline).
+_PLUGINS_DIR = Path(__file__).resolve().parents[2] / "configs" / "plugins"
+
+
+def register_pipeline_plugins(
+    grpc_stub: Any, session_id: str, pipeline_config_bytes: bytes
+) -> None:
+    """Register the plugins a pipeline declares, as a real client would.
+
+    ``LoadPipeline`` resolves a pipeline's ``plugins:`` against the session's
+    client-pushed catalog (``LoadPlugin``), not a server-side directory scan,
+    so every declared plugin must be registered first. Each bundled manifest
+    in ``configs/plugins`` is sent with its local ``path`` resolved to absolute
+    (the server rejects a client-relative path over gRPC).
+    """
+    config = json.loads(pipeline_config_bytes)
+    for name in config.get("plugins") or []:
+        manifest_path = _PLUGINS_DIR / f"{name}.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(manifest, dict) and "repo" not in manifest:
+            raw_path = Path(manifest.get("path", "."))
+            if not raw_path.is_absolute():
+                manifest["path"] = str((manifest_path.parent / raw_path).resolve())
+        grpc_stub.LoadPlugin(
+            cuvis_ai_pb2.LoadPluginRequest(
+                session_id=session_id,
+                manifest=cuvis_ai_pb2.PluginManifest(
+                    config_bytes=json.dumps(manifest).encode("utf-8")
+                ),
+            )
+        )
+
+
+def restore_trainrun_into_prepared_session(
+    grpc_stub: Any, trainrun_path: str, **request_fields: Any
+):
+    """Create a session, register the trainrun pipeline's plugins, restore into it.
+
+    A server-created session has an empty plugin catalog, so restoring a
+    trainrun whose pipeline declares ``plugins:`` requires the client-owned
+    flow: CreateSession -> LoadPlugin each manifest -> RestoreTrainRun with
+    ``session_id``. The pipeline reference is resolved against the trainrun
+    file's directory when relative. Extra ``request_fields`` (``weights_path``,
+    ``strict``) are forwarded to the request. Returns the restore response.
+    """
+    session_id = grpc_stub.CreateSession(cuvis_ai_pb2.CreateSessionRequest()).session_id
+    trainrun = yaml.safe_load(Path(trainrun_path).read_text(encoding="utf-8"))
+    reference = trainrun.get("pipeline") if isinstance(trainrun, dict) else None
+    if isinstance(reference, str) and reference:
+        pipeline_path = Path(reference)
+        if not pipeline_path.is_absolute():
+            pipeline_path = (Path(trainrun_path).parent / pipeline_path).resolve()
+        if pipeline_path.is_file():
+            register_pipeline_plugins(
+                grpc_stub, session_id, pipeline_bytes_from_path(str(pipeline_path))
+            )
+    return grpc_stub.RestoreTrainRun(
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=trainrun_path, session_id=session_id, **request_fields
+        )
+    )
 
 
 # Session-scoped gRPC server to avoid repeated startup/shutdown overhead
@@ -115,6 +179,9 @@ def resolve_and_load_pipeline(
             path=path,
         )
     )
+    # Register the pipeline's declared plugins before loading it: the
+    # orchestrator resolves plugins from the session's pushed catalog.
+    register_pipeline_plugins(grpc_stub, session_id, config_response.config_bytes)
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
@@ -176,12 +243,14 @@ def load_pipeline_from_file(
     Raises:
         AssertionError: If the pipeline loading fails
     """
+    config_bytes = pipeline_bytes_from_path(pipeline_file)
+    # Saved pipelines re-emit their `plugins:` list; register those plugins in
+    # the target session first, exactly like resolve_and_load_pipeline.
+    register_pipeline_plugins(grpc_stub, session_id, config_bytes)
     response = grpc_stub.LoadPipeline(
         cuvis_ai_pb2.LoadPipelineRequest(
             session_id=session_id,
-            pipeline=cuvis_ai_pb2.PipelineConfig(
-                config_bytes=pipeline_bytes_from_path(pipeline_file)
-            ),
+            pipeline=cuvis_ai_pb2.PipelineConfig(config_bytes=config_bytes),
         )
     )
     assert response.success

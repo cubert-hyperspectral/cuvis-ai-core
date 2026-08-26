@@ -68,8 +68,9 @@ class PipelineBuilder:
         # Load configurations
         pipeline_cfg = self._load_config(pipeline_config)
 
-        # Extract pipeline name from metadata or use default
-        pipeline_name = pipeline_cfg.get("metadata", {}).get("name", "Pipeline")
+        # Extract pipeline name from metadata or use default. Tolerate an
+        # explicit ``metadata: null`` in the config, not just a missing key.
+        pipeline_name = (pipeline_cfg.get("metadata") or {}).get("name", "Pipeline")
 
         # Create pipeline instance
         pipeline = CuvisPipeline(name=pipeline_name)

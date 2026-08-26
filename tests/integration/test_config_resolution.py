@@ -17,12 +17,9 @@ def test_config_resolution_and_validation(grpc_stub, tmp_path):
     training_yaml.write_text(
         """seed: 7
 max_epochs: 50
-batch_size: 4
 optimizer:
   name: adamw
   lr: 0.001
-trainer:
-  max_epochs: 50
 """
     )
 
