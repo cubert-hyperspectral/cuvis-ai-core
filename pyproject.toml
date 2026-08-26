@@ -70,6 +70,10 @@ dependencies = [
     # Per-run child-env composer (orchestrator package)
     "filelock>=3.20.3",
     "tomli-w>=1.2.0",
+    # Child-lease liveness checks and orphan reaping (pid + create_time
+    # identity, process-tree termination) — os.kill(pid, 0) is not a
+    # liveness probe on Windows.
+    "psutil>=7.2.1",
 ]
 
 [project.optional-dependencies]
@@ -90,7 +94,6 @@ dev = [
     "ruamel.yaml>=0.18",
     "ipympl>=0.9.8",
     "ipdb>=0.13.13",
-    "psutil",
     # Security and packaging tools
     "twine>=6.2.0",
     "pip-audit>=2.7.0",
@@ -122,6 +125,7 @@ restore-trainrun = "cuvis_ai_core.utils.restore:restore_trainrun_cli"
 dataset = "cuvis_ai_core.data.public_datasets:download_data_cli"
 download-model = "cuvis_ai_core.data.model_weights:download_model_cli"
 suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
+clean-run-cache = "cuvis_ai_core.orchestrator.clean_run_cache:main"
 audit-plugin-deps = "scripts.audit_plugin_deps:main"
 provision = "scripts.provision:main"
 

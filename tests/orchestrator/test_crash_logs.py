@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 
 from cuvis_ai_core.orchestrator import crash_logs
 from cuvis_ai_core.orchestrator.crash_logs import (
     crash_dir_root,
     preserve_child_logs,
+    preserve_session_logs,
 )
 
 
@@ -137,3 +139,57 @@ def test_preserve_prunes_the_store(monkeypatch, tmp_path):
 
     assert dest is not None and dest.exists()
     assert len(list(root.iterdir())) == crash_logs._MAX_CRASH_DIRS
+
+
+# ---------------------------------------------------------------------------
+# preserve_session_logs (orphan reaper entry point)
+# ---------------------------------------------------------------------------
+
+
+def test_preserve_session_logs_globs_nested_logs(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    session_root = tmp_path / "cuvis_runtime_sessions" / "sess-7"
+    runtime = session_root / "scratch" / "runtime"
+    runtime.mkdir(parents=True)
+    _write_logs(runtime)
+    (runtime / "unrelated.txt").write_text("not a child log", encoding="utf-8")
+
+    dest = preserve_session_logs(session_root, session_id="sess-7")
+
+    assert dest is not None and dest.is_dir()
+    assert dest.name.endswith("-sess-7")
+    assert (dest / "child.stdout.log").exists()
+    assert (dest / "child.stderr.log").exists()
+    assert not (dest / "unrelated.txt").exists()
+    # No exit code is known for a reaped orphan.
+    assert "exit_code: unknown" in (dest / "crash_info.txt").read_text(encoding="utf-8")
+
+
+def test_preserve_session_logs_without_logs_is_noop(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    empty_root = tmp_path / "cuvis_runtime_sessions" / "sess-empty"
+    empty_root.mkdir(parents=True)
+
+    assert preserve_session_logs(empty_root, session_id="sess-empty") is None
+    assert preserve_session_logs(tmp_path / "missing", session_id="gone") is None
+    assert not (tmp_path / "crashes").exists()
+
+
+def test_preserve_session_logs_survives_unscannable_tree(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    session_root = tmp_path / "cuvis_runtime_sessions" / "sess-locked"
+    runtime = session_root / "scratch" / "runtime"
+    runtime.mkdir(parents=True)
+    _write_logs(runtime)
+
+    def _denied(self, pattern, *args, **kwargs):
+        # Like the real rglob, a lazy generator: the error surfaces while the
+        # result is consumed, so the sorted() call must sit inside the try.
+        yield from ()
+        raise PermissionError(f"cannot scan {self}")
+
+    monkeypatch.setattr(Path, "rglob", _denied)
+    # The scan itself fails (unreadable tree) -> warn and return None, no raise.
+    assert preserve_session_logs(session_root, session_id="sess-locked") is None
+    # Logs exist on disk, but they were never reached -> store not created.
+    assert not (tmp_path / "crashes").exists()

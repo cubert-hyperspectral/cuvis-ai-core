@@ -41,24 +41,32 @@ def _iter_package_python_files() -> list[Path]:
 
 
 def test_no_rogue_subprocess_popen_outside_spawner():
-    """Only the orchestrator spawner is allowed to subprocess.Popen.
+    """Only the orchestrator spawner (and the uv runner) may subprocess.Popen.
 
     Future sandbox work wraps :class:`LocalChildRuntimeSpawner` — every
-    child process launch must funnel through that one site. If a new
+    child *runtime* launch must funnel through that one site. If a new
     call to ``subprocess.Popen`` appears anywhere else in
     ``cuvis_ai_core``, the sandbox seam is broken.
+
+    ``orchestrator/uv_runner.py`` is the one other allowed site: it runs
+    the trusted ``uv`` tool (never plugin code) and already does so via
+    ``subprocess.run``; its single ``Popen`` exists to watch uv's stderr
+    for the cache-lock wait announcement during ``uv cache prune``.
     """
-    allowed = (PACKAGE_ROOT / "orchestrator" / "spawner.py").resolve()
+    allowed = {
+        (PACKAGE_ROOT / "orchestrator" / "spawner.py").resolve(),
+        (PACKAGE_ROOT / "orchestrator" / "uv_runner.py").resolve(),
+    }
     offenders: list[str] = []
     for source in _iter_package_python_files():
-        if source.resolve() == allowed:
+        if source.resolve() in allowed:
             continue
         text = source.read_text(encoding="utf-8")
         if _POPEN_RE.search(text):
             offenders.append(str(source.relative_to(PACKAGE_ROOT)))
     assert not offenders, (
-        "Only orchestrator/spawner.py may call subprocess.Popen. "
-        f"Other call sites found: {offenders}"
+        "Only orchestrator/spawner.py and orchestrator/uv_runner.py may call "
+        f"subprocess.Popen. Other call sites found: {offenders}"
     )
 
 

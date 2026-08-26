@@ -105,3 +105,28 @@ def _prune_crash_dirs(root: Path) -> None:
         return
     for stale in entries[:-_MAX_CRASH_DIRS]:
         shutil.rmtree(stale, ignore_errors=True)
+
+
+# The spawner writes the child's streams as ``child.stdout.log`` /
+# ``child.stderr.log`` under the session scratch tree. The orphan reaper
+# knows only that tree (from the lease), not the individual log paths.
+_LOG_GLOB = "child.*.log"
+
+
+def preserve_session_logs(session_root: Path, *, session_id: str) -> Path | None:
+    """Preserve every child log found under a session's scratch tree.
+
+    The orphan reaper's counterpart to :func:`preserve_child_logs`: it
+    works from a lease, which records the session root but not the log
+    paths, nor an exit code (the parent that spawned the child is gone,
+    so the marker records ``unknown``). Best-effort like its sibling;
+    returns the destination, or ``None`` when nothing was preserved.
+    """
+    try:
+        log_files = sorted(session_root.rglob(_LOG_GLOB))
+    except OSError as exc:
+        logger.warning(f"Could not scan {session_root} for child logs: {exc}")
+        return None
+    if not log_files:
+        return None
+    return preserve_child_logs(log_files, session_id=session_id)

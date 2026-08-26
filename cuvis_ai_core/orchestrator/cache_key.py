@@ -4,10 +4,18 @@ A composed venv is reused only when six things match:
 
 1. Python version (exact ``X.Y.Z``)
 2. Platform tag (``win_amd64``, ``linux_x86_64``, etc.)
-3. Core source identity (PyPI pin, git+sha, or local path)
+3. Core source identity (PyPI pin, git+sha, or local path + its
+   ``pyproject.toml`` hash — a local core is installed editable, so its
+   dependency declarations are the only part of the tree that shapes
+   the venv).
 4. Plugin sources — for git plugins the tag has already been resolved
-   to a commit sha; for local plugins a content-provenance triple
-   (``pyproject.toml`` hash, ``git HEAD``, ``dirty`` flag) is rolled in.
+   to a commit sha; for local plugins the ``pyproject.toml`` hash and
+   path. Local plugins are installed editable, so the venv content
+   never depends on their source tree beyond the pyproject: commits
+   and working-tree edits reuse the same env by design. (Plugins using
+   dynamic metadata — e.g. ``dynamic = ["dependencies"]`` fed from a
+   ``requirements.txt`` — are not supported by this keying: their
+   dependency identity lives outside the hashed file.)
 5. Spec hash — sha256 of the canonical runtime ``pyproject.toml``
    the composer is about to write. Captures any constraint overlay or
    ordering change the structured fields above don't already cover.
@@ -17,9 +25,12 @@ A composed venv is reused only when six things match:
 The on-disk directory name is the short hash digest alone, so it stays
 well within filesystem name limits no matter how many plugins a
 pipeline pulls in. A human-readable ``env_desc.md`` written inside each
-env records what the env was composed for. Any local plugin marked
-``dirty`` rolls a random value into the key so it hashes uniquely per
-run (a fresh env every time); clean keys hash identically across runs.
+env records what the env was composed for.
+
+Provenance fields (``git_head``, ``dirty``) are recorded in ``key.json``
+and ``env_desc.md`` as *build-time forensics* — they describe the state
+of the first builder, not the current run — and are deliberately
+excluded from the digest.
 """
 
 from __future__ import annotations
@@ -27,21 +38,21 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
-import secrets
 import sys
 import sysconfig
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
 # Bump when the composer's logic changes shape (key fields, hashing
 # convention, atomic-publish protocol, etc.) so existing cache entries
 # are naturally invalidated.
-COMPOSER_SCHEMA_VERSION = 4
+COMPOSER_SCHEMA_VERSION = 5
 
 # The directory name is the digest alone, so it is the sole on-disk
-# identity. 12 hex chars (48 bits) sizes it to make collisions negligible.
-_DIR_HASH_LEN = 12
+# identity. 16 hex chars (64 bits) makes collisions negligible even on
+# long-lived shared caches.
+_DIR_HASH_LEN = 16
 
 # Cache-protocol kind tags written to key.json and the human manifest.
 _KIND_GIT = "git"
@@ -50,10 +61,17 @@ _KIND_LOCAL = "local"
 
 @dataclass(frozen=True)
 class CoreSource:
-    """Identity of the ``cuvis-ai-core`` package the composer is pinning into the runtime project."""
+    """Identity of the ``cuvis-ai-core`` package the composer is pinning into the runtime project.
+
+    ``pyproject_sha256`` is populated for ``local`` sources only: a local
+    core is installed editable, so its own dependency declarations (not
+    its source tree) determine the venv content — without this hash,
+    editing core's dependencies would silently reuse a stale child env.
+    """
 
     kind: Literal["pypi", "git", "local"]
     identity: str  # "cuvis-ai-core==0.7.3" / "<repo>@<sha>" / "<absolute-path>"
+    pyproject_sha256: str = ""  # local kind only; "" for pypi/git
 
 
 @dataclass(frozen=True)
@@ -92,6 +110,11 @@ class ResolvedLocalPlugin:
     ``cuvis_ai_builtin -> /path/to/cuvis-ai/`` (whose pyproject is
     named ``cuvis-ai``) trips uv with "Package metadata name does
     not match given name".
+
+    ``git_head`` and ``dirty`` are forensics only: local plugins are
+    installed editable, so the venv is identical for every working-tree
+    state with the same ``pyproject.toml`` — the digest deliberately
+    ignores them.
     """
 
     name: str
@@ -117,7 +140,6 @@ class CacheKey:
     plugins: tuple[ResolvedPlugin, ...]
     spec_hash: str
     schema_version: int = COMPOSER_SCHEMA_VERSION
-    dirty_suffix: str | None = field(default=None)
 
     @property
     def digest(self) -> str:
@@ -129,11 +151,10 @@ class CacheKey:
         """On-disk cache directory name: the digest alone.
 
         The digest already encodes every key component — python,
-        platform, core, plugins, spec hash, schema version, and the
-        random ``dirty_suffix`` for dirty local plugins — so it is a
-        complete, collision-safe identity. A fixed-width hash name never
-        overflows the filesystem name limit, however many plugins a
-        pipeline declares. Human-readable detail lives in the
+        platform, core, plugins, spec hash, and schema version — so it
+        is a complete, collision-safe identity. A fixed-width hash name
+        never overflows the filesystem name limit, however many plugins
+        a pipeline declares. Human-readable detail lives in the
         ``env_desc.md`` file the composer writes inside the env.
         """
         return self.digest
@@ -146,14 +167,17 @@ class CacheKey:
         plugin's manifest name *and* its ``package_name`` (the name uv
         actually installs) — the latter is intentionally absent from
         ``key.json`` (see :func:`_plugin_to_dict`), so this is its only
-        human-facing record.
+        human-facing record. Like ``key.json``, the contents describe
+        the env at *build time*; later runs reusing the env may have a
+        different HEAD or dirty state.
         """
         lines = [
             "# Cuvis.AI composed environment",
             "",
             "This directory is a child venv composed by the cuvis-ai-core "
             "orchestrator. Its name is a content hash; this file records what "
-            "the env was built for. The machine-readable form is `key.json`.",
+            "the env was built for (build-time state — reusing runs may "
+            "differ). The machine-readable form is `key.json`.",
             "",
             f"- Digest: `{self.digest}`",
             f"- Python: {self.python_version}",
@@ -163,11 +187,6 @@ class CacheKey:
             f"- Schema version: {self.schema_version}",
             f"- Spec hash: `{self.spec_hash}`",
         ]
-        if self.dirty_suffix is not None:
-            lines.append(
-                "- Dev mode: dirty local plugin present "
-                f"(unique per run, suffix `{self.dirty_suffix}`)"
-            )
         lines += ["", "## Plugins", ""]
         if not self.plugins:
             lines.append("_None._")
@@ -185,7 +204,12 @@ class CacheKey:
         return "\n".join(lines) + "\n"
 
     def serialise(self) -> dict:
-        """Full structured key for ``key.json`` forensics."""
+        """Full structured key for ``key.json`` forensics.
+
+        Includes provenance fields (``git_head``, ``dirty``) that the
+        digest deliberately excludes. Written once at build time — an
+        env reused by later runs keeps the first builder's record.
+        """
         return {
             "python_version": self.python_version,
             "platform_tag": self.platform_tag,
@@ -193,17 +217,41 @@ class CacheKey:
             "plugins": [_plugin_to_dict(p) for p in self.plugins],
             "spec_hash": self.spec_hash,
             "schema_version": self.schema_version,
-            "dirty_suffix": self.dirty_suffix,
+        }
+
+    def _digest_payload(self) -> dict:
+        """The digest's input: dependency identity only, no provenance.
+
+        Mirrors :meth:`serialise` but reduces each local plugin to the
+        fields that actually shape the venv (path + pyproject hash).
+        Keeping ``git_head``/``dirty`` out of this payload is what lets
+        a developer's working-tree edits and commits reuse one env.
+        """
+        return {
+            "python_version": self.python_version,
+            "platform_tag": self.platform_tag,
+            "core_source": asdict(self.core_source),
+            "plugins": [_plugin_to_dict(p, forensics=False) for p in self.plugins],
+            "spec_hash": self.spec_hash,
+            "schema_version": self.schema_version,
         }
 
     def _canonical_json(self) -> str:
-        return json.dumps(self.serialise(), sort_keys=True, separators=(",", ":"))
+        """Deterministic JSON encoding of the digest payload."""
+        return json.dumps(self._digest_payload(), sort_keys=True, separators=(",", ":"))
 
 
-def _plugin_to_dict(p: ResolvedPlugin) -> dict:
-    # package_name is intentionally absent from the digest: it already
-    # lands in the runtime pyproject.toml bytes that spec_hash covers, so
-    # listing it here would double-count and needlessly split the cache.
+def _plugin_to_dict(p: ResolvedPlugin, *, forensics: bool = True) -> dict:
+    """Encode one resolved plugin for ``key.json`` (or the digest payload).
+
+    ``forensics=False`` drops ``git_head``/``dirty`` from local plugins —
+    those record working-tree state that editable installs never bake
+    into the venv, so the digest must not split on them.
+
+    package_name is intentionally absent from both forms: it already
+    lands in the runtime pyproject.toml bytes that spec_hash covers, so
+    listing it here would double-count and needlessly split the cache.
+    """
     if isinstance(p, ResolvedGitPlugin):
         return {
             "kind": _KIND_GIT,
@@ -212,14 +260,16 @@ def _plugin_to_dict(p: ResolvedPlugin) -> dict:
             "sha": p.sha,
             "tag": p.tag,
         }
-    return {
+    entry = {
         "kind": _KIND_LOCAL,
         "name": p.name,
         "path": str(p.path),
         "pyproject_sha256": p.pyproject_sha256,
-        "git_head": p.git_head,
-        "dirty": p.dirty,
     }
+    if forensics:
+        entry["git_head"] = p.git_head
+        entry["dirty"] = p.dirty
+    return entry
 
 
 def _short_core_identity(core_source: CoreSource) -> str:
@@ -271,14 +321,12 @@ def compute_cache_key(
     the same key. ``spec_hash`` is the sha256 of the canonical
     ``pyproject.toml`` content the composer will write.
 
-    If any local plugin is dirty, attaches a random ``dirty_suffix``
-    so the cache directory is unique per call (dev-mode behaviour).
+    Dirty or clean, a local plugin with the same ``pyproject.toml``
+    hashes to the same key: local sources are installed editable, so
+    working-tree state never changes the venv content.
     """
     py = python_version or current_python_version()
     plat = platform_tag or current_platform_tag()
-    dirty_suffix: str | None = None
-    if any(isinstance(p, ResolvedLocalPlugin) and p.dirty for p in plugins):
-        dirty_suffix = secrets.token_hex(3)
     return CacheKey(
         python_version=py,
         platform_tag=plat,
@@ -286,13 +334,25 @@ def compute_cache_key(
         plugins=tuple(plugins),
         spec_hash=spec_hash,
         schema_version=schema_version,
-        dirty_suffix=dirty_suffix,
     )
 
 
 def spec_hash_of(pyproject_toml_content: str) -> str:
     """Canonical content hash for the runtime ``pyproject.toml``."""
     return hashlib.sha256(pyproject_toml_content.encode("utf-8")).hexdigest()
+
+
+def pyproject_sha256_of(project_dir: Path) -> str:
+    """sha256 of ``<project_dir>/pyproject.toml`` (hash of b"" when absent).
+
+    Shared by local-plugin provenance and the local-core source: for an
+    editable install, this file is the only part of the source tree
+    whose content shapes the composed venv.
+    """
+    pyproject = project_dir / "pyproject.toml"
+    if pyproject.is_file():
+        return hashlib.sha256(pyproject.read_bytes()).hexdigest()
+    return hashlib.sha256(b"").hexdigest()
 
 
 def _git(args: list[str], cwd: Path) -> str | None:
@@ -321,13 +381,10 @@ def local_plugin_provenance(plugin_dir: Path) -> tuple[str, str | None, bool]:
 
     Falls back gracefully when there is no ``pyproject.toml`` (empty
     string hash) or no git repo (None head, True dirty — outside a
-    repo we cannot prove the source is stable).
+    repo we cannot prove the source is stable). The head/dirty pair is
+    recorded as build-time forensics only; it never enters the digest.
     """
-    pyproject = plugin_dir / "pyproject.toml"
-    if pyproject.is_file():
-        pyproject_sha = hashlib.sha256(pyproject.read_bytes()).hexdigest()
-    else:
-        pyproject_sha = hashlib.sha256(b"").hexdigest()
+    pyproject_sha = pyproject_sha256_of(plugin_dir)
 
     head = _git(["rev-parse", "HEAD"], plugin_dir)
     if head is None:

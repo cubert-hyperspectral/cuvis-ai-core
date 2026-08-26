@@ -14,6 +14,7 @@ from typing import Any
 import torch
 from loguru import logger
 
+from cuvis_ai_core.orchestrator import leases
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import (
     DataConfig,
@@ -68,6 +69,10 @@ class SessionState:
     # (HOME / TEMP / output redirect). Removed on close so child logs and
     # HF/torch caches don't accumulate under the system temp dir.
     runtime_base_dir: Path | None = None
+    # Cache root holding this session's venv lease (the in-use marker that
+    # protects the composed env from eviction). Set by the orchestrator
+    # bridge when it writes the lease; close_session removes the lease.
+    lease_cache_root: Path | None = None
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
 
@@ -305,6 +310,12 @@ class SessionManager:
                 f"Child runtime for session {session_id} exited on its own "
                 f"with code {format_exit_code(exit_code)}{location}."
             )
+
+        # The venv is no longer in use by this session: release its lease so
+        # cache eviction may reclaim the entry.
+        if state.lease_cache_root is not None:
+            leases.remove_lease(state.lease_cache_root, session_id)
+            state.lease_cache_root = None
 
         # Drop the child's scratch root now that it has exited (its file
         # handles are released). Best-effort: a failure here must not block

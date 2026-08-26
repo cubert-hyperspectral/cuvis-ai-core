@@ -9,15 +9,23 @@ The composer mocks ``uv_lock`` / ``uv_sync`` wholesale, so the real
 
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError, uv_lock, uv_sync
+from cuvis_ai_core.orchestrator.uv_runner import (
+    UvCacheBusyError,
+    UvRunnerError,
+    uv_cache_prune,
+    uv_lock,
+    uv_sync,
+)
 
 
 @pytest.fixture()
@@ -132,3 +140,162 @@ def test_uv_lock_translates_timeout(pinned_uv):
         with pytest.raises(UvRunnerError) as excinfo:
             uv_lock(Path("proj"), timeout=5)
     assert "timed out after 5s" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# uv cache prune — busy-lock detection on top of the plain timeout
+# ---------------------------------------------------------------------------
+
+
+class _FakePrune:
+    """Stand-in for ``subprocess.Popen`` running ``uv cache prune``.
+
+    ``stderr`` is what uv would print; ``blocked_waits`` is how many
+    ``wait()`` calls time out before the process exits with ``returncode``.
+    """
+
+    def __init__(self, stderr: str = "", blocked_waits: int = 0, returncode: int = 0):
+        self.stderr = io.StringIO(stderr)
+        self._blocked_waits = blocked_waits
+        self._exit_code = returncode
+        self.returncode: int | None = None
+        self.killed = False
+        self.wait_timeouts: list[float | None] = []
+
+    def wait(self, timeout=None):
+        self.wait_timeouts.append(timeout)
+        if self.killed:
+            self.returncode = -9
+            return self.returncode
+        if self._blocked_waits > 0:
+            self._blocked_waits -= 1
+            # Give the stderr pump thread a beat, as a real wait() would;
+            # the busy check right after this reads what the pump collected.
+            time.sleep(0.05)
+            raise subprocess.TimeoutExpired(
+                cmd=["uv", "cache", "prune"], timeout=timeout
+            )
+        self.returncode = self._exit_code
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+
+
+def _patched_popen(fake: _FakePrune):
+    return patch(
+        "cuvis_ai_core.orchestrator.uv_runner.subprocess.Popen", return_value=fake
+    )
+
+
+def test_prune_completes_quietly(pinned_uv):
+    fake = _FakePrune(stderr="Removed 3 files\n")
+    with _patched_popen(fake):
+        uv_cache_prune(busy_grace=0.01)
+    assert not fake.killed
+
+
+def test_prune_gives_up_when_cache_lock_is_held(pinned_uv):
+    """uv's 'waiting for other uv processes' line ends the prune after the grace."""
+    fake = _FakePrune(
+        stderr=(
+            "Cache is currently in-use, waiting for other uv processes to finish "
+            "(use `--force` to override)\n"
+        ),
+        blocked_waits=99,
+    )
+    with _patched_popen(fake):
+        with pytest.raises(UvCacheBusyError) as excinfo:
+            uv_cache_prune(timeout=600, busy_grace=0.01)
+    assert fake.killed
+    assert "in use by another uv process" in str(excinfo.value)
+
+
+def test_prune_slow_but_working_is_not_treated_as_busy(pinned_uv):
+    """No busy line on stderr: a long prune simply keeps running to completion."""
+    fake = _FakePrune(stderr="Pruning...\n", blocked_waits=1)
+    with _patched_popen(fake):
+        uv_cache_prune(timeout=600, busy_grace=0.01)
+    assert not fake.killed
+    assert fake.returncode == 0
+
+
+def test_prune_translates_timeout(pinned_uv):
+    fake = _FakePrune(stderr="Pruning...\n", blocked_waits=99)
+    with _patched_popen(fake):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_cache_prune(timeout=5, busy_grace=0.01)
+    assert not isinstance(excinfo.value, UvCacheBusyError)
+    assert "timed out after 5s" in str(excinfo.value)
+    assert fake.killed
+
+
+def test_prune_translates_nonzero_exit_with_stderr(pinned_uv):
+    fake = _FakePrune(stderr="error: cache corrupt\n", returncode=2)
+    with _patched_popen(fake):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_cache_prune(busy_grace=0.01)
+    msg = str(excinfo.value)
+    assert "exit 2" in msg
+    assert "cache corrupt" in msg
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        FileNotFoundError(2, "No such file or directory"),
+        PermissionError(13, "Permission denied"),
+        OSError(8, "Exec format error"),
+    ],
+    ids=["vanished", "not_executable", "bad_binary"],
+)
+def test_prune_translates_popen_os_error_naming_the_binary(pinned_uv, monkeypatch, err):
+    # Popen itself fails (binary vanished / bad CUVIS_UV target after resolution):
+    # the whole OSError family, not just FileNotFoundError, must be translated.
+    monkeypatch.setenv("PATH", "/nowhere")
+    with patch(
+        "cuvis_ai_core.orchestrator.uv_runner.subprocess.Popen", side_effect=err
+    ):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_cache_prune(busy_grace=0.01)
+    msg = str(excinfo.value)
+    assert not isinstance(excinfo.value, UvCacheBusyError)
+    assert f"'{pinned_uv}' was not found or is not executable" in msg
+    assert f"Command: {pinned_uv} cache prune" in msg
+    assert "PATH=/nowhere" in msg
+    assert excinfo.value.__cause__ is err
+
+
+def test_prune_that_acquired_the_lock_mid_grace_is_not_killed(pinned_uv):
+    """The busy line alone is history: once 'Pruning cache at' follows, let it run."""
+    fake = _FakePrune(
+        stderr=(
+            "Cache is currently in-use, waiting for other uv processes to finish "
+            "(use `--force` to override)\n"
+            "Pruning cache at: C:\\Users\\x\\uv\\cache\n"
+        ),
+        blocked_waits=1,
+    )
+    with _patched_popen(fake):
+        uv_cache_prune(timeout=600, busy_grace=0.01)
+    assert not fake.killed
+    assert fake.returncode == 0
+
+
+def test_prune_timeout_smaller_than_grace_is_honored(pinned_uv):
+    """timeout is the overall budget even when it undercuts the busy grace."""
+    fake = _FakePrune(stderr="Pruning...\n", blocked_waits=99)
+    with _patched_popen(fake):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_cache_prune(timeout=2, busy_grace=600.0)
+    assert "timed out after 2s" in str(excinfo.value)
+    assert fake.wait_timeouts[0] == 2  # first wait clamped to the budget
+
+
+def test_prune_decodes_stderr_as_utf8(pinned_uv):
+    """uv writes UTF-8; the locale codec (cp1252 on Windows) must not be used."""
+    fake = _FakePrune(stderr="ok\n")
+    with _patched_popen(fake) as popen:
+        uv_cache_prune(busy_grace=0.01)
+    assert popen.call_args.kwargs["encoding"] == "utf-8"
+    assert popen.call_args.kwargs["errors"] == "replace"

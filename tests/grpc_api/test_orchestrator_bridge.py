@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import importlib.metadata
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,6 +20,7 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
+from cuvis_ai_core.orchestrator import leases as leases_mod
 from cuvis_ai_core.grpc.orchestrator_bridge import (
     _InMemoryChildHandle,
     _InMemoryContext,
@@ -222,6 +224,163 @@ def test_ensure_child_records_runtime_base_dir_and_close_removes_it():
 
     sm.close_session(sid)
     assert not base.exists()
+
+
+# ---------------------------------------------------------------------------
+# Lease lifecycle around ensure_child_for_session
+# ---------------------------------------------------------------------------
+
+
+class _LeaseAwareSpawner(_InMemorySpawner):
+    """In-memory spawner whose handles expose a live ``.process.pid``.
+
+    ``finalize_lease`` reads ``handle.process.pid`` and refuses a dead
+    child, so the handle borrows this test process's own pid. The
+    spawner also records the lease phase visible at spawn time — the
+    intent lease must already protect the entry before the child exists.
+    """
+
+    def __init__(self, lease_root: Path) -> None:
+        self.lease_root = lease_root
+        self.phases_at_spawn: list[str] = []
+        self.handles: list[_InMemoryChildHandle] = []
+
+    def spawn(self, venv_path, *, cwd, declared_paths, request_gpu=False):
+        for _path, lease in leases_mod.read_leases(self.lease_root):
+            if lease is not None:
+                self.phases_at_spawn.append(lease.phase)
+        handle = super().spawn(
+            venv_path,
+            cwd=cwd,
+            declared_paths=declared_paths,
+            request_gpu=request_gpu,
+        )
+        handle.process = SimpleNamespace(pid=os.getpid())
+        self.handles.append(handle)
+        return handle
+
+
+def _lease_env(tmp_path: Path) -> Path:
+    """A marker-bearing fake cache root; the composer returns its entry.
+
+    The bridge gates the whole lease lifecycle on the root marker so the
+    plain in-memory composer (dummy path, no cache) skips leases; these
+    tests opt in by handing it a composer-shaped root.
+    """
+    root = tmp_path / "cache"
+    venv = root / "digest0000" / ".venv"
+    venv.mkdir(parents=True)
+    leases_mod.ensure_root_marker(root)
+    orchestrator_bridge.set_composer(
+        lambda plugins, *, core_source, active_data_module=None: venv
+    )
+    return root
+
+
+def test_ensure_child_writes_intent_then_final_lease(tmp_path):
+    """Intent lease before the spawn, final child-keyed lease after init."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+    spawner = _LeaseAwareSpawner(root)
+    orchestrator_bridge.set_spawner(spawner)
+
+    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+
+    assert spawner.phases_at_spawn == ["intent"]
+    ((_path, lease),) = leases_mod.read_leases(root)
+    assert lease is not None
+    assert lease.phase == "final"
+    assert lease.child_pid == os.getpid()
+    assert lease.entry_digest == "digest0000"
+    session = sm.get_session(sid)
+    assert session.lease_cache_root == root
+    assert lease.session_root == str(session.runtime_base_dir)
+    sm.close_session(sid)
+
+
+def test_close_session_removes_lease(tmp_path):
+    """Session teardown drops the in-use record along with the scratch."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+    orchestrator_bridge.set_spawner(_LeaseAwareSpawner(root))
+
+    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert leases_mod.read_leases(root)
+
+    sm.close_session(sid)
+    assert leases_mod.read_leases(root) == []
+
+
+def test_spawn_failure_removes_intent_lease(tmp_path):
+    """A failed spawn must not leave an intent lease pinning the entry."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+
+    class _BoomSpawner(_InMemorySpawner):
+        def spawn(self, *args, **kwargs):
+            raise RuntimeError("spawn exploded")
+
+    orchestrator_bridge.set_spawner(_BoomSpawner())
+    with pytest.raises(RuntimeError, match="spawn exploded"):
+        orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert leases_mod.read_leases(root) == []
+    assert sm.get_session(sid).lease_cache_root is None
+
+
+def test_init_rejection_terminates_child_and_removes_lease(tmp_path, monkeypatch):
+    """A rejected InitializeSession stops the child and drops its lease."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+    spawner = _LeaseAwareSpawner(root)
+    orchestrator_bridge.set_spawner(spawner)
+
+    def _reject(handle, session_id, session, resolved, declared):
+        raise RuntimeError("child rejected InitializeSession")
+
+    monkeypatch.setattr(orchestrator_bridge, "_initialize_child_session", _reject)
+    with pytest.raises(RuntimeError, match="rejected"):
+        orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert leases_mod.read_leases(root) == []
+    assert sm.get_session(sid).child_handle is None
+    # The bridge terminated the spawned child before dropping the lease.
+    assert spawner.handles[-1].returncode is not None
+
+
+def test_lazy_drop_of_dead_child_removes_stale_lease(tmp_path, monkeypatch):
+    """Re-spawning over a dead child drops its lease before the new one."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+    spawner = _LeaseAwareSpawner(root)
+    orchestrator_bridge.set_spawner(spawner)
+
+    first = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    first.terminate()
+
+    removed: list[str] = []
+    real_remove = leases_mod.remove_lease
+
+    def _spying_remove(cache_root, session_id):
+        removed.append(session_id)
+        real_remove(cache_root, session_id)
+
+    monkeypatch.setattr(orchestrator_bridge.leases, "remove_lease", _spying_remove)
+    second = orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert second is not first
+    assert removed == [sid]
+    ((_path, lease),) = leases_mod.read_leases(root)
+    assert lease is not None
+    assert lease.phase == "final"
+    sm.close_session(sid)
 
 
 # ---------------------------------------------------------------------------
