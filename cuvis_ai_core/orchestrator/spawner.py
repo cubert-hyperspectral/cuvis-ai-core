@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -67,6 +68,8 @@ _HEALTHCHECK_RPC_TIMEOUT_SECONDS = 1.0
 _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
 _TERMINATE_KILL_WAIT_SECONDS = 5.0
 _GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
+_CRASH_STDERR_TAIL_CHARS = 2048
+_DEAD_CHILD_REAP_SECONDS = 1.0
 
 # CUDA device-selection vars dropped from the child env when GPU is not
 # requested. LD_LIBRARY_PATH is deliberately NOT in this set: it is the
@@ -152,18 +155,69 @@ _DENY_PREFIXES = (
 )
 
 
-def _read_stderr_log(path: Path | None) -> str:
-    """Read the child's captured stderr file for post-mortem display.
+def format_exit_code(code: int) -> str:
+    """Render a child exit code with its platform-specific reading.
 
-    Returns ``""`` if the file is missing — callers fall back to a
-    generic crash message in that case.
+    Windows fatal exceptions surface as large unsigned ints — append the
+    NTSTATUS hex (``3221226505 (0xC0000409)``); POSIX signal deaths are
+    negative — append the signal name (``-9 (SIGKILL)``).
+    """
+    if code < 0:
+        with contextlib.suppress(ValueError):
+            return f"{code} ({signal.Signals(-code).name})"
+        return str(code)
+    if code > 255:
+        return f"{code} (0x{code & 0xFFFFFFFF:08X})"
+    return str(code)
+
+
+def _read_stderr_log(path: Path | None) -> str:
+    """Read the tail of the child's captured stderr file for post-mortem display.
+
+    Only the last ``_CRASH_STDERR_TAIL_CHARS * 4`` bytes are read (4 is
+    the widest UTF-8 codepoint), so retries against an already-dead child
+    never re-read a huge log end to end. The seek can land mid-codepoint,
+    hence the byte-level read decoded with ``errors="replace"``. Returns
+    ``""`` if the file is missing — callers fall back to a generic crash
+    message in that case.
     """
     if path is None or not path.exists():
         return ""
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - _CRASH_STDERR_TAIL_CHARS * 4))
+            return fh.read().decode("utf-8", errors="replace")
     except OSError as exc:
         return f"<unreadable stderr log {path}: {exc}>"
+
+
+def dead_child_details(
+    handle, *, wait_s: float = _DEAD_CHILD_REAP_SECONDS
+) -> str | None:
+    """Post-mortem line for a child that has exited, or ``None`` while it lives.
+
+    Called after a forwarded RPC failed at the transport level. At the
+    instant of death the child's endpoint can already refuse connections
+    while ``poll()`` still reports ``None``, so the process is given
+    ``wait_s`` to be reaped before its exit code is read. ``None`` means
+    the child is alive and the caller should propagate the RPC status
+    verbatim. ``getattr`` defaults keep test doubles and the in-memory
+    handle (no ``process`` / ``stderr_log``) on the ``None`` path.
+    """
+    process = getattr(handle, "process", None)
+    if process is not None and process.poll() is None:
+        with contextlib.suppress(Exception):
+            process.wait(timeout=wait_s)
+    code = getattr(handle, "returncode", None)
+    if code is None:
+        return None
+    details = f"child runtime exited unexpectedly (exit code {format_exit_code(code)})"
+    tail = _read_stderr_log(getattr(handle, "stderr_log", None))
+    tail = tail[-_CRASH_STDERR_TAIL_CHARS:].strip()
+    if tail:
+        return f"{details}: {tail}"
+    return f"{details} (no stderr was captured)"
 
 
 def _is_denied(name: str) -> bool:
@@ -200,6 +254,7 @@ class ChildHandle:
     endpoint: str
     process: subprocess.Popen
     stderr_log: Path | None = None
+    stdout_log: Path | None = None
     _channel: grpc.Channel | None = field(default=None, init=False, repr=False)
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
@@ -224,6 +279,11 @@ class ChildHandle:
         Returns the process exit code (``None`` if already dead).
         """
         if self.process.poll() is not None:
+            logger.warning(
+                f"Child runtime at {self.endpoint} was already dead when "
+                f"terminate() was called "
+                f"(exit code {format_exit_code(self.process.returncode)})."
+            )
             self._close_channel()
             return self.process.returncode
 
@@ -234,7 +294,7 @@ class ChildHandle:
                 timeout=min(grace_s, _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS),
             )
         except grpc.RpcError as exc:
-            logger.debug(f"StopRun RPC failed (continuing with terminate): {exc}")
+            logger.info(f"StopRun RPC failed (continuing with terminate): {exc}")
 
         try:
             return self.process.wait(timeout=grace_s)
@@ -368,7 +428,10 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
                     endpoint_file, process, stderr_log=stderr_path
                 )
                 handle = ChildHandle(
-                    endpoint=endpoint, process=process, stderr_log=stderr_path
+                    endpoint=endpoint,
+                    process=process,
+                    stderr_log=stderr_path,
+                    stdout_log=stdout_path,
                 )
                 self._wait_for_health(handle)
             except SpawnError:

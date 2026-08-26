@@ -266,17 +266,45 @@ class SessionManager:
         child = state.child_handle
         state.child_handle = None
         state.resolved_plugins = None
+        exit_code: int | None = None
+        died_on_its_own = False
         if child is not None:
+            # Poll BEFORE terminate(): parent-initiated termination exits
+            # nonzero too (TerminateProcess reports 1), so only a child that
+            # was already gone counts as a crash worth preserving.
+            died_on_its_own = getattr(child, "returncode", None) is not None
             try:
-                child.terminate(grace_s=5.0)
+                exit_code = child.terminate(grace_s=5.0)
             except Exception as exc:
                 logger.warning(
                     f"Child runtime termination raised during close_session: {exc}"
                 )
                 try:
-                    child.kill()
+                    exit_code = child.kill()
                 except Exception as kill_exc:
                     logger.warning(f"Child runtime kill also raised: {kill_exc}")
+
+        if died_on_its_own and isinstance(exit_code, int) and exit_code != 0:
+            # The child's logs live under runtime_base_dir, which is deleted
+            # just below — copy them aside first so the crash stays
+            # diagnosable. Lazy imports: crash_logs is parent-side only.
+            from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
+            from cuvis_ai_core.orchestrator.spawner import format_exit_code
+
+            crash_dir = preserve_child_logs(
+                (
+                    getattr(child, "stdout_log", None),
+                    getattr(child, "stderr_log", None),
+                ),
+                session_id=session_id,
+                exit_code=exit_code,
+                endpoint=getattr(child, "endpoint", None),
+            )
+            location = f"; logs preserved at {crash_dir}" if crash_dir else ""
+            logger.warning(
+                f"Child runtime for session {session_id} exited on its own "
+                f"with code {format_exit_code(exit_code)}{location}."
+            )
 
         # Drop the child's scratch root now that it has exited (its file
         # handles are released). Best-effort: a failure here must not block

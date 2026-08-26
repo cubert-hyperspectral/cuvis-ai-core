@@ -46,6 +46,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     ChildRuntimeSpawner,
     DeclaredPaths,
     LocalChildRuntimeSpawner,
+    dead_child_details,
 )
 from cuvis_ai_schemas.plugin import PluginManifest, parse_plugin_manifest
 from cuvis_ai_core.utils.plugin_resolver import resolve_against_catalog
@@ -316,7 +317,7 @@ def forward_load_pipeline(
         context.set_details(str(exc))
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
     return _call_child_with_error_propagation(
-        child.stub(),
+        child,
         "LoadPipeline",
         request,
         context,
@@ -342,7 +343,7 @@ def forward_inference(
         context.set_details(_NO_CHILD_DETAIL)
         return cuvis_ai_pb2.InferenceResponse()
     return _call_child_with_error_propagation(
-        child.stub(),
+        child,
         "Inference",
         request,
         context,
@@ -372,7 +373,7 @@ def forward_train(
         try:
             yield from child.stub().Train(request)
         except grpc.RpcError as exc:
-            _propagate_rpc_error(exc, context)
+            _propagate_child_failure(child, exc, context)
 
     return _proxy()
 
@@ -476,7 +477,7 @@ def forward_restore_train_run(
 
     child = parent_session.child_handle
     response = _call_child_with_error_propagation(
-        child.stub(),
+        child,
         "RestoreTrainRun",
         request,
         context,
@@ -518,7 +519,7 @@ def _forward_pipeline_op(
         context.set_details(_NO_CHILD_DETAIL)
         return empty_response_factory()
     return _call_child_with_error_propagation(
-        child.stub(), stub_method, request, context, empty_response_factory
+        child, stub_method, request, context, empty_response_factory
     )
 
 
@@ -530,8 +531,33 @@ def _propagate_rpc_error(exc: grpc.RpcError, context: grpc.ServicerContext) -> N
     context.set_details(details or "")
 
 
+def _propagate_child_failure(
+    child, exc: grpc.RpcError, context: grpc.ServicerContext
+) -> None:
+    """Turn a transport failure into a child-crash status when the child is gone.
+
+    A dead child fails every forwarded RPC with a bare transport error
+    (UNAVAILABLE "connection refused") that tells the caller nothing. When
+    :func:`dead_child_details` confirms the child process exited, the
+    parent answers ``INTERNAL`` naming the exit code and the tail of the
+    child's stderr log instead. The probe runs only for ``UNAVAILABLE`` —
+    any other code came from a live child that answered the RPC, and
+    probing it would stall every business error on the probe's reap wait —
+    so a live child's own status is copied through unchanged.
+    """
+    details = (
+        dead_child_details(child) if exc.code() == grpc.StatusCode.UNAVAILABLE else None
+    )
+    if details is None:
+        _propagate_rpc_error(exc, context)
+        return
+    logger.warning(f"Forwarded RPC failed: {details}")
+    context.set_code(grpc.StatusCode.INTERNAL)
+    context.set_details(details)
+
+
 def _call_child_with_error_propagation(
-    stub,
+    child,
     stub_method: str,
     request,
     context: grpc.ServicerContext,
@@ -539,9 +565,9 @@ def _call_child_with_error_propagation(
 ):
     """Invoke a child stub method and surface its status code on the parent's context."""
     try:
-        return getattr(stub, stub_method)(request)
+        return getattr(child.stub(), stub_method)(request)
     except grpc.RpcError as exc:
-        _propagate_rpc_error(exc, context)
+        _propagate_child_failure(child, exc, context)
         return empty_response_factory()
 
 

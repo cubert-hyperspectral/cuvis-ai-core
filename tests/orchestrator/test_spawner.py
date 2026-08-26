@@ -19,6 +19,7 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.orchestrator.spawner import (
+    _CRASH_STDERR_TAIL_CHARS,
     ChildHandle,
     DeclaredPaths,
     LocalChildRuntimeSpawner,
@@ -26,6 +27,8 @@ from cuvis_ai_core.orchestrator.spawner import (
     _prepend_path,
     _read_stderr_log,
     _timeout_from_env,
+    dead_child_details,
+    format_exit_code,
 )
 
 
@@ -260,6 +263,30 @@ def test_timeout_from_env_non_positive_falls_back(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# format_exit_code
+# ---------------------------------------------------------------------------
+
+
+def test_format_exit_code_plain():
+    assert format_exit_code(7) == "7"
+    assert format_exit_code(0) == "0"
+
+
+def test_format_exit_code_renders_windows_status_as_hex():
+    assert format_exit_code(3221226505) == "3221226505 (0xC0000409)"
+
+
+def test_format_exit_code_names_posix_signal():
+    # SIGTERM exists in the signal module on every supported platform.
+    assert format_exit_code(-15) == "-15 (SIGTERM)"
+
+
+def test_format_exit_code_unknown_negative_stays_numeric():
+    # No platform defines signal number 200.
+    assert format_exit_code(-200) == "-200"
+
+
+# ---------------------------------------------------------------------------
 # _read_stderr_log
 # ---------------------------------------------------------------------------
 
@@ -275,6 +302,19 @@ def test_read_stderr_log_reads_existing_file(tmp_path: Path):
     assert _read_stderr_log(log) == "traceback here"
 
 
+def test_read_stderr_log_reads_only_the_tail(tmp_path: Path):
+    """A log larger than the tail window yields only its tail, never the head."""
+    log = tmp_path / "stderr.log"
+    window = _CRASH_STDERR_TAIL_CHARS * 4
+    log.write_text(
+        "HEAD-MARKER " + "x" * (window * 2) + " TAIL-MARKER", encoding="utf-8"
+    )
+    out = _read_stderr_log(log)
+    assert out.endswith("TAIL-MARKER")
+    assert "HEAD-MARKER" not in out
+    assert len(out.encode("utf-8")) <= window
+
+
 def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
     log = tmp_path / "stderr.log"
     log.write_text("x", encoding="utf-8")
@@ -282,7 +322,7 @@ def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
     def _boom(*args, **kwargs):
         raise OSError("disk gone")
 
-    monkeypatch.setattr(Path, "read_text", _boom)
+    monkeypatch.setattr(Path, "open", _boom)
     out = _read_stderr_log(log)
     assert out.startswith("<unreadable stderr log")
     assert "disk gone" in out
@@ -322,6 +362,76 @@ def test_terminate_returns_returncode_when_already_dead():
     assert handle.terminate() == 4
     proc.terminate.assert_not_called()
     proc.kill.assert_not_called()
+
+
+def test_terminate_logs_already_dead_child():
+    from loguru import logger as loguru_logger
+
+    records: list[str] = []
+    sink_id = loguru_logger.add(lambda m: records.append(str(m)), level="WARNING")
+    try:
+        proc = _fake_proc(poll=4, returncode=4)
+        handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+        assert handle.terminate() == 4
+    finally:
+        loguru_logger.remove(sink_id)
+    assert any("already dead" in record for record in records)
+
+
+# ---------------------------------------------------------------------------
+# dead_child_details: the post-mortem check the bridge runs after a
+# forwarded RPC fails at the transport level.
+# ---------------------------------------------------------------------------
+
+
+def test_dead_child_details_returns_none_while_alive():
+    proc = _fake_proc(poll=None, returncode=None)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    assert dead_child_details(handle, wait_s=0.01) is None
+    proc.wait.assert_called_once()
+
+
+def test_dead_child_details_reports_exit_code_and_stderr_tail(tmp_path):
+    log = tmp_path / "child.stderr.log"
+    log.write_text("...\nRuntimeError: CUDA out of memory\n", encoding="utf-8")
+    proc = _fake_proc(poll=7, returncode=7)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=log)
+
+    details = dead_child_details(handle)
+
+    assert details is not None
+    assert "exit code 7" in details
+    assert "CUDA out of memory" in details
+    proc.wait.assert_not_called()
+
+
+def test_dead_child_details_waits_for_late_reap():
+    # Field-observed race: the endpoint already refuses connections while
+    # poll() still reports None; the short wait harvests the exit code.
+    proc = _fake_proc(poll=[None, 3], returncode=3)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+
+    details = dead_child_details(handle, wait_s=0.01)
+
+    assert details is not None
+    assert "exit code 3" in details
+    proc.wait.assert_called_once()
+
+
+def test_dead_child_details_missing_stderr_log():
+    proc = _fake_proc(poll=9, returncode=9)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=None)
+    details = dead_child_details(handle)
+    assert details is not None
+    assert "no stderr was captured" in details
+
+
+def test_dead_child_details_tolerates_handle_without_process():
+    from types import SimpleNamespace
+
+    # Mirrors _InMemoryChildHandle: no process, no stderr_log attributes.
+    assert dead_child_details(SimpleNamespace(returncode=None)) is None
+    assert dead_child_details(SimpleNamespace()) is None
 
 
 def test_terminate_graceful_stop_then_clean_exit(monkeypatch):
