@@ -387,6 +387,42 @@ def test_restore_trainrun_info_mode_builds_and_returns(
 _DS = object()  # sentinel: a non-None dataset is available
 
 
+def _patch_restore_components(
+    monkeypatch, fake_pipeline, *, val_ds=None, test_ds=None
+) -> None:
+    """Patch the pipeline/datamodule builders and both trainers with doubles."""
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: fake_pipeline,
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=val_ds, test_ds=test_ds),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+
+
+def _auto_weights_path(tmp_path: Path) -> Path:
+    """The .pt path evaluation auto-locates for FakeRestorePipeline runs.
+
+    ``_write_trainrun`` pins ``output_dir`` to ``tmp_path/out`` and the fake
+    pipeline is named ``test_pipeline``, so this mirrors the
+    ``<output_dir>/trained_models/<pipeline>_restored.pt`` convention.
+    """
+    return tmp_path / "out" / "trained_models" / "test_pipeline_restored.pt"
+
+
+def _write_fake_weights(tmp_path: Path) -> Path:
+    weights = _auto_weights_path(tmp_path)
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.write_bytes(b"fake_weights")
+    return weights
+
+
 @pytest.mark.parametrize(
     "mode,use_gradient,requires_fit,val_ds,test_ds",
     [
@@ -396,14 +432,14 @@ _DS = object()  # sentinel: a non-None dataset is available
         ("train", False, False, None, None),
         # gradient training with val+test; stat.fit() also runs (requires_fit=True)
         ("train", True, True, _DS, _DS),
-        # validate mode - stat only
-        ("validate", False, True, None, None),
-        # validate mode - gradient
-        ("validate", True, False, None, None),
+        # validate mode - stat only (no weights on disk: stat init re-derives)
+        ("validate", False, True, _DS, None),
+        # validate mode - gradient (weights auto-located under output_dir)
+        ("validate", True, False, _DS, None),
         # test mode - stat only
-        ("test", False, True, None, None),
+        ("test", False, True, None, _DS),
         # test mode - gradient
-        ("test", True, False, None, None),
+        ("test", True, False, None, _DS),
     ],
 )
 def test_restore_trainrun_execution_modes_with_mocked_trainers(
@@ -423,21 +459,14 @@ def test_restore_trainrun_execution_modes_with_mocked_trainers(
     """
     exp_dict = mock_experiment_dict if use_gradient else statistical_experiment_dict
     path = _write_trainrun(tmp_path, exp_dict, mock_pipeline_dict)
+    if use_gradient and mode in ("validate", "test"):
+        # Gradient evaluation refuses to run without trained weights.
+        _write_fake_weights(tmp_path)
 
     fake_pipeline = FakeRestorePipeline(node_fits=(requires_fit,))
-    monkeypatch.setattr(
-        restore_mod,
-        "_build_pipeline_from_config",
-        lambda *a, **k: fake_pipeline,
+    _patch_restore_components(
+        monkeypatch, fake_pipeline, val_ds=val_ds, test_ds=test_ds
     )
-    monkeypatch.setattr(
-        restore_mod,
-        "_create_datamodule_from_config",
-        lambda *a, **k: FakeRestoreDataModule(val_ds=val_ds, test_ds=test_ds),
-    )
-    RecordingTrainer.all_instances.clear()
-    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
-    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
 
     restore_mod.restore_trainrun(path, mode=mode, device="cpu")
 
@@ -477,6 +506,181 @@ def test_restore_trainrun_execution_modes_with_mocked_trainers(
             assert "fit" in stat_trainer.calls
         active = grad_trainer if use_gradient else stat_trainer
         assert "test" in active.calls
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun evaluation weight loading (validate/test modes)
+# ---------------------------------------------------------------------------
+
+
+def test_restore_trainrun_eval_loads_weights_and_skips_stat_fit(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A complete auto-located .pt is loaded (device 'auto' normalizes to None
+    for torch.load) and statistical re-initialization is skipped so the loaded
+    buffers are not overwritten by eval-run statistics."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    weights = _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline, test_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode="test")
+
+    assert fake_pipeline.restore_weights_calls == [
+        {"weights_path": str(weights), "device": None}
+    ]
+    stat_trainer, grad_trainer = RecordingTrainer.all_instances
+    assert "fit" not in stat_trainer.calls, (
+        "stat init must not overwrite loaded buffers"
+    )
+    assert grad_trainer.calls == ["test"]
+    assert grad_trainer.eval_ckpt_paths == [None]
+
+
+def test_restore_trainrun_eval_partial_weights_still_runs_stat_fit(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A node absent from the .pt still gets statistical initialization."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    fake_pipeline.missing_nodes = ["node0"]
+    _patch_restore_components(monkeypatch, fake_pipeline, test_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode="test")
+
+    stat_trainer = RecordingTrainer.all_instances[0]
+    assert "fit" in stat_trainer.calls
+
+
+def test_restore_trainrun_eval_explicit_weights_path(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """--weights-path wins over the auto-located default."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    explicit = tmp_path / "elsewhere.pt"
+    explicit.write_bytes(b"fake_weights")
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(False,))
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode="validate", weights_path=explicit)
+
+    assert fake_pipeline.restore_weights_calls[0]["weights_path"] == str(explicit)
+
+
+def test_restore_trainrun_eval_explicit_weights_path_missing_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(False,)), test_ds=_DS
+    )
+    with pytest.raises(FileNotFoundError, match="Weights file not found"):
+        restore_mod.restore_trainrun(
+            path, mode="test", weights_path=tmp_path / "absent.pt"
+        )
+
+
+def test_restore_trainrun_eval_missing_weights_gradient_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A gradient trainrun refuses to evaluate untrained weights silently."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(False,)), test_ds=_DS
+    )
+    with pytest.raises(FileNotFoundError, match="weights-path"):
+        restore_mod.restore_trainrun(path, mode="test")
+
+
+def test_restore_trainrun_eval_checkpoint_passthrough(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A Lightning .ckpt is handed to the gradient trainer; no .pt is loaded."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    ckpt = tmp_path / "epoch.ckpt"
+    ckpt.write_bytes(b"fake_ckpt")
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(False,))
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode="validate", checkpoint_path=ckpt)
+
+    assert not fake_pipeline.restore_weights_calls
+    grad_trainer = RecordingTrainer.all_instances[1]
+    assert grad_trainer.eval_ckpt_paths == [str(ckpt)]
+
+
+def test_restore_trainrun_eval_checkpoint_and_weights_mutually_exclusive(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(False,)), test_ds=_DS
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        restore_mod.restore_trainrun(
+            path,
+            mode="test",
+            checkpoint_path=tmp_path / "a.ckpt",
+            weights_path=tmp_path / "b.pt",
+        )
+
+
+def test_restore_trainrun_eval_checkpoint_on_statonly_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """--checkpoint-path was silently ignored on stat-only runs; now it errors."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(False,)), test_ds=_DS
+    )
+    with pytest.raises(ValueError, match="statistical-only"):
+        restore_mod.restore_trainrun(
+            path, mode="test", checkpoint_path=tmp_path / "a.ckpt"
+        )
+
+
+def test_restore_trainrun_eval_checkpoint_missing_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(False,)), test_ds=_DS
+    )
+    with pytest.raises(FileNotFoundError, match="Checkpoint file not found"):
+        restore_mod.restore_trainrun(
+            path, mode="test", checkpoint_path=tmp_path / "absent.ckpt"
+        )
+
+
+@pytest.mark.parametrize("mode", ["train", "info"])
+def test_restore_trainrun_weights_path_rejected_outside_eval_modes(
+    tmp_path: Path, mock_experiment_dict, mock_pipeline_dict, mode
+) -> None:
+    """--weights-path is an evaluation flag; misuse fails instead of being ignored."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    with pytest.raises(ValueError, match="only applies"):
+        restore_mod.restore_trainrun(path, mode=mode, weights_path=tmp_path / "w.pt")
+
+
+@pytest.mark.parametrize("mode", ["validate", "test"])
+def test_restore_trainrun_eval_missing_split_raises(
+    monkeypatch,
+    tmp_path: Path,
+    statistical_experiment_dict,
+    mock_pipeline_dict,
+    mode,
+) -> None:
+    """Standalone evaluation with no resolved split errors up front instead of
+    failing deep inside the trainer/datamodule."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    _patch_restore_components(monkeypatch, FakeRestorePipeline(node_fits=(False,)))
+    with pytest.raises(ValueError, match="split"):
+        restore_mod.restore_trainrun(path, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -582,12 +786,15 @@ def test_restore_trainrun_cli_forwards_args(monkeypatch) -> None:
             "train",
             "--override",
             "data.batch_size=8",
+            "--weights-path",
+            "outputs/trained_models/pipeline_restored.pt",
         ],
     )
     restore_mod.restore_trainrun_cli()
     assert captured["trainrun_path"] == "outputs/run.yaml"
     assert captured["mode"] == "train"
     assert captured["overrides"] == ["data.batch_size=8"]
+    assert captured["weights_path"] == "outputs/trained_models/pipeline_restored.pt"
 
 
 def test_create_datamodule_from_config_sets_up_fit(monkeypatch) -> None:

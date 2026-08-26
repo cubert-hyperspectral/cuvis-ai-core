@@ -649,13 +649,17 @@ class CuvisPipeline:
         weights_path: str | Path,
         strict_weight_loading: bool = True,
         device: str | None = None,
-    ) -> None:
+    ) -> list[str]:
         """Restore node weights from checkpoint.
 
         Args:
             weights_path: Path to .pt weights file
             strict_weight_loading: If True, raise error on state_dict key mismatch
             device: Device to load weights to
+
+        Returns:
+            Names of pipeline nodes absent from the checkpoint (they keep
+            their initialized weights).
 
         Raises:
             FileNotFoundError: If weights file doesn't exist
@@ -715,6 +719,7 @@ class CuvisPipeline:
                 f"Nodes without saved weights: {missing_keys}. "
                 f"These nodes will use initialized weights."
             )
+        return missing_keys
 
     @classmethod
     def load_pipeline(

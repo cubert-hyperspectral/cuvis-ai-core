@@ -388,6 +388,96 @@ def _create_datamodule_from_config(
     return datamodule
 
 
+def _load_evaluation_weights(
+    *,
+    pipeline: CuvisPipeline,
+    has_gradient_training: bool,
+    output_dir: Path,
+    checkpoint_path: str | Path | None,
+    weights_path: str | Path | None,
+    device: str,
+) -> Path | None:
+    """Resolve and load trained weights for validate/test evaluation.
+
+    Exactly one weight source is used, in precedence order:
+
+    1. ``checkpoint_path``: a Lightning ``.ckpt``. Nothing is loaded here;
+       the validated path is returned for the GradientTrainer to hand to
+       Lightning (which restores the module state itself).
+    2. ``weights_path``: an explicit pipeline ``.pt`` state dict.
+    3. Auto-located ``<output_dir>/trained_models/<pipeline>_restored.pt``,
+       the file train mode writes. ``output_dir`` resolves against the
+       invocation CWD, exactly as it did when training wrote it.
+
+    A gradient trainrun without any source is an error: silently scoring
+    randomly initialised gradient weights is the failure mode this guard
+    exists to prevent. A statistical-only trainrun proceeds without weights
+    (statistical initialization re-derives node state from the train split).
+
+    Returns the Lightning checkpoint path when source (1) was chosen, else
+    ``None`` (any ``.pt`` weights are already loaded into ``pipeline``).
+    """
+    if checkpoint_path is not None and weights_path is not None:
+        raise ValueError(
+            "--checkpoint-path and --weights-path are mutually exclusive; "
+            "pass the Lightning .ckpt OR the pipeline .pt, not both."
+        )
+
+    if checkpoint_path is not None:
+        if not has_gradient_training:
+            raise ValueError(
+                "--checkpoint-path is a Lightning checkpoint and needs the "
+                "gradient trainer, but this trainrun is statistical-only. "
+                "Use --weights-path with a pipeline .pt instead."
+            )
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        if checkpoint_path.suffix == ".pt":
+            logger.warning(
+                f"{checkpoint_path} looks like a pipeline .pt; "
+                "--checkpoint-path expects a Lightning .ckpt "
+                "(did you mean --weights-path?)"
+            )
+        logger.info(f"Evaluating Lightning checkpoint: {checkpoint_path}")
+        return checkpoint_path
+
+    if weights_path is not None:
+        weights_path = Path(weights_path)
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Weights file not found: {weights_path}")
+    else:
+        candidate = output_dir / "trained_models" / f"{pipeline.name}_restored.pt"
+        if candidate.exists():
+            weights_path = candidate
+        elif has_gradient_training:
+            raise FileNotFoundError(
+                "No trained weights found for evaluation: looked for "
+                f"{candidate.resolve()}. Evaluating a gradient trainrun "
+                "without trained weights would score a randomly initialised "
+                "pipeline. Pass --weights-path <pipeline .pt> or "
+                "--checkpoint-path <lightning .ckpt>."
+            )
+        else:
+            logger.info(
+                "No trained weights found; statistical-only trainrun, so "
+                "statistical initialization will re-derive node state."
+            )
+            return None
+
+    missing = pipeline._restore_weights_from_checkpoint(
+        weights_path, device=None if device == "auto" else device
+    )
+    logger.info(f"Loaded trained weights: {weights_path}")
+    if missing:
+        logger.warning(
+            "Nodes absent from the weights file (stale or renamed pipeline?): "
+            f"{missing}. Statistical nodes among them are re-initialized from "
+            "the train split; gradient nodes keep initial weights."
+        )
+    return None
+
+
 def restore_trainrun(
     trainrun_path: str | Path,
     mode: Literal["train", "validate", "test", "info"] = "info",
@@ -395,6 +485,7 @@ def restore_trainrun(
     device: str = "auto",
     overrides: list[str] | None = None,
     plugins_dirs: list[str | Path] | None = None,
+    weights_path: str | Path | None = None,
 ) -> None:
     """Restore and reproduce training run from configuration file.
 
@@ -419,12 +510,26 @@ def restore_trainrun(
         - 'validate': Run validation on trained model
         - 'test': Run test evaluation on trained model
     checkpoint_path : str | Path | None
-        Optional checkpoint path to resume training from (gradient training only)
+        Lightning checkpoint (.ckpt). In 'validate'/'test' mode it is handed
+        to the gradient trainer for evaluation (mutually exclusive with
+        ``weights_path``). In 'train' mode resumption is not yet implemented.
     device : str
         Device to run on ('cpu', 'cuda', 'auto')
     overrides : list[str] | None
         Hydra-style config overrides (e.g., ["output_dir=outputs/custom", "data.batch_size=16"])
+    plugins_dirs : list[str | Path] | None
+        Plugins directories the trainrun's data_module is resolved against
+    weights_path : str | Path | None
+        Pipeline weights (.pt) to load for 'validate'/'test' mode. Defaults to
+        the ``<output_dir>/trained_models/<pipeline>_restored.pt`` file train
+        mode writes; a gradient trainrun errors when no weights are found.
     """
+    if weights_path is not None and mode not in ("validate", "test"):
+        raise ValueError(
+            "--weights-path only applies to --mode validate/test: train mode "
+            "starts from the pipeline config and info mode loads no weights."
+        )
+
     # Absolutize up front, before any Hydra resolution can rewrite the process
     # CWD: the trainrun dir is the base for resolving a relative splits_path
     # (see _resolve_splits_path_in_config), so it must not depend on CWD.
@@ -493,9 +598,31 @@ def restore_trainrun(
     # Detect training type: a training block means a gradient run.
     has_gradient_training = trainrun_config.training is not None
 
-    # Check if statistical initialization is needed
-    # Skip if weights are already loaded (indicates pre-trained pipeline)
-    requires_static_fit = any(node.requires_initial_fit for node in pipeline.nodes())
+    # Evaluation modes score an already-trained pipeline: resolve exactly one
+    # weight source and load it BEFORE deciding on statistical initialization.
+    eval_ckpt_path: Path | None = None
+    if mode in ("validate", "test"):
+        eval_ckpt_path = _load_evaluation_weights(
+            pipeline=pipeline,
+            has_gradient_training=has_gradient_training,
+            output_dir=output_dir,
+            checkpoint_path=checkpoint_path,
+            weights_path=weights_path,
+            device=device,
+        )
+
+    # Train mode always (re)derives statistical state. Evaluation trusts the
+    # state that arrived via loaded weights (load_state_dict marks those
+    # nodes): re-deriving them would overwrite trained buffers with statistics
+    # from this run's train split, so only uncovered nodes are initialized.
+    evaluating = mode in ("validate", "test")
+    nodes_needing_stat_fit = [
+        node.name
+        for node in pipeline.nodes()
+        if node.requires_initial_fit
+        and not (evaluating and getattr(node, "_statistically_initialized", False))
+    ]
+    requires_static_fit = bool(nodes_needing_stat_fit)
 
     # Create trainers (both will be used based on mode)
     stat_trainer = StatisticalTrainer(pipeline=pipeline, datamodule=datamodule)
@@ -601,28 +728,51 @@ def restore_trainrun(
     elif mode == "validate":
         logger.info("Validation mode")
 
-        # Run statistical initialization if needed
+        # Evaluation is the explicit request: a missing split is an error,
+        # not a skip (train mode only skips its side-effect eval steps).
+        if datamodule.val_ds is None:
+            raise ValueError(
+                "Validation requested but no validation split resolved from "
+                "this trainrun's data config."
+            )
+
+        # Statistical initialization only for nodes the loaded weights did
+        # not cover (none, when a complete .pt was restored).
         if requires_static_fit:
-            logger.info("  Running statistical initialization...")
+            logger.info(
+                f"  Running statistical initialization for: {nodes_needing_stat_fit}"
+            )
             stat_trainer.fit()
 
         # Run validation
         if grad_trainer is not None:
-            grad_trainer.validate()
+            grad_trainer.validate(
+                ckpt_path=str(eval_ckpt_path) if eval_ckpt_path else None
+            )
         else:
             stat_trainer.validate()
 
     elif mode == "test":
         logger.info("Test mode")
 
-        # Run statistical initialization if needed
+        datamodule.setup(stage="test")
+        if datamodule.test_ds is None:
+            raise ValueError(
+                "Test evaluation requested but no test split resolved from "
+                "this trainrun's data config."
+            )
+
+        # Statistical initialization only for nodes the loaded weights did
+        # not cover (none, when a complete .pt was restored).
         if requires_static_fit:
-            logger.info("  Running statistical initialization...")
+            logger.info(
+                f"  Running statistical initialization for: {nodes_needing_stat_fit}"
+            )
             stat_trainer.fit()
 
         # Run test
         if grad_trainer is not None:
-            grad_trainer.test()
+            grad_trainer.test(ckpt_path=str(eval_ckpt_path) if eval_ckpt_path else None)
         else:
             stat_trainer.test()
 
@@ -759,6 +909,13 @@ Examples:
     --trainrun-path outputs/gradient_based/trained_models/gradient_based_trainrun.yaml \\
     --mode validate
 
+  # Evaluate a trained pipeline on the test split (explicit weights;
+  # defaults to <output_dir>/trained_models/<pipeline>_restored.pt)
+  uv run restore-trainrun \\
+    --trainrun-path outputs/gradient_based/trained_models/gradient_based_trainrun.yaml \\
+    --mode test \\
+    --weights-path outputs/gradient_based/trained_models/pipeline_restored.pt
+
   # Override data and training configs
   uv run restore-trainrun \\
     --trainrun-path outputs/.../trainrun.yaml \\
@@ -785,7 +942,18 @@ Examples:
         "--checkpoint-path",
         type=str,
         default=None,
-        help="Checkpoint path to resume training from",
+        help="Lightning checkpoint (.ckpt) to evaluate in --mode validate/test "
+        "(mutually exclusive with --weights-path). Training resumption is not "
+        "yet implemented.",
+    )
+    parser.add_argument(
+        "--weights-path",
+        type=str,
+        default=None,
+        help="Pipeline weights (.pt) to load in --mode validate/test. Defaults "
+        "to <output_dir>/trained_models/<pipeline>_restored.pt as written by "
+        "--mode train (a relative output_dir resolves against the current "
+        "working directory, exactly as it did when training wrote it).",
     )
     parser.add_argument(
         "--device",
@@ -816,4 +984,5 @@ Examples:
         device=args.device,
         overrides=args.override,
         plugins_dirs=args.plugins_dir,
+        weights_path=args.weights_path,
     )
