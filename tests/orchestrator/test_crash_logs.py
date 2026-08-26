@@ -16,7 +16,6 @@ from cuvis_ai_core.orchestrator import crash_logs
 from cuvis_ai_core.orchestrator.crash_logs import (
     crash_dir_root,
     preserve_child_logs,
-    preserve_session_logs,
 )
 
 
@@ -96,24 +95,6 @@ def test_preserve_child_logs_survives_unreadable_file(monkeypatch, tmp_path):
         preserve_child_logs((stdout_log, stderr_log), session_id="s", exit_code=9)
         is None
     )
-
-
-def test_preserve_session_logs_globs_the_session_tree(monkeypatch, tmp_path):
-    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
-    runtime = tmp_path / "session" / "scratch" / "runtime"
-    runtime.mkdir(parents=True)
-    (runtime / "child.stderr.log").write_text("abort", encoding="utf-8")
-
-    dest = preserve_session_logs(tmp_path / "session", session_id="orphan-1")
-
-    assert dest is not None
-    assert (dest / "child.stderr.log").exists()
-
-
-def test_preserve_session_logs_empty_tree_returns_none(monkeypatch, tmp_path):
-    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
-    (tmp_path / "session").mkdir()
-    assert preserve_session_logs(tmp_path / "session", session_id="o") is None
 
 
 # ---------------------------------------------------------------------------

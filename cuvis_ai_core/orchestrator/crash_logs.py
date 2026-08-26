@@ -30,10 +30,6 @@ from cuvis_ai_core.orchestrator.spawner import format_exit_code
 _CRASH_DIR_ENV = "CUVIS_RUNTIME_CRASH_DIR"
 CRASH_LOGS_DIRNAME = ".crash_logs"
 
-# The spawner writes the child's streams as child.stdout.log /
-# child.stderr.log under <scratch>/runtime/.
-_LOG_GLOB = "child.*.log"
-
 _MARKER_NAME = "crash_info.txt"
 _MAX_CRASH_DIRS = 5
 
@@ -96,23 +92,6 @@ def preserve_child_logs(
     except Exception as exc:
         logger.warning(f"Could not preserve child logs for {session_id}: {exc}")
         return None
-
-
-def preserve_session_logs(session_root: Path, *, session_id: str) -> Path | None:
-    """Preserve every child log found under ``session_root``.
-
-    The reaper-side variant for orphaned sessions where no live
-    ``ChildHandle`` (and hence no exit code) exists any more — it globs
-    the session tree instead of taking explicit log paths.
-    """
-    try:
-        log_files = sorted(session_root.rglob(_LOG_GLOB))
-    except OSError as exc:
-        logger.warning(f"Could not scan {session_root} for child logs: {exc}")
-        return None
-    if not log_files:
-        return None
-    return preserve_child_logs(log_files, session_id=session_id)
 
 
 def _prune_crash_dirs(root: Path) -> None:
