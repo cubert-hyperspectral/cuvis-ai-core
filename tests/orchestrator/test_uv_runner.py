@@ -240,6 +240,32 @@ def test_prune_translates_nonzero_exit_with_stderr(pinned_uv):
     assert "cache corrupt" in msg
 
 
+@pytest.mark.parametrize(
+    "err",
+    [
+        FileNotFoundError(2, "No such file or directory"),
+        PermissionError(13, "Permission denied"),
+        OSError(8, "Exec format error"),
+    ],
+    ids=["vanished", "not_executable", "bad_binary"],
+)
+def test_prune_translates_popen_os_error_naming_the_binary(pinned_uv, monkeypatch, err):
+    # Popen itself fails (binary vanished / bad CUVIS_UV target after resolution):
+    # the whole OSError family, not just FileNotFoundError, must be translated.
+    monkeypatch.setenv("PATH", "/nowhere")
+    with patch(
+        "cuvis_ai_core.orchestrator.uv_runner.subprocess.Popen", side_effect=err
+    ):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_cache_prune(busy_grace=0.01)
+    msg = str(excinfo.value)
+    assert not isinstance(excinfo.value, UvCacheBusyError)
+    assert f"'{pinned_uv}' was not found or is not executable" in msg
+    assert f"Command: {pinned_uv} cache prune" in msg
+    assert "PATH=/nowhere" in msg
+    assert excinfo.value.__cause__ is err
+
+
 def test_prune_that_acquired_the_lock_mid_grace_is_not_killed(pinned_uv):
     """The busy line alone is history: once 'Pruning cache at' follows, let it run."""
     fake = _FakePrune(

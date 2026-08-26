@@ -8,20 +8,24 @@ external git remote.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import queue
 import threading
 import time
 from pathlib import Path
+from typing import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger
 
 from cuvis_ai_core.orchestrator import composer as composer_mod
 from cuvis_ai_core.orchestrator import leases as leases_mod
 from cuvis_ai_core.orchestrator.cache_key import COMPOSER_SCHEMA_VERSION, CoreSource
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
-from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
+from cuvis_ai_core.orchestrator.uv_runner import UvCacheBusyError, UvRunnerError
 from cuvis_ai_schemas.plugin import GitPluginSource
 
 
@@ -822,3 +826,215 @@ def test_compose_build_runs_eviction_pass_hit_does_not(tmp_path: Path, monkeypat
     with resolve_patch2, lock_patch2, sync_patch2:
         compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
     assert calls == [tmp_path]
+
+
+# ---------------------------------------------------------------------------
+# Eviction edge branches — deleter idle paths, vanishing entries, torn and
+# stuck leases, cross-process lock contention, remnant-sweep skips
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _captured_log(level: str) -> Iterator[list[str]]:
+    """Collect loguru messages at ``level`` and above emitted inside the block."""
+    messages: list[str] = []
+    handler = logger.add(
+        lambda msg: messages.append(msg.record["message"]), level=level
+    )
+    try:
+        yield messages
+    finally:
+        logger.remove(handler)
+
+
+def _recorded_sweep_queue(monkeypatch) -> queue.Queue:
+    """Redirect the sweep's deleter hand-off into a fresh, inspectable queue."""
+    recorded: queue.Queue = queue.Queue()
+    monkeypatch.setattr(composer_mod, "_deleter_queue", recorded)
+    monkeypatch.setattr(composer_mod, "_ensure_deleter", lambda: None)
+    return recorded
+
+
+def _root_with_unstatable(root: Path, name: str) -> Path:
+    """``root`` retyped so ``stat`` on its child ``name`` raises OSError.
+
+    ``is_dir`` keeps answering truthfully via ``os.path.isdir`` — pathlib's
+    own implementation routes through ``stat`` and would report "not a
+    directory" instead, diverting to the wrong branch.
+    """
+
+    class _Flaky(type(Path())):
+        def is_dir(self, **kwargs):
+            return os.path.isdir(self)
+
+        def stat(self, *args, **kwargs):
+            if self.name == name:
+                raise OSError("vanished under us")
+            return super().stat(*args, **kwargs)
+
+    return _Flaky(root)
+
+
+def test_run_uv_cache_prune_busy_lock_is_logged_and_swallowed(monkeypatch):
+    # Pins the UvCacheBusyError branch: info-level skip, no warning, no raise.
+    def _busy():
+        raise UvCacheBusyError("uv cache lock busy")
+
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", _busy)
+    with _captured_log("INFO") as messages:
+        composer_mod._run_uv_cache_prune()
+    assert "uv cache prune skipped: uv cache lock busy" in messages
+    assert not any("failed" in m for m in messages)
+
+
+@pytest.mark.parametrize("worker", ["never_started", "exited"])
+def test_wait_for_deleter_without_live_worker_reports_queue_state(monkeypatch, worker):
+    # Pins the early return: with no live worker nothing could ever signal,
+    # so the answer is simply whether the queue is already drained. A fresh
+    # queue keeps the real worker (started by earlier tests) from consuming
+    # anything and faking a signal round-trip.
+    thread = None
+    if worker == "exited":
+        thread = threading.Thread(target=lambda: None)
+        thread.start()
+        thread.join()
+        assert not thread.is_alive()
+    monkeypatch.setattr(composer_mod, "_deleter_thread", thread)
+    idle_queue: queue.Queue = queue.Queue()
+    monkeypatch.setattr(composer_mod, "_deleter_queue", idle_queue)
+    assert composer_mod.wait_for_deleter(0.01) is True
+    assert idle_queue.empty()  # no signal was queued
+    idle_queue.put(("rmtree", Path("never-processed")))
+    assert composer_mod.wait_for_deleter(0.01) is False
+    assert idle_queue.qsize() == 1  # pending item reported, not consumed
+
+
+def test_ready_entries_ignores_dirs_without_ready_marker(tmp_path: Path, fast_snapshot):
+    # Pins the stat-OSError `continue` in the candidate scan: a dir with no
+    # published .ready (or one vanishing mid-scan) is never a candidate.
+    root = _marked_root(tmp_path)
+    _make_entry(root, "published", age_seconds=90 * 86_400)
+    unpublished = root / "unpublished"
+    (unpublished / ".venv").mkdir(parents=True)
+    scanned = [
+        entry.name for entry, _mtime, _schema in composer_mod._ready_entries(root)
+    ]
+    assert scanned == ["published"]
+    assert _evict(root, evict_all=True) == ["published"]
+    assert unpublished.exists()
+
+
+def test_lease_protection_skips_corrupt_lease_files(tmp_path: Path):
+    # Pins the corrupt-lease `continue`: a torn lease neither protects anything
+    # nor aborts the scan of the leases sorted behind it.
+    root = _marked_root(tmp_path)
+    leases_mod.write_intent_lease(root, "sid-ok", "kept")
+    torn = leases_mod.leases_dir(root) / "aaa-torn.json"  # sorts first
+    torn.write_text("{not json", encoding="utf-8")
+    assert composer_mod._lease_protected_digests(root) == {"kept"}
+    assert torn.exists()  # quarantine is the reaper's job, not the evictor's
+
+
+def test_lease_gc_survives_unlink_failure(tmp_path: Path, monkeypatch):
+    # Pins the OSError branch of the dead-child lease unlink: warn and carry
+    # on, and the dead lease still protects nothing.
+    root = _marked_root(tmp_path)
+    lease_path = _raw_final_lease(root, "sid-dead", "orphaned", child_pid=DEAD_PID)
+    real_unlink = Path.unlink
+
+    def _refuse(self, missing_ok=False):
+        if self == lease_path:
+            raise PermissionError("lease held open by another process")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _refuse)
+    with _captured_log("WARNING") as messages:
+        assert composer_mod._lease_protected_digests(root) == set()
+    assert lease_path.exists()
+    assert any("Could not remove dead lease sid-dead.json" in m for m in messages)
+
+
+def test_evict_leaves_entry_whose_ready_marker_vanished_mid_pass(
+    tmp_path: Path, fast_snapshot, monkeypatch
+):
+    # Pins the stat-OSError branch of the protection check: an entry whose
+    # .ready disappears between the scan and the check (a sibling evictor
+    # won) counts as protected rather than being renamed away.
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "vanishing", age_seconds=90 * 86_400)
+    ready = entry / ".ready"
+
+    def _sibling_won(root_arg):
+        ready.unlink(missing_ok=True)
+        return set()
+
+    monkeypatch.setattr(composer_mod, "_lease_protected_digests", _sibling_won)
+    assert _evict(root, max_age_days=30) == []
+    assert entry.exists()
+    assert not [p for p in root.iterdir() if ".evicting." in p.name]
+    assert composer_mod._entry_protected(
+        entry,
+        now=time.time(),
+        min_idle_seconds=0,
+        protected_digests=set(),
+        snapshot=leases_mod.ProcessSnapshot(infos=()),
+    )
+
+
+def test_evict_skips_entry_whose_file_lock_is_held(tmp_path: Path, fast_snapshot):
+    # Pins the filelock Timeout branch of _try_build_lock: a digest lock held
+    # by another process (builder or sibling evictor) means a non-blocking
+    # skip. A second FileLock on the same path conflicts even in-process
+    # (separate fds under both flock and msvcrt.locking).
+    root = _marked_root(tmp_path)
+    entry = _make_entry(root, "locked", age_seconds=90 * 86_400)
+    locks_dir = root / ".locks"
+    locks_dir.mkdir()
+    held = composer_mod.FileLock(str(locks_dir / "locked.lock"))
+    held.acquire(timeout=1)
+    try:
+        assert _evict(root, max_age_days=30) == []
+    finally:
+        held.release()
+    assert entry.exists()
+    # The in-process half of the lock was released on the way out.
+    in_proc = composer_mod._in_process_lock_for("locked")
+    assert in_proc.acquire(blocking=False)
+    in_proc.release()
+
+
+def test_sweep_failed_dirs_skips_tagged_plain_files(tmp_path: Path, monkeypatch):
+    # Pins the `not entry.is_dir()` continue: only directories are remnants.
+    root = _marked_root(tmp_path)
+    stray_file = root / "x.broken.123"
+    stray_file.write_text("crash note", encoding="utf-8")
+    remnant = root / "y.evicting.123.abc"
+    remnant.mkdir()
+    stamp = time.time() - composer_mod._STALE_PARTIAL_AGE_SECONDS - 100
+    os.utime(stray_file, (stamp, stamp))
+    os.utime(remnant, (stamp, stamp))
+    recorded = _recorded_sweep_queue(monkeypatch)
+    composer_mod._sweep_failed_dirs(root, time.time())
+    assert recorded.get_nowait() == ("rmtree", remnant)
+    assert recorded.empty()
+    assert stray_file.exists()
+
+
+def test_sweep_failed_dirs_skips_remnant_that_vanishes_under_stat(
+    tmp_path: Path, monkeypatch
+):
+    # Pins the stat-OSError continue: a remnant a sibling deleter removes
+    # between iterdir and stat is skipped while the rest of the sweep proceeds.
+    root = _marked_root(tmp_path)
+    ghost = root / "g.evicting.1.abc"
+    remnant = root / "r.evicting.1.abc"
+    ghost.mkdir()
+    remnant.mkdir()
+    stamp = time.time() - composer_mod._STALE_PARTIAL_AGE_SECONDS - 100
+    os.utime(remnant, (stamp, stamp))
+    recorded = _recorded_sweep_queue(monkeypatch)
+    composer_mod._sweep_failed_dirs(
+        _root_with_unstatable(root, ghost.name), time.time()
+    )
+    assert recorded.get_nowait() == ("rmtree", remnant)
+    assert recorded.empty()

@@ -6,8 +6,11 @@ processes are spawned and nothing outside pytest tmp dirs is touched.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -27,6 +30,11 @@ def _marked_root(tmp_path: Path) -> Path:
     root.mkdir()
     leases_mod.ensure_root_marker(root)
     return root
+
+
+def _raise_permission_error(*_args, **_kwargs):
+    """Drop-in for a filesystem call that the OS refuses."""
+    raise PermissionError("denied by test")
 
 
 @pytest.fixture(autouse=True)
@@ -112,6 +120,30 @@ def test_finalize_dead_child_raises(tmp_path: Path):
         )
 
 
+def test_remove_lease_warns_when_unlink_fails(tmp_path: Path, monkeypatch):
+    # remove_lease: an unlink OSError is logged, never raised
+    root = _marked_root(tmp_path)
+    path = _write_raw_lease(root, "sid-1")
+    monkeypatch.setattr(Path, "unlink", _raise_permission_error)
+    warnings = _warning_messages(lambda: leases_mod.remove_lease(root, "sid-1"))
+    assert path.exists()
+    assert any("sid-1" in msg and "denied by test" in msg for msg in warnings)
+
+
+def test_quarantine_warns_when_replace_fails(tmp_path: Path, monkeypatch):
+    # quarantine_lease: an os.replace OSError is logged, never raised
+    root = _marked_root(tmp_path)
+    directory = leases_mod.leases_dir(root)
+    directory.mkdir(parents=True)
+    bad = directory / "broken.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(leases_mod.os, "replace", _raise_permission_error)
+    warnings = _warning_messages(lambda: leases_mod.quarantine_lease(bad))
+    assert bad.exists()
+    assert not bad.with_suffix(".corrupt").exists()
+    assert any("broken.json" in msg and "denied by test" in msg for msg in warnings)
+
+
 # ---------------------------------------------------------------------------
 # Liveness + root guards
 # ---------------------------------------------------------------------------
@@ -149,17 +181,27 @@ def test_adopt_root_requires_locks_dir(tmp_path: Path):
     assert (legacy / leases_mod.ROOT_MARKER_NAME).exists()
 
 
-def _error_messages(action) -> list[str]:
-    """Run ``action`` and collect every ERROR-level loguru message it emits."""
+def _log_messages(action, level: str) -> list[str]:
+    """Run ``action`` and collect every loguru message at ``level`` or above."""
     from loguru import logger
 
     messages: list[str] = []
-    handler_id = logger.add(lambda msg: messages.append(str(msg)), level="ERROR")
+    handler_id = logger.add(lambda msg: messages.append(str(msg)), level=level)
     try:
         action()
     finally:
         logger.remove(handler_id)
     return messages
+
+
+def _error_messages(action) -> list[str]:
+    """Run ``action`` and collect every ERROR-level loguru message it emits."""
+    return _log_messages(action, "ERROR")
+
+
+def _warning_messages(action) -> list[str]:
+    """Run ``action`` and collect every WARNING-or-worse loguru message it emits."""
+    return _log_messages(action, "WARNING")
 
 
 def test_root_guard_is_quiet_before_the_first_compose(tmp_path: Path):
@@ -193,6 +235,22 @@ def test_reap_adopts_legacy_root_before_guarding(tmp_path: Path):
     leases_mod.reap_orphans(legacy)
     assert (legacy / leases_mod.ROOT_MARKER_NAME).exists()
     assert not path.exists()
+
+
+def test_ensure_root_marker_warns_when_root_is_unwritable(tmp_path: Path):
+    # ensure_root_marker: the write OSError (parent missing) is logged, not raised
+    missing = tmp_path / "missing" / "cache"
+    warnings = _warning_messages(lambda: leases_mod.ensure_root_marker(missing))
+    assert not (missing / leases_mod.ROOT_MARKER_NAME).exists()
+    assert any(leases_mod.ROOT_MARKER_NAME in msg for msg in warnings)
+
+
+def test_root_never_composed_treats_unreadable_root_as_used(tmp_path: Path):
+    # root_never_composed: iterdir OSError (the "root" is a file) -> False
+    not_a_dir = tmp_path / "cache"
+    not_a_dir.write_text("", encoding="utf-8")
+    assert leases_mod.root_never_composed(not_a_dir) is False
+    assert not leases_mod.root_guard_ok(not_a_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +291,85 @@ def test_take_process_snapshot_sees_this_test_process():
     assert any(info.pid == os.getpid() for info in snapshot.infos)
 
 
+class _FakeProc:
+    """A stand-in psutil.Process: each accessor returns its value or raises it."""
+
+    def __init__(self, pid: int, **fields):
+        self.pid = pid
+        self._fields = fields
+        self.calls: list[str] = []
+
+    def _field(self, name: str, default):
+        value = self._fields.get(name, default)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    def oneshot(self):
+        return contextlib.nullcontext()
+
+    def create_time(self):
+        return self._field("create_time", 1.0)
+
+    def ppid(self):
+        return self._field("ppid", 1)
+
+    def exe(self):
+        return self._field("exe", None)
+
+    def cwd(self):
+        return self._field("cwd", None)
+
+    def cmdline(self):
+        return self._field("cmdline", [])
+
+    def children(self, recursive: bool = False):
+        return self._field("children", [])
+
+    def terminate(self):
+        self.calls.append("terminate")
+        self._field("terminate", None)
+
+    def kill(self):
+        self.calls.append("kill")
+        self._field("kill", None)
+
+
+_RUNTIME_CMDLINE = ["python", "-m", leases_mod._RUNTIME_CMDLINE_MARKER]
+_PSUTIL_DENIALS = [
+    psutil.NoSuchProcess(4242),
+    psutil.AccessDenied(4242),
+    psutil.ZombieProcess(4242),
+]
+_PSUTIL_DENIAL_IDS = ["no-such-process", "access-denied", "zombie"]
+
+
+@pytest.mark.parametrize("exc", _PSUTIL_DENIALS, ids=_PSUTIL_DENIAL_IDS)
+def test_take_process_snapshot_skips_processes_that_vanish_mid_read(monkeypatch, exc):
+    # take_process_snapshot: a psutil error while reading one proc skips only it
+    vanished = _FakeProc(4242, create_time=exc)
+    healthy = _FakeProc(4343, create_time=5.0, ppid=7, cmdline=_RUNTIME_CMDLINE)
+    monkeypatch.setattr(
+        leases_mod.psutil, "process_iter", lambda: iter([vanished, healthy])
+    )
+    snapshot = leases_mod.take_process_snapshot()
+    (info,) = snapshot.infos
+    assert (info.pid, info.ppid, info.create_time) == (4343, 7, 5.0)
+    assert info.is_run_runtime
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [*_PSUTIL_DENIALS, OSError("no /proc")],
+    ids=[*_PSUTIL_DENIAL_IDS, "os-error"],
+)
+def test_safe_proc_accessors_map_denials_to_empty(exc):
+    # _safe_proc_field -> None and _safe_cmdline -> [] on every tolerated error
+    proc = _FakeProc(4242, exe=exc, cmdline=exc)
+    assert leases_mod._safe_proc_field(proc, "exe") is None
+    assert leases_mod._safe_cmdline(proc) == []
+
+
 # ---------------------------------------------------------------------------
 # _kill_runtime_tree never-kill guards
 # ---------------------------------------------------------------------------
@@ -253,6 +390,69 @@ def test_kill_tree_refuses_recycled_pid():
 
 def test_kill_tree_reports_already_dead():
     assert leases_mod._kill_runtime_tree(DEAD_PID, time.time()) is True
+
+
+# A real child whose cmdline carries the runtime marker (in a comment) so the
+# kill gate lets it through; it would otherwise idle for two minutes.
+_RUNTIME_LOOKALIKE = (
+    f"import time\n# {leases_mod._RUNTIME_CMDLINE_MARKER}\ntime.sleep(120)"
+)
+
+
+def test_kill_tree_terminates_a_real_runtime_lookalike_child():
+    # _kill_runtime_tree body: identity + marker pass -> terminate -> confirmed dead
+    child = subprocess.Popen([sys.executable, "-c", _RUNTIME_LOOKALIKE])
+    try:
+        create_time = psutil.Process(child.pid).create_time()
+        assert leases_mod._kill_runtime_tree(child.pid, create_time) is True
+        child.wait(timeout=10)  # raises TimeoutExpired if the child survived
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+
+
+@pytest.mark.parametrize(
+    ("exc", "confirmed_dead"),
+    [
+        (psutil.AccessDenied(4242), False),
+        # ZombieProcess subclasses NoSuchProcess: a zombie mid-walk reads as gone.
+        (psutil.ZombieProcess(4242), True),
+    ],
+    ids=["access-denied", "zombie"],
+)
+def test_kill_tree_outcome_when_tree_walk_is_denied(monkeypatch, exc, confirmed_dead):
+    # _kill_runtime_tree: psutil error while collecting targets -> no signal sent
+    runtime = _FakeProc(4242, create_time=100.0, cmdline=_RUNTIME_CMDLINE, children=exc)
+    monkeypatch.setattr(leases_mod.psutil, "Process", lambda pid: runtime)
+    assert leases_mod._kill_runtime_tree(4242, 100.0) is confirmed_dead
+    assert runtime.calls == []  # nothing was signalled
+
+
+def test_kill_tree_escalates_to_kill_and_reports_survivors(monkeypatch):
+    # _kill_runtime_tree body: terminate ignored -> kill; a survivor -> False
+    worker = _FakeProc(
+        4243,
+        terminate=psutil.NoSuchProcess(4243),
+        kill=psutil.AccessDenied(4243),
+    )
+    runtime = _FakeProc(
+        4242, create_time=100.0, cmdline=_RUNTIME_CMDLINE, children=[worker]
+    )
+    monkeypatch.setattr(leases_mod.psutil, "Process", lambda pid: runtime)
+    waits: list[list[int]] = []
+
+    def fake_wait_procs(procs, timeout=None):
+        waits.append([proc.pid for proc in procs])
+        if len(waits) == 1:
+            return [], list(procs)  # nobody honoured terminate()
+        return [runtime], [worker]  # kill() got the root, the worker lingers
+
+    monkeypatch.setattr(leases_mod.psutil, "wait_procs", fake_wait_procs)
+    assert leases_mod._kill_runtime_tree(4242, 100.0) is False
+    assert runtime.calls == ["terminate", "kill"]
+    assert worker.calls == ["terminate", "kill"]  # its errors were swallowed
+    assert waits == [[4242, 4243], [4242, 4243]]
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +480,23 @@ def test_guarded_rmtree_removes_session_dirs(tmp_path: Path):
     session.mkdir(parents=True)
     leases_mod._guarded_rmtree(session)
     assert not session.exists()
+
+
+def test_guarded_rmtree_tolerates_already_gone_session_dir(tmp_path: Path):
+    # _guarded_rmtree: FileNotFoundError is silently accepted
+    ghost = tmp_path / leases_mod.SCRATCH_ROOT_NAME / "ghost"
+    warnings = _warning_messages(lambda: leases_mod._guarded_rmtree(ghost))
+    assert warnings == []
+
+
+def test_guarded_rmtree_warns_when_removal_fails(tmp_path: Path, monkeypatch):
+    # _guarded_rmtree: any other OSError is logged, not raised
+    session = tmp_path / leases_mod.SCRATCH_ROOT_NAME / "sid-1"
+    session.mkdir(parents=True)
+    monkeypatch.setattr(leases_mod.shutil, "rmtree", _raise_permission_error)
+    warnings = _warning_messages(lambda: leases_mod._guarded_rmtree(session))
+    assert session.exists()
+    assert any("sid-1" in msg and "denied by test" in msg for msg in warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +738,45 @@ def test_reap_catch_all_skips_live_parent(tmp_path: Path, monkeypatch):
     assert killed == []
 
 
+def test_reap_catch_all_ignores_runtimes_from_other_roots(tmp_path: Path, monkeypatch):
+    # _reap_leaseless_orphans: exe outside THIS cache root -> never touched
+    root = _marked_root(tmp_path)
+    foreign = _info(
+        pid=4242,
+        ppid=1,
+        exe=str(tmp_path / "other_root" / "abcd" / ".venv" / "python"),
+        is_run_runtime=True,
+    )
+    # Liveness would say "kill": only the exe scope check stands in the way.
+    monkeypatch.setattr(leases_mod, "pid_alive", lambda pid, ct: True)
+    killed = []
+    monkeypatch.setattr(
+        leases_mod, "_kill_runtime_tree", lambda pid, ct: killed.append(pid) or True
+    )
+    leases_mod._reap_leaseless_orphans(
+        root, leases_mod.ProcessSnapshot(infos=(foreign,))
+    )
+    assert killed == []
+
+
+def test_parent_alive_outcomes():
+    # _parent_alive: reparented -> False; vanished parent -> False; live -> True
+    me = psutil.Process()
+    assert leases_mod._parent_alive(_info(ppid=1)) is False
+    assert leases_mod._parent_alive(_info(ppid=DEAD_PID)) is False
+    assert leases_mod._parent_alive(_info(ppid=me.pid, create_time=time.time()))
+
+
+def test_unlink_quietly_warns_on_failure(tmp_path: Path, monkeypatch):
+    # _unlink_quietly: an unlink OSError is logged, not raised
+    path = tmp_path / "lease.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "unlink", _raise_permission_error)
+    warnings = _warning_messages(lambda: leases_mod._unlink_quietly(path))
+    assert path.exists()
+    assert any("lease.json" in msg and "denied by test" in msg for msg in warnings)
+
+
 # ---------------------------------------------------------------------------
 # Lease-less scratch sweep
 # ---------------------------------------------------------------------------
@@ -597,3 +853,124 @@ def test_sweep_finds_roots_from_lease_paths_when_tempdir_differs(
     leases_mod.reap_orphans(root)
     assert referenced.exists()
     assert not stale.exists()
+
+
+_EMPTY_SNAPSHOT = leases_mod.ProcessSnapshot(infos=())
+
+
+def test_sweep_skips_non_directory_entries(tmp_path: Path, monkeypatch):
+    # _sweep_leaseless_scratch: a stray file in the scratch root is left alone
+    root = _marked_root(tmp_path)
+    scratch_root = tmp_path / leases_mod.SCRATCH_ROOT_NAME
+    scratch_root.mkdir()
+    stray = scratch_root / "notes.txt"
+    stray.write_text("keep", encoding="utf-8")
+    _aged(stray, leases_mod._LEASELESS_SCRATCH_AGE_SECONDS + 3600)
+
+    monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+    swept = leases_mod._sweep_leaseless_scratch(root, _EMPTY_SNAPSHOT, [])
+    assert swept == []
+    assert stray.exists()
+
+
+def test_sweep_skips_dir_that_vanishes_before_stat(tmp_path: Path, monkeypatch):
+    # _sweep_leaseless_scratch: entry.stat() OSError (removed mid-scan) -> skipped
+    root = _marked_root(tmp_path)
+    scratch_root = tmp_path / leases_mod.SCRATCH_ROOT_NAME
+    vanishing = scratch_root / "vanishing"
+    old = scratch_root / "old"
+    vanishing.mkdir(parents=True)
+    old.mkdir()
+    _aged(old, leases_mod._LEASELESS_SCRATCH_AGE_SECONDS + 3600)
+    real_is_dir = Path.is_dir
+
+    def is_dir_then_vanish(self, *args, **kwargs):
+        result = real_is_dir(self, *args, **kwargs)
+        if result and self.name == "vanishing":
+            os.rmdir(self)  # a concurrent close_session got there first
+        return result
+
+    monkeypatch.setattr(Path, "is_dir", is_dir_then_vanish)
+    monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+    swept = leases_mod._sweep_leaseless_scratch(root, _EMPTY_SNAPSHOT, [])
+    assert swept == [old]  # the scan continued past the vanished entry
+    assert not old.exists()
+
+
+def test_sweep_scratch_refuses_unmarked_root(tmp_path: Path, monkeypatch):
+    # sweep_scratch: root guard fails -> nothing listed, nothing removed
+    bare = tmp_path / "bare"
+    (bare / "somebody_elses_data").mkdir(parents=True)
+    old = tmp_path / leases_mod.SCRATCH_ROOT_NAME / "old"
+    old.mkdir(parents=True)
+    _aged(old, leases_mod._LEASELESS_SCRATCH_AGE_SECONDS + 3600)
+
+    monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(leases_mod, "take_process_snapshot", lambda: _EMPTY_SNAPSHOT)
+    assert leases_mod.sweep_scratch(bare, relax_age_floor=True) == []
+    assert old.exists()
+
+
+def test_sweep_scratch_keeps_roots_of_leases_with_live_parent_or_child(
+    tmp_path: Path, monkeypatch
+):
+    # sweep_scratch: a lease protects its session_root while its parent OR child
+    # lives; corrupt and session_root-less leases protect nothing
+    root = _marked_root(tmp_path)
+    scratch_root = tmp_path / leases_mod.SCRATCH_ROOT_NAME
+    parent_live = scratch_root / "parent-live"
+    child_live = scratch_root / "child-live"
+    abandoned = scratch_root / "abandoned"
+    stale = scratch_root / "stale"
+    for directory in (parent_live, child_live, abandoned, stale):
+        directory.mkdir(parents=True)
+        _aged(directory, leases_mod._LEASELESS_SCRATCH_AGE_SECONDS + 3600)
+    me = psutil.Process()
+    _write_raw_lease(root, "sid-p", session_root=str(parent_live))  # parent = us
+    _write_raw_lease(
+        root,
+        "sid-c",
+        parent_pid=DEAD_PID,
+        parent_create_time=1.0,
+        child_pid=me.pid,
+        child_create_time=me.create_time(),
+        session_root=str(child_live),
+    )
+    _write_raw_lease(
+        root,
+        "sid-a",
+        parent_pid=DEAD_PID,
+        parent_create_time=1.0,
+        child_pid=DEAD_PID,
+        child_create_time=1.0,
+        session_root=str(abandoned),
+    )
+    _write_raw_lease(root, "sid-n")  # live parent, but no session_root
+    junk = leases_mod.leases_dir(root) / "junk.json"
+    junk.write_text("]]]", encoding="utf-8")
+
+    monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(leases_mod, "take_process_snapshot", lambda: _EMPTY_SNAPSHOT)
+    swept = leases_mod.sweep_scratch(root)
+    assert sorted(swept) == sorted([abandoned, stale])
+    assert parent_live.exists()
+    assert child_live.exists()
+    assert not abandoned.exists()
+    assert not stale.exists()
+    # The sweep never touches lease files, corrupt or dead.
+    assert junk.exists()
+    assert (leases_mod.leases_dir(root) / "sid-a.json").exists()
+
+
+def test_sweep_scratch_dry_run_lists_without_deleting(tmp_path: Path, monkeypatch):
+    # sweep_scratch(dry_run=True): candidates are reported, nothing is removed
+    root = _marked_root(tmp_path)
+    fresh = tmp_path / leases_mod.SCRATCH_ROOT_NAME / "fresh"
+    fresh.mkdir(parents=True)
+    _aged(fresh, 60)  # well inside the 7-day floor, safely in the past
+
+    monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(leases_mod, "take_process_snapshot", lambda: _EMPTY_SNAPSHOT)
+    assert leases_mod.sweep_scratch(root, dry_run=True) == []  # age floor holds
+    assert leases_mod.sweep_scratch(root, relax_age_floor=True, dry_run=True) == [fresh]
+    assert fresh.exists()

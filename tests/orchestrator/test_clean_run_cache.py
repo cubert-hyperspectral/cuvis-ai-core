@@ -137,6 +137,47 @@ def test_busy_uv_cache_is_reported_as_skipped_prune(tmp_path, sandbox, monkeypat
     assert "failed" not in result.output
 
 
+def test_failed_uv_cache_prune_is_reported_non_fatal(tmp_path, sandbox, monkeypatch):
+    """A generic uv failure during prune is echoed and does not fail the pass."""
+    # Pins the UvRunnerError branch (distinct from the busy-lock skip).
+    from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
+
+    def _broken() -> None:
+        raise UvRunnerError("uv exited with status 2")
+
+    monkeypatch.setattr(cli_mod, "uv_cache_prune", _broken)
+    root = _marked_root(tmp_path)
+    _entry(root, "kept")
+    result = CliRunner().invoke(cli_mod.main, ["--root", str(root)])
+    assert result.exit_code == 0, result.output
+    assert "uv cache prune failed (non-fatal): uv exited with status 2" in result.output
+    assert "prune skipped" not in result.output
+    assert "prune completed" not in result.output
+
+
+def test_slow_deleter_drain_warns_but_exits_cleanly(tmp_path, sandbox, monkeypatch):
+    """A deleter still busy after the drain timeout is a warning, not an error."""
+    # Pins the wait_for_deleter(...) -> False branch.
+    waited: list[float] = []
+
+    def _still_draining(timeout: float) -> bool:
+        waited.append(timeout)
+        return False
+
+    monkeypatch.setattr(cli_mod, "wait_for_deleter", _still_draining)
+    root = _marked_root(tmp_path)
+    _entry(root, "kept")
+    result = CliRunner().invoke(cli_mod.main, ["--root", str(root)])
+    assert result.exit_code == 0, result.output
+    assert waited == [600.0]
+    assert "deletions are still draining" in result.output
+    # Nothing was evicted, so the CLI still falls through to its own prune
+    # (exactly once; the real deleter is not drained here, so a stray
+    # deleter-side prune from elsewhere in the process must not matter).
+    assert "uv cache prune completed" in result.output
+    assert sandbox.count("cli") == 1
+
+
 def test_all_respects_live_leases_and_processes(tmp_path, sandbox, monkeypatch):
     """--all ignores the caps but never touches an in-use entry."""
     root = _marked_root(tmp_path)

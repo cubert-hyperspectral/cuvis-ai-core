@@ -334,6 +334,72 @@ def test_maintenance_warms_process_scan_before_first_pass(
     assert events.count("warm") == 1
 
 
+def test_maintenance_warm_up_failure_is_logged_and_loop_proceeds(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    # Pins the warm-up `except` branch: a failing snapshot is logged, not fatal.
+    first_pass = threading.Event()
+
+    def _warm() -> None:
+        raise RuntimeError("psutil scan blew up")
+
+    def _reap(root) -> None:
+        first_pass.set()
+
+    _patch_maintenance(
+        monkeypatch, tmp_path, reap=_reap, evict=lambda root: None, warm=_warm
+    )
+    server = ProductionServer(port=0)
+    with caplog.at_level(logging.ERROR, logger=production_server_mod.__name__):
+        server._start_maintenance_thread()
+        assert server._maintenance_thread is not None
+        try:
+            assert first_pass.wait(10)
+        finally:
+            server._maintenance_stop.set()
+            server._maintenance_thread.join(timeout=10)
+    warm_failures = [
+        r for r in caplog.records if r.getMessage() == "Process scan warm-up failed"
+    ]
+    assert len(warm_failures) == 1
+    assert warm_failures[0].exc_info is not None
+    assert warm_failures[0].exc_info[0] is RuntimeError
+
+
+def test_start_maintenance_thread_is_noop_while_thread_alive(
+    monkeypatch, tmp_path
+) -> None:
+    # Pins the early return when a maintenance thread is already running.
+    in_reap = threading.Event()
+    release = threading.Event()
+
+    def _blocking_reap(root) -> None:
+        in_reap.set()
+        release.wait(10)
+
+    _patch_maintenance(
+        monkeypatch, tmp_path, reap=_blocking_reap, evict=lambda root: None
+    )
+    server = ProductionServer(port=0)
+    server._start_maintenance_thread()
+    first_thread = server._maintenance_thread
+    assert first_thread is not None
+    try:
+        assert in_reap.wait(10)
+        assert first_thread.is_alive()
+        # Snapshot-relative count: other tests may leave same-named threads.
+        named_before = {t for t in threading.enumerate() if t.name == first_thread.name}
+        server._start_maintenance_thread()
+        assert server._maintenance_thread is first_thread
+        named_after = {t for t in threading.enumerate() if t.name == first_thread.name}
+        assert named_after - named_before == set()
+    finally:
+        server._maintenance_stop.set()
+        release.set()
+        first_thread.join(timeout=10)
+    assert not first_thread.is_alive()
+
+
 def test_maintenance_kill_switch_disables_thread(monkeypatch) -> None:
     """CUVIS_RUN_CACHE_MAINTENANCE=0 keeps the loop entirely off."""
     monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "0")
