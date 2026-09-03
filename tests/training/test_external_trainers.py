@@ -79,8 +79,10 @@ class TestGradientTrainer:
 
         pipeline = CuvisPipeline("test")
         source = SourceNode()
-        loss_node = SimpleLossNode(name="test_loss")
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL}
+        loss_node = SimpleLossNode(
+            name="test_loss",
+            execution_stages={ExecutionStage.TRAIN, ExecutionStage.VAL},
+        )
 
         # Nodes auto-added when connected
         pipeline.connect(source.outputs.out, loss_node.value)
@@ -130,8 +132,10 @@ class TestGradientTrainer:
 
         pipeline = CuvisPipeline("test")
         source = SourceNode()
-        loss_node = SimpleLossNode(name="test_loss")
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL}
+        loss_node = SimpleLossNode(
+            name="test_loss",
+            execution_stages={ExecutionStage.TRAIN, ExecutionStage.VAL},
+        )
         pipeline.connect(source.outputs.out, loss_node.value)
 
         class MockDataModule(pl.LightningDataModule):
@@ -613,16 +617,13 @@ class TestEpochPooledMetrics:
 
         pipeline = CuvisPipeline("epoch_pooled_metrics")
         source = ScoreSource()
-        auroc = StreamingAUROC(name="auroc_node")
-        scaler = Scaler(name="scaler")
-        loss = MeanLoss(name="mean_loss")
-        auroc.execution_stages = {ExecutionStage.VAL, ExecutionStage.TEST}
-        for node in (scaler, loss):
-            node.execution_stages = {
-                ExecutionStage.TRAIN,
-                ExecutionStage.VAL,
-                ExecutionStage.TEST,
-            }
+        auroc = StreamingAUROC(
+            name="auroc_node",
+            execution_stages={ExecutionStage.VAL, ExecutionStage.TEST},
+        )
+        train_val_test = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+        scaler = Scaler(name="scaler", execution_stages=train_val_test)
+        loss = MeanLoss(name="mean_loss", execution_stages=train_val_test)
         # Metric reads the RAW source scores (so AUROC is decided purely by the
         # labels); the loss goes through the trainable scaler.
         pipeline.connect(
@@ -674,7 +675,9 @@ class TestEpochPooledMetrics:
             datamodule=datamodule,
             loss_nodes=[loss],
             metric_nodes=[auroc],
-            training_config=TrainingConfig(optimizer=OptimizerConfig(name="sgd", lr=0.01)),
+            training_config=TrainingConfig(
+                optimizer=OptimizerConfig(name="sgd", lr=0.01)
+            ),
         )
         return trainer, datamodule
 

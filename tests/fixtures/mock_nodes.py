@@ -428,16 +428,15 @@ class SimpleLossNode(Node):
         ),
     }
 
+    # Loss nodes only execute during training/validation/test. Declared on the
+    # class like a real loss node; tests that exercise other stage sets reassign
+    # execution_stages on the instance, which the mutable opt-in allows.
+    EXECUTION_STAGES = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
+    EXECUTION_STAGES_MUTABLE = True
+
     def __init__(self, weight: float = 1.0, **kwargs):
         self.weight = weight
         super().__init__(weight=weight, **kwargs)
-
-        # Loss nodes only execute during training/validation/test
-        self.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
     def forward(
         self, predictions: torch.Tensor, targets: torch.Tensor, **_
