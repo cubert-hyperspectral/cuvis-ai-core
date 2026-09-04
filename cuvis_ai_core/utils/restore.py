@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 import torch
 import yaml
 from loguru import logger
+from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from cuvis_ai_core.data.datamodule import create_data_module
@@ -572,6 +573,19 @@ def restore_trainrun(
             overrides=overrides,
         )
         trainrun_config = TrainRunConfig.model_validate(config_dict)
+    elif overrides:
+        # Config is already resolved, but --override must still apply: merge the
+        # dotlist onto the raw mapping before validation so a flat trainrun
+        # honours the same CLI as a Hydra-composed one instead of ignoring it.
+        # An override naming a field the config does not have fails validation,
+        # which is the intended answer to a typo.
+        merged = OmegaConf.merge(
+            OmegaConf.create(raw_config or {}),
+            OmegaConf.from_dotlist(list(overrides)),
+        )
+        trainrun_config = TrainRunConfig.model_validate(
+            OmegaConf.to_container(merged, resolve=True)
+        )
     else:
         # Config is already resolved - load directly
         trainrun_config: TrainRunConfig = TrainRunConfig.load_from_file(trainrun_path)

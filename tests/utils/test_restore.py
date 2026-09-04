@@ -850,3 +850,84 @@ def test_restore_trainrun_redirects_checkpoint_dirpath(
 
     dirpath = captured["training_config"].callbacks.checkpoint.dirpath
     assert dirpath.endswith("checkpoints")
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun --override on a flat (non-Hydra) trainrun
+# ---------------------------------------------------------------------------
+
+
+def _capture_trainrun_config(monkeypatch) -> dict:
+    """Capture the TrainRunConfig restore_trainrun built, before it is used."""
+    captured: dict = {}
+
+    def _build(trainrun_config, **kwargs):
+        captured["config"] = trainrun_config
+        return FakeRestorePipeline(node_fits=(False,))
+
+    monkeypatch.setattr(restore_mod, "_build_pipeline_from_config", _build)
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+    return captured
+
+
+def test_override_applies_to_a_flat_trainrun(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A trainrun without Hydra defaults must honour --override too."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_trainrun_config(monkeypatch)
+
+    restore_mod.restore_trainrun(
+        path,
+        mode="train",
+        device="cpu",
+        overrides=[
+            "training.max_epochs=2",
+            "training.limit_val_batches=4",
+            "data.batch_size=1",
+        ],
+    )
+
+    config = captured["config"]
+    assert config.training.max_epochs == 2
+    assert config.training.limit_val_batches == 4
+    assert config.data.batch_size == 1
+
+
+def test_override_of_an_unknown_key_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A typo must fail loudly instead of being dropped."""
+    from pydantic import ValidationError
+
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _capture_trainrun_config(monkeypatch)
+
+    with pytest.raises(ValidationError):
+        restore_mod.restore_trainrun(
+            path,
+            mode="train",
+            device="cpu",
+            overrides=["training.max_epocs=2"],
+        )
+
+
+def test_no_overrides_leaves_the_flat_trainrun_untouched(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_trainrun_config(monkeypatch)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert (
+        captured["config"].training.max_epochs
+        == (mock_experiment_dict["training"]["max_epochs"])
+    )

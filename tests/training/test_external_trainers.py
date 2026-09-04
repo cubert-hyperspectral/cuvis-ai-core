@@ -325,11 +325,16 @@ class TestGradientTrainer:
         assert projection_node_id is not None, "Could not find projection node"
 
         # Step 3: Gradient training
+        # No validation in this test: the trainer's own fields carry the
+        # Lightning passthroughs, so they go into the config, not into a
+        # post-construction __dict__ poke (which pydantic ignores).
         training_config = TrainingConfig(
             max_epochs=3,
             enable_progress_bar=False,
             enable_checkpointing=False,
             optimizer=OptimizerConfig(name="adam", lr=0.01),
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
         )
 
         grad_trainer = GradientTrainer(
@@ -337,14 +342,6 @@ class TestGradientTrainer:
             datamodule=datamodule,
             training_config=training_config,
             loss_nodes=[loss_node],
-        )
-
-        # Override to disable validation
-        grad_trainer.training_config.__dict__.update(
-            {
-                "num_sanity_val_steps": 0,
-                "limit_val_batches": 0,
-            }
         )
 
         grad_trainer.fit()
