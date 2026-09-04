@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.0 - unreleased
+## 0.16.0 - 2026-09-04
 
 - **Model weights are served only from the `cubert-gmbh` Hugging Face mirrors (breaking for
   cached installs).** Every `ModelWeights` registry entry now points at a public, ungated,
