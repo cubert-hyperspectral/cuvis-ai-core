@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.1 - 2026-09-04
+
+- **`SaveTrainRun` names the checkpoint after the pipeline yaml it writes.** A saved run is
+  `<run>.yaml` + `<run>_pipeline.yaml` + `<run>_pipeline.pt` (was `<run>.pt`). Every loader
+  derives the weights path from the *pipeline* yaml (`CuvisPipeline.load_pipeline`, the CLI
+  restore, pipeline discovery, `RestoreTrainRun` without an explicit `weights_path`, the
+  CuvisNEXT pickers), so the checkpoint of a run saved by 0.16.0 and earlier was found by
+  none of them unless the caller passed its path. Runs saved earlier are not migrated: rename
+  `<run>.pt` to `<run>_pipeline.pt` beside the pipeline yaml to load them by default.
+
 ## 0.16.0 - 2026-09-04
 
 - **Model weights are served only from the `cubert-gmbh` Hugging Face mirrors (breaking for
