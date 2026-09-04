@@ -112,8 +112,12 @@ class TrainRunService:
         weights_path = None
         if request.save_weights and session.pipeline is not None:
             try:
-                # Save weights with same name as trainrun but .pt extension
-                weights_path_obj = trainrun_path.with_suffix(".pt")
+                # The checkpoint is the pipeline yaml's sibling (`<stem>.pt`), the one
+                # place every loader looks: `CuvisPipeline.load_pipeline`, the CLI
+                # restore, pipeline discovery and the CuvisNEXT pickers all derive the
+                # weights path from the *pipeline* yaml, never from the trainrun yaml.
+                # A live pipeline always has its sibling written above.
+                weights_path_obj = sibling_pipeline_path.with_suffix(".pt")
                 weights_path = str(weights_path_obj)
 
                 # Save only the state_dict (weights) without pipeline config

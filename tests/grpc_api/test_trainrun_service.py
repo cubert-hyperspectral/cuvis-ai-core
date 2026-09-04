@@ -126,6 +126,47 @@ def test_save_train_run_reanchors_reference_to_sibling(
     assert resp.pipeline_path == str(sibling)  # reported in the response
 
 
+def test_save_train_run_names_weights_after_the_pipeline_sibling(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    """The checkpoint is `<pipeline yaml stem>.pt`, so every loader finds it by default.
+
+    `CuvisPipeline.load_pipeline`, the CLI restore and the CuvisNEXT pickers derive the
+    weights path from the pipeline yaml; a checkpoint named after the trainrun yaml
+    (`tr.pt` beside `tr_pipeline.yaml`) was invisible to all of them.
+    """
+    import torch
+    from cuvis_ai_schemas.pipeline.config import PipelineConfig
+
+    sm, service = _service()
+    sid = sm.create_session()
+    session = sm.get_session(sid)
+    session.trainrun_config = TrainRunConfig.from_dict(mock_experiment_dict)
+    session._pipeline_config = PipelineConfig.from_dict(mock_pipeline_dict)
+    node = MagicMock()
+    node.name = "n"
+    node.state_dict.return_value = {"w": torch.zeros(2)}
+    session.pipeline = MagicMock()
+    session.pipeline.nodes.return_value = [node]
+
+    out = tmp_path / "tr.yaml"
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=True
+        ),
+        Mock(),
+    )
+    assert resp.success is True
+    sibling = out.parent / "tr_pipeline.yaml"
+    weights = sibling.with_suffix(".pt")
+    assert weights.is_file(), sorted(p.name for p in tmp_path.iterdir())
+    assert not (tmp_path / "tr.pt").exists()
+    assert resp.weights_path == str(weights)
+    assert resp.pipeline_path == str(sibling)
+    checkpoint = torch.load(weights, weights_only=False)
+    assert set(checkpoint["state_dict"]) == {"n"}
+
+
 # ---------------------------------------------------------------------------
 # parse_trainrun_yaml
 # ---------------------------------------------------------------------------
