@@ -25,7 +25,18 @@ class TrainingCancelled(Exception):
     Raised by :class:`StatisticalTrainer` at batch / node boundaries. A node
     interrupted mid-initialization is left partially fitted; the cancelled run
     must not be treated as trained.
+
+    ``swallowed_error`` carries the exception the run raised when the stop
+    had already been requested, so the cancelled answer can still name the
+    failure instead of hiding it.
     """
+
+    def __init__(
+        self, *args: object, swallowed_error: BaseException | None = None
+    ) -> None:
+        """Store the optional error this cancellation took precedence over."""
+        super().__init__(*args)
+        self.swallowed_error = swallowed_error
 
 
 class GradientTrainer(pl.LightningModule):

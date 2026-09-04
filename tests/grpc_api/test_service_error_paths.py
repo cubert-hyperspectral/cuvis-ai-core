@@ -10,12 +10,14 @@ from unittest.mock import Mock, patch
 
 import grpc
 import yaml
+from loguru import logger
 
 from cuvis_ai_core.grpc.error_handling import grpc_handler
 from cuvis_ai_core.grpc.inference_service import InferenceService
 from cuvis_ai_core.grpc.pipeline_service import PipelineService
 from cuvis_ai_core.grpc.plugin_service import PluginService
-from cuvis_ai_core.grpc.training_service import TrainingService
+from cuvis_ai_core.grpc.training_service import TrainingService, _run_outcome
+from cuvis_ai_core.training.trainers import TrainingCancelled
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
@@ -745,3 +747,59 @@ def test_train_statistical_calibrates_and_reports_on_completion():
         "dec (quantile 0.995)"
     )
     assert session.pipeline_config is None
+
+
+class TestRunOutcome:
+    """``_run_outcome``: a stop must never hide a failure that came first."""
+
+    def test_clean_run_raises_nothing(self):
+        assert _run_outcome(None, False, False) is None
+
+    def test_plain_stop_is_a_cancellation(self):
+        outcome = _run_outcome(None, False, True)
+        assert isinstance(outcome, TrainingCancelled)
+        assert outcome.swallowed_error is None
+
+    def test_error_without_a_stop_wins(self):
+        error = RuntimeError("CUDA out of memory")
+        assert _run_outcome(error, False, False) is error
+
+    def test_error_that_arrived_before_the_stop_still_wins(self):
+        # The run died, the client (or the stream teardown) stopped it after:
+        # reporting that as a clean cancellation would hide the crash.
+        error = RuntimeError("CUDA out of memory")
+        assert _run_outcome(error, False, True) is error
+
+    def test_stop_that_preceded_the_error_swallows_it_but_keeps_it(self):
+        error = RuntimeError("dataloader shutdown noise")
+        outcome = _run_outcome(error, True, True)
+        assert isinstance(outcome, TrainingCancelled)
+        assert outcome.swallowed_error is error
+
+    def test_swallowed_error_is_logged_at_warning(self):
+        records: list[tuple[str, str]] = []
+        sink_id = logger.add(
+            lambda message: records.append(
+                (message.record["level"].name, message.record["message"])
+            ),
+            level="WARNING",
+        )
+        try:
+            _run_outcome(RuntimeError("late boom"), True, True)
+        finally:
+            logger.remove(sink_id)
+
+        assert [level for level, _ in records] == ["WARNING"]
+        assert "late boom" in records[0][1]
+
+    def test_a_stop_without_an_error_logs_nothing(self):
+        records: list[str] = []
+        sink_id = logger.add(
+            lambda message: records.append(message.record["message"]), level="WARNING"
+        )
+        try:
+            _run_outcome(None, False, True)
+        finally:
+            logger.remove(sink_id)
+
+        assert records == []

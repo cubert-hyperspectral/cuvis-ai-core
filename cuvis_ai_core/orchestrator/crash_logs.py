@@ -7,6 +7,11 @@ module copies those logs aside first, into ``.crash_logs/`` under the
 composer cache root (dot-prefixed, never a cache entry), so a crash can
 still be diagnosed after cleanup.
 
+Preservation is idempotent per session id: the failing RPC preserves the
+logs at the moment of death so the client learns where they are, and the
+later ``close_session`` teardown asks again and is handed the same
+directory instead of copying a second one.
+
 The composer cache-root lookup stays a lazy import inside
 :func:`crash_dir_root`, so importing this module never pays the
 composer's (and its transitive) import cost.
@@ -16,6 +21,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -32,6 +38,22 @@ CRASH_LOGS_DIRNAME = ".crash_logs"
 
 _MARKER_NAME = "crash_info.txt"
 _MAX_CRASH_DIRS = 5
+
+# One preserved directory per session id. Two callers race for a crashed
+# session (the failing RPC and the later close_session teardown, plus the
+# orphan reaper), and each would otherwise create its own timestamped copy.
+# The lock is held across the copy so the loser of the race waits and then
+# sees the winner's directory. Only successful preservations are recorded,
+# so a failed attempt can still be retried. One Path per crashed session
+# lives here for the life of the process.
+_preserve_lock = threading.Lock()
+_preserved: dict[str, Path] = {}
+
+
+def reset_for_tests() -> None:
+    """Forget which sessions have preserved logs (test isolation only)."""
+    with _preserve_lock:
+        _preserved.clear()
 
 
 def crash_dir_root() -> Path:
@@ -60,12 +82,38 @@ def preserve_child_logs(
     """Copy a dead child's log files into the crash-log store.
 
     Returns the destination directory, or ``None`` when nothing could be
-    preserved. Best-effort by design: session teardown must never fail
-    because a log file is missing, still locked (Windows), or the store
-    is unwritable.
+    preserved. Idempotent per ``session_id``: a repeat call for a session
+    whose logs are already preserved returns the recorded directory
+    without copying anything a second time. Best-effort by design:
+    session teardown must never fail because a log file is missing, still
+    locked (Windows), or the store is unwritable.
     """
+    with _preserve_lock:
+        recorded = _preserved.get(session_id)
+        if recorded is not None:
+            return recorded
+        destination = _copy_child_logs(
+            log_paths, session_id=session_id, exit_code=exit_code, endpoint=endpoint
+        )
+        if destination is not None:
+            _preserved[session_id] = destination
+        return destination
+
+
+def _copy_child_logs(
+    log_paths: Iterable[Path | None],
+    *,
+    session_id: str,
+    exit_code: int | None,
+    endpoint: str | None,
+) -> Path | None:
+    """Do the actual copy for :func:`preserve_child_logs` (called under the lock)."""
     try:
-        files = [p for p in log_paths if p is not None and p.exists()]
+        # Only real path-likes: a caller reading log paths off a child handle
+        # with getattr can hand us anything, and a stray object must not turn
+        # into a half-populated crash directory.
+        candidates = [Path(p) for p in log_paths if isinstance(p, (str, Path))]
+        files = [p for p in candidates if p.exists()]
         if not files:
             return None
         destination = (

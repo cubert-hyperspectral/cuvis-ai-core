@@ -448,6 +448,53 @@ class TestTrainStreamCancellation:
             callback()
         assert not session.stop_event.is_set()
 
+    def test_cancelled_detail_names_an_error_the_stop_swallowed(self, monkeypatch):
+        """A run that failed after being stopped is cancelled, but says why."""
+        manager = SessionManager()
+        session_id, service = _make_session(manager)
+        ctx = _InMemoryContext()
+
+        def _stopped_run_that_also_raised(*args, **kwargs):
+            raise TrainingCancelled(
+                "Gradient training stopped via StopTrain",
+                swallowed_error=RuntimeError("CUDA out of memory"),
+            )
+            yield  # pragma: no cover - makes this a generator function
+
+        monkeypatch.setattr(service, "_train_gradient", _stopped_run_that_also_raised)
+
+        responses = list(
+            service.train(
+                _train_request(session_id, cuvis_ai_pb2.TRAINER_TYPE_GRADIENT), ctx
+            )
+        )
+
+        assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_CANCELLED
+        assert (
+            "stopped by request; the run also raised: CUDA out of memory"
+            in responses[-1].message
+        )
+
+    def test_cancelled_detail_without_a_swallowed_error_is_unchanged(self, monkeypatch):
+        manager = SessionManager()
+        session_id, service = _make_session(manager)
+
+        def _plain_stop(*args, **kwargs):
+            raise TrainingCancelled("Gradient training stopped via StopTrain")
+            yield  # pragma: no cover - makes this a generator function
+
+        monkeypatch.setattr(service, "_train_gradient", _plain_stop)
+
+        responses = list(
+            service.train(
+                _train_request(session_id, cuvis_ai_pb2.TRAINER_TYPE_GRADIENT),
+                _InMemoryContext(),
+            )
+        )
+
+        assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_CANCELLED
+        assert "the run also raised" not in responses[-1].message
+
 
 # ---------------------------------------------------------------------------
 # GetTrainStatus + StopTrain handler

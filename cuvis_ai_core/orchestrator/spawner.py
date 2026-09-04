@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -70,7 +71,23 @@ _STOP_RUN_RPC_TIMEOUT_CAP_SECONDS = 5.0
 _TERMINATE_KILL_WAIT_SECONDS = 5.0
 _GRACEFUL_WAIT_FLOOR_SECONDS = 1.0
 _CRASH_STDERR_TAIL_CHARS = 2048
-_DEAD_CHILD_REAP_SECONDS = 1.0
+# How much of the child's stderr is scanned for a crash marker. The tail that
+# reaches the client stays _CRASH_STDERR_TAIL_CHARS, but a native abort or an
+# OOM traceback is often followed by thousands of characters of shutdown noise,
+# so the cause has to be looked for further back.
+_CRASH_STDERR_SCAN_BYTES = 64 * 1024
+# Grace given to a child that refused a connection but has not been reaped yet.
+# Three seconds because a Windows fatal-exception exit (and the crash dump the
+# OS may write first) has been seen to take well over one.
+_DEAD_CHILD_REAP_SECONDS = 3.0
+_DEAD_CHILD_REAP_ENV = "CUVIS_RUNTIME_DEAD_CHILD_REAP_SECONDS"
+
+# Lines worth surfacing even when they scrolled out of the stderr tail: the
+# ones that name the cause of a child death.
+_CRASH_MARKER_PATTERN = re.compile(
+    r"OutOfMemoryError|CUDA out of memory|CUDA error|Traceback"
+    r"|Fatal Python error|\w+Error:"
+)
 
 # CUDA device-selection vars dropped from the child env when GPU is not
 # requested. LD_LIBRARY_PATH is deliberately NOT in this set: it is the
@@ -164,49 +181,82 @@ def format_exit_code(code: int) -> str:
 def _read_stderr_log(path: Path | None) -> str:
     """Read the tail of the child's captured stderr file for post-mortem display.
 
-    Only the last ``_CRASH_STDERR_TAIL_CHARS * 4`` bytes are read (4 is
-    the widest UTF-8 codepoint), so retries against an already-dead child
-    never re-read a huge log end to end. The seek can land mid-codepoint,
-    hence the byte-level read decoded with ``errors="replace"``. Returns
-    ``""`` if the file is missing — callers fall back to a generic crash
-    message in that case.
+    Only the last ``_CRASH_STDERR_SCAN_BYTES`` are read, so retries
+    against an already-dead child never re-read a huge log end to end.
+    That window is wider than the tail that reaches the client because
+    :func:`extract_crash_summary` looks through it for the line that
+    names the cause. The seek can land mid-codepoint, hence the
+    byte-level read decoded with ``errors="replace"``. Returns ``""`` if
+    the file is missing — callers fall back to a generic crash message in
+    that case.
     """
     if path is None or not path.exists():
         return ""
     try:
         with path.open("rb") as fh:
             size = fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, size - _CRASH_STDERR_TAIL_CHARS * 4))
+            fh.seek(max(0, size - _CRASH_STDERR_SCAN_BYTES))
             return fh.read().decode("utf-8", errors="replace")
     except OSError as exc:
         return f"<unreadable stderr log {path}: {exc}>"
 
 
-def dead_child_details(
-    handle, *, wait_s: float = _DEAD_CHILD_REAP_SECONDS
-) -> str | None:
+def extract_crash_summary(
+    stderr_text: str, *, tail_chars: int = _CRASH_STDERR_TAIL_CHARS
+) -> str:
+    """Condense a child's stderr into the part worth putting in an error detail.
+
+    The last ``tail_chars`` characters are the base, because the death is
+    usually the last thing in the log. When the process kept writing
+    afterwards (atexit handlers, a dying dataloader's worker chatter) the
+    cause scrolls out of that window, so the last line matching a known
+    crash marker is prepended when it is not in the tail already.
+    """
+    tail = stderr_text[-tail_chars:].strip()
+    marker_line = ""
+    for line in stderr_text.splitlines():
+        if _CRASH_MARKER_PATTERN.search(line):
+            marker_line = line.strip()
+    if not marker_line or marker_line in tail:
+        return tail
+    if not tail:
+        return marker_line
+    return f"{marker_line}\n[...]\n{tail}"
+
+
+def dead_child_details(handle, *, wait_s: float | None = None) -> str | None:
     """Post-mortem line for a child that has exited, or ``None`` while it lives.
 
     Called after a forwarded RPC failed at the transport level. At the
     instant of death the child's endpoint can already refuse connections
     while ``poll()`` still reports ``None``, so the process is given
-    ``wait_s`` to be reaped before its exit code is read. ``None`` means
-    the child is alive and the caller should propagate the RPC status
-    verbatim. ``getattr`` defaults keep test doubles and the in-memory
-    handle (no ``process`` / ``stderr_log``) on the ``None`` path.
+    ``wait_s`` seconds to be reaped before its exit code is read;
+    ``wait_s=0`` makes the probe poll-only, which is what callers pass
+    when the failing status could equally have come from a live child.
+    ``None`` (the default) resolves the reap grace from
+    ``$CUVIS_RUNTIME_DEAD_CHILD_REAP_SECONDS`` or its default.
+
+    ``None`` means the child is alive and the caller should propagate the
+    RPC status verbatim. ``getattr`` defaults keep test doubles and the
+    in-memory handle (no ``process`` / ``stderr_log``) on the ``None`` path.
     """
+    if wait_s is None:
+        wait_s = _timeout_from_env(_DEAD_CHILD_REAP_ENV, _DEAD_CHILD_REAP_SECONDS)
     process = getattr(handle, "process", None)
     if process is not None and process.poll() is None:
+        if wait_s <= 0:
+            return None
         with contextlib.suppress(Exception):
             process.wait(timeout=wait_s)
     code = getattr(handle, "returncode", None)
     if code is None:
         return None
     details = f"child runtime exited unexpectedly (exit code {format_exit_code(code)})"
-    tail = _read_stderr_log(getattr(handle, "stderr_log", None))
-    tail = tail[-_CRASH_STDERR_TAIL_CHARS:].strip()
-    if tail:
-        return f"{details}: {tail}"
+    summary = extract_crash_summary(
+        _read_stderr_log(getattr(handle, "stderr_log", None))
+    )
+    if summary:
+        return f"{details}: {summary}"
     return f"{details} (no stderr was captured)"
 
 

@@ -69,6 +69,10 @@ class SessionState:
     # (HOME / TEMP / output redirect). Removed on close so child logs and
     # HF/torch caches don't accumulate under the system temp dir.
     runtime_base_dir: Path | None = None
+    # Where this session's crashed child had its logs preserved. Set at the
+    # moment the failure is reported so the same directory can be named in the
+    # error detail, in the RPC trailers, and again at teardown.
+    crash_log_dir: Path | None = None
     # Cache root holding this session's venv lease (the in-use marker that
     # protects the composed env from eviction). Set by the orchestrator
     # bridge when it writes the lease; close_session removes the lease.
@@ -296,6 +300,9 @@ class SessionManager:
             from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
             from cuvis_ai_core.orchestrator.spawner import format_exit_code
 
+            # Idempotent per session: when the failing RPC already preserved
+            # this child's logs, the same directory comes back and no second
+            # copy is made.
             crash_dir = preserve_child_logs(
                 (
                     getattr(child, "stdout_log", None),
@@ -305,6 +312,8 @@ class SessionManager:
                 exit_code=exit_code,
                 endpoint=getattr(child, "endpoint", None),
             )
+            if crash_dir is not None:
+                state.crash_log_dir = crash_dir
             location = f"; logs preserved at {crash_dir}" if crash_dir else ""
             logger.warning(
                 f"Child runtime for session {session_id} exited on its own "

@@ -19,7 +19,10 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.orchestrator.spawner import (
+    _CRASH_STDERR_SCAN_BYTES,
     _CRASH_STDERR_TAIL_CHARS,
+    _DEAD_CHILD_REAP_ENV,
+    _DEAD_CHILD_REAP_SECONDS,
     ChildHandle,
     DeclaredPaths,
     LocalChildRuntimeSpawner,
@@ -28,6 +31,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     _read_stderr_log,
     _timeout_from_env,
     dead_child_details,
+    extract_crash_summary,
     format_exit_code,
 )
 
@@ -302,10 +306,10 @@ def test_read_stderr_log_reads_existing_file(tmp_path: Path):
     assert _read_stderr_log(log) == "traceback here"
 
 
-def test_read_stderr_log_reads_only_the_tail(tmp_path: Path):
-    """A log larger than the tail window yields only its tail, never the head."""
+def test_read_stderr_log_reads_only_the_scan_window(tmp_path: Path):
+    """A log larger than the scan window yields only its tail, never the head."""
     log = tmp_path / "stderr.log"
-    window = _CRASH_STDERR_TAIL_CHARS * 4
+    window = _CRASH_STDERR_SCAN_BYTES
     log.write_text(
         "HEAD-MARKER " + "x" * (window * 2) + " TAIL-MARKER", encoding="utf-8"
     )
@@ -313,6 +317,9 @@ def test_read_stderr_log_reads_only_the_tail(tmp_path: Path):
     assert out.endswith("TAIL-MARKER")
     assert "HEAD-MARKER" not in out
     assert len(out.encode("utf-8")) <= window
+    # The scan window is deliberately wider than the tail the client sees, so
+    # extract_crash_summary can still find a cause that scrolled out of it.
+    assert window > _CRASH_STDERR_TAIL_CHARS
 
 
 def test_read_stderr_log_surfaces_oserror(tmp_path: Path, monkeypatch):
@@ -432,6 +439,81 @@ def test_dead_child_details_tolerates_handle_without_process():
     # Mirrors _InMemoryChildHandle: no process, no stderr_log attributes.
     assert dead_child_details(SimpleNamespace(returncode=None)) is None
     assert dead_child_details(SimpleNamespace()) is None
+
+
+def test_dead_child_details_poll_only_never_waits():
+    """``wait_s=0`` is the poll-only probe: a live child costs no latency."""
+    proc = _fake_proc(poll=None, returncode=None)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+
+    assert dead_child_details(handle, wait_s=0.0) is None
+
+    proc.wait.assert_not_called()
+
+
+def test_dead_child_details_reap_grace_comes_from_the_env(monkeypatch):
+    """The default reap grace is the constant, overridable per deployment."""
+    proc = _fake_proc(poll=[None, 4], returncode=4)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc)
+    monkeypatch.setenv(_DEAD_CHILD_REAP_ENV, "0.01")
+
+    details = dead_child_details(handle)
+
+    assert details is not None
+    assert "exit code 4" in details
+    proc.wait.assert_called_once_with(timeout=0.01)
+    assert _DEAD_CHILD_REAP_SECONDS == 3.0
+
+
+# ---------------------------------------------------------------------------
+# extract_crash_summary: the cause must survive the shutdown noise that
+# follows it in the log.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_crash_summary_returns_the_tail_when_the_log_is_short():
+    text = "line one\nRuntimeError: CUDA out of memory\n"
+    assert extract_crash_summary(text) == text.strip()
+
+
+def test_extract_crash_summary_keeps_an_oom_line_buried_under_noise():
+    noise = "\n".join(f"shutting down worker {i}" for i in range(400))
+    text = f"prelude\nRuntimeError: CUDA out of memory\n{noise}\n"
+    assert len(noise) > 6000  # the crash line is far outside the tail
+
+    summary = extract_crash_summary(text)
+
+    assert summary.startswith("RuntimeError: CUDA out of memory")
+    assert "shutting down worker 399" in summary
+    assert len(summary) <= _CRASH_STDERR_TAIL_CHARS + 200
+
+
+def test_extract_crash_summary_does_not_duplicate_a_line_already_in_the_tail():
+    text = "noise\n" * 10 + "Fatal Python error: Aborted\n"
+    summary = extract_crash_summary(text)
+    assert summary.count("Fatal Python error") == 1
+
+
+def test_extract_crash_summary_of_noise_only_is_just_the_tail():
+    text = "x" * (_CRASH_STDERR_TAIL_CHARS * 2)
+    summary = extract_crash_summary(text)
+    assert summary == "x" * _CRASH_STDERR_TAIL_CHARS
+
+
+def test_dead_child_details_surfaces_a_buried_oom_line(tmp_path):
+    log = tmp_path / "child.stderr.log"
+    noise = "\n".join(f"atexit chatter {i}" for i in range(500))
+    log.write_text(
+        f"start\ntorch.OutOfMemoryError: CUDA out of memory\n{noise}\n",
+        encoding="utf-8",
+    )
+    proc = _fake_proc(poll=1, returncode=1)
+    handle = ChildHandle(endpoint="127.0.0.1:1", process=proc, stderr_log=log)
+
+    details = dead_child_details(handle)
+
+    assert details is not None
+    assert "OutOfMemoryError" in details
 
 
 def test_terminate_graceful_stop_then_clean_exit(monkeypatch):

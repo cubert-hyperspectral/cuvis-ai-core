@@ -3,22 +3,35 @@
 A crashed child's stdout/stderr logs are its only postmortem evidence,
 and every teardown path ``rmtree``-s the session tree that holds them.
 These tests pin the preserve-before-delete helper: best-effort copies,
-the marker file, the env-overridable store location, and the newest-N
-bound on the store.
+the marker file, the env-overridable store location, the newest-N bound
+on the store, and idempotence per session id (the failing RPC and the
+later teardown must not produce two directories for one crash).
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import threading
 from pathlib import Path
+
+import pytest
 
 from cuvis_ai_core.orchestrator import crash_logs
 from cuvis_ai_core.orchestrator.crash_logs import (
     crash_dir_root,
     preserve_child_logs,
     preserve_session_logs,
+    reset_for_tests,
 )
+
+
+@pytest.fixture(autouse=True)
+def _forget_preserved_sessions():
+    """The preserved-per-session map is module state; start every test clean."""
+    reset_for_tests()
+    yield
+    reset_for_tests()
 
 
 # ---------------------------------------------------------------------------
@@ -193,3 +206,101 @@ def test_preserve_session_logs_survives_unscannable_tree(monkeypatch, tmp_path):
     assert preserve_session_logs(session_root, session_id="sess-locked") is None
     # Logs exist on disk, but they were never reached -> store not created.
     assert not (tmp_path / "crashes").exists()
+
+
+# ---------------------------------------------------------------------------
+# Idempotence per session id
+# ---------------------------------------------------------------------------
+
+
+def test_preserve_child_logs_is_idempotent_per_session(monkeypatch, tmp_path):
+    """The second call for one session returns the first directory, unchanged."""
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    stdout_log, stderr_log = _write_logs(tmp_path)
+
+    first = preserve_child_logs(
+        (stdout_log, stderr_log), session_id="sess-dup", exit_code=9
+    )
+    second = preserve_child_logs(
+        (stdout_log, stderr_log), session_id="sess-dup", exit_code=9
+    )
+
+    assert first is not None
+    assert second == first
+    assert [p.name for p in (tmp_path / "crashes").iterdir()] == [first.name]
+
+
+def test_preserve_child_logs_still_separates_distinct_sessions(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    stdout_log, stderr_log = _write_logs(tmp_path)
+
+    one = preserve_child_logs((stdout_log, stderr_log), session_id="a", exit_code=1)
+    two = preserve_child_logs((stdout_log, stderr_log), session_id="b", exit_code=1)
+
+    assert one is not None and two is not None and one != two
+
+
+def test_preserve_child_logs_two_threads_produce_one_directory(monkeypatch, tmp_path):
+    """close_session and the failing RPC can race; the lock leaves one folder."""
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    stdout_log, stderr_log = _write_logs(tmp_path)
+    start = threading.Barrier(2)
+    results: list[Path | None] = [None, None]
+
+    def _preserve(index: int) -> None:
+        start.wait(timeout=5)
+        results[index] = preserve_child_logs(
+            (stdout_log, stderr_log), session_id="sess-race", exit_code=9
+        )
+
+    threads = [threading.Thread(target=_preserve, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert results[0] is not None
+    assert results[0] == results[1]
+    assert len(list((tmp_path / "crashes").iterdir())) == 1
+
+
+def test_a_failed_preservation_is_not_remembered(monkeypatch, tmp_path):
+    """Nothing was preserved, so a later attempt must be allowed to try again."""
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    stdout_log, stderr_log = _write_logs(tmp_path)
+
+    def _locked(src, dst, **kwargs):
+        raise OSError("file is locked")
+
+    monkeypatch.setattr(shutil, "copy2", _locked)
+    assert (
+        preserve_child_logs(
+            (stdout_log, stderr_log), session_id="sess-retry", exit_code=9
+        )
+        is None
+    )
+
+    monkeypatch.undo()
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    assert (
+        preserve_child_logs(
+            (stdout_log, stderr_log), session_id="sess-retry", exit_code=9
+        )
+        is not None
+    )
+
+
+def test_preserve_child_logs_ignores_non_path_entries(monkeypatch, tmp_path):
+    """Log paths read off a child handle with getattr can be anything."""
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    _, stderr_log = _write_logs(tmp_path)
+
+    dest = preserve_child_logs(
+        (object(), stderr_log), session_id="sess-junk", exit_code=1
+    )
+
+    assert dest is not None
+    assert [p.name for p in sorted(dest.iterdir())] == [
+        "child.stderr.log",
+        "crash_info.txt",
+    ]

@@ -877,7 +877,14 @@ def _make_child_dead(handle, tmp_path, *, exit_code=9):
     handle.process = None  # dead_child_details reads returncode directly
     handle.returncode = exit_code
     handle.stderr_log = stderr
+    handle.stdout_log = None
+    handle.endpoint = "127.0.0.1:51973"
     return stderr
+
+
+def _trailers(ctx) -> dict[str, str]:
+    """The crash postmortem the parent attached to the finished call."""
+    return dict(ctx.trailing_metadata())
 
 
 def test_forward_train_reports_child_crash_when_child_has_exited(tmp_path):
@@ -922,6 +929,184 @@ def test_forward_inference_reports_child_crash_when_child_has_exited(tmp_path):
     assert resp == cuvis_ai_pb2.InferenceResponse()
     assert ctx.code() is grpc.StatusCode.INTERNAL
     assert "0xC0000409" in ctx.details()
+
+
+# ---------------------------------------------------------------------------
+# Crash postmortem: the codes that get probed, the preserved logs, and the
+# trailing metadata the desktop client reads instead of parsing the message.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _forget_preserved_sessions():
+    """Crash preservation is idempotent per session id via module state."""
+    from cuvis_ai_core.orchestrator.crash_logs import reset_for_tests
+
+    reset_for_tests()
+    yield
+    reset_for_tests()
+
+
+@pytest.fixture
+def crash_store(monkeypatch, tmp_path):
+    """Point the crash-log store at a throwaway directory."""
+    root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(root))
+    return root
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.UNKNOWN,
+        grpc.StatusCode.CANCELLED,
+        grpc.StatusCode.INTERNAL,
+    ],
+)
+def test_every_probe_code_from_a_dead_child_reports_the_crash(
+    tmp_path, crash_store, code
+):
+    """A dead child dresses its death up as any of four codes; all are probed."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path)
+    handle.stub.return_value.Inference.side_effect = _InMemoryRpcError(
+        code, "transport noise"
+    )
+
+    orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert "child runtime exited unexpectedly" in ctx.details()
+    assert "transport noise" not in ctx.details()
+
+
+def test_internal_from_a_live_child_passes_through_without_probing(monkeypatch):
+    """INTERNAL is also a business error; a live child's own status survives."""
+
+    class _LiveProcess:
+        def __init__(self):
+            """Start with no recorded ``wait`` calls."""
+            self.wait_calls = 0
+
+        def poll(self):
+            """Report the child as still running."""
+            return None
+
+        def wait(self, timeout=None):
+            """Record the stall a reap wait would introduce."""
+            self.wait_calls += 1
+            return None
+
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    process = _LiveProcess()
+    handle.process = process
+    handle.stub.return_value.Inference.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.INTERNAL, "the pipeline raised"
+    )
+
+    orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert ctx.details() == "the pipeline raised"
+    # Poll-only for a non-UNAVAILABLE code: no business error pays the wait.
+    assert process.wait_calls == 0
+    assert _trailers(ctx) == {}
+
+
+def test_dead_child_preserves_logs_and_sets_trailers(tmp_path, crash_store):
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path, exit_code=3221226505)
+    handle.stub.return_value.Inference.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.UNAVAILABLE, "Socket closed"
+    )
+
+    orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+
+    crash_dir = sm.get_session(sid).crash_log_dir
+    assert crash_dir is not None and crash_dir.is_dir()
+    assert (crash_dir / "child.stderr.log").exists()
+    # The client is told where the evidence went, at failure time.
+    assert f"logs preserved at {crash_dir}" in ctx.details()
+    assert _trailers(ctx) == {
+        orchestrator_bridge.TRAILER_CHILD_EXIT_CODE: "3221226505",
+        orchestrator_bridge.TRAILER_CHILD_EXIT_TEXT: "3221226505 (0xC0000409)",
+        orchestrator_bridge.TRAILER_CRASH_LOG_DIR: str(crash_dir),
+    }
+
+
+def test_close_session_does_not_preserve_a_second_directory(tmp_path, crash_store):
+    """The failing RPC preserved already; teardown must reuse that directory."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path)
+    handle.terminate.return_value = 9
+    handle.stub.return_value.Inference.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.UNAVAILABLE, "Socket closed"
+    )
+
+    orchestrator_bridge.forward_inference(
+        sm, cuvis_ai_pb2.InferenceRequest(session_id=sid), ctx
+    )
+    first = sm.get_session(sid).crash_log_dir
+    sm.close_session(sid)
+
+    assert first is not None
+    assert [p.name for p in crash_store.iterdir()] == [first.name]
+
+
+def test_forward_train_sets_trailers_after_the_yielded_responses(tmp_path, crash_store):
+    """A child that dies mid-stream: responses first, then INTERNAL + trailers."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    _make_child_dead(handle, tmp_path)
+
+    def _dies_after_two(_request):
+        yield cuvis_ai_pb2.TrainResponse()
+        yield cuvis_ai_pb2.TrainResponse()
+        raise _InMemoryRpcError(grpc.StatusCode.UNKNOWN, "stream broken")
+
+    handle.stub.return_value.Train.side_effect = _dies_after_two
+
+    out = list(
+        orchestrator_bridge.forward_train(
+            sm, cuvis_ai_pb2.TrainRequest(session_id=sid), ctx
+        )
+    )
+
+    assert len(out) == 2
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert "child runtime exited unexpectedly" in ctx.details()
+    trailers = _trailers(ctx)
+    assert trailers[orchestrator_bridge.TRAILER_CHILD_EXIT_CODE] == "9"
+    assert trailers[orchestrator_bridge.TRAILER_CHILD_EXIT_TEXT] == "9"
+    assert trailers[orchestrator_bridge.TRAILER_CRASH_LOG_DIR].endswith(sid)
+
+
+def test_trailer_keys_are_the_agreed_wire_names():
+    """The desktop client reads these three literal names; keep them stable."""
+    assert orchestrator_bridge.TRAILER_CHILD_EXIT_CODE == "cuvis-child-exit-code"
+    assert orchestrator_bridge.TRAILER_CHILD_EXIT_TEXT == "cuvis-child-exit-text"
+    assert orchestrator_bridge.TRAILER_CRASH_LOG_DIR == "cuvis-crash-log-dir"
 
 
 # ---------------------------------------------------------------------------
