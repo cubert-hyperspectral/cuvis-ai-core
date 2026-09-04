@@ -231,9 +231,7 @@ class TestStageAwareExecution:
         class TrainOnlyNode(Node):
             INPUT_SPECS = {"x": PortSpec(dtype=torch.float32, shape=())}
             OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=())}
-
-            def __init__(self):
-                super().__init__(execution_stages={ExecutionStage.TRAIN})
+            EXECUTION_STAGES = {ExecutionStage.TRAIN}
 
             def forward(self, x, **kwargs):
                 return {"out": x * 2}

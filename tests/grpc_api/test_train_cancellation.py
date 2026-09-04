@@ -35,7 +35,6 @@ from cuvis_ai_core.training.config import (
     TrainRunConfig,
 )
 from cuvis_ai_core.training.trainers import StatisticalTrainer, TrainingCancelled
-from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.pipeline import PortSpec
 from tests.fixtures.mock_nodes import SimpleLossNode
 
@@ -170,7 +169,6 @@ def _build_pipeline() -> tuple[CuvisPipeline, _StatNode, SimpleLossNode]:
     stat = _StatNode(name="stat")
     proj = _Projection(dim=4, name="projection")
     loss = SimpleLossNode(name="mse_loss")
-    loss.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL}
     pipeline.connect(
         (stat.normalized, proj.features),
         (proj.outputs.projected, loss.predictions),

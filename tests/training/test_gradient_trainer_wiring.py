@@ -45,6 +45,7 @@ class _TrainableNode(Node):
 class _LossNode(Node):
     INPUT_SPECS = {"value": PortSpec(dtype=torch.float32, shape=())}
     OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
+    EXECUTION_STAGES = {ExecutionStage.TRAIN}
 
     def forward(self, value, **kwargs):
         return {"loss": value}
@@ -60,7 +61,7 @@ class _MockDataModule(pl.LightningDataModule):
 def _pipeline() -> CuvisPipeline:
     pipeline = CuvisPipeline("wiring")
     source = _TrainableNode()
-    loss = _LossNode(name="loss", execution_stages={ExecutionStage.TRAIN})
+    loss = _LossNode(name="loss")
     pipeline.connect(source.outputs.out, loss.value)
     return pipeline
 

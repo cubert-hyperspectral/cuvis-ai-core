@@ -80,8 +80,9 @@ class GatedSinkNode(Node):
     }
     OUTPUT_SPECS = {}
 
+    EXECUTION_STAGES = {ExecutionStage.VAL, ExecutionStage.TEST}
+
     def __init__(self, **kwargs) -> None:
-        kwargs.setdefault("execution_stages", {ExecutionStage.VAL, ExecutionStage.TEST})
         super().__init__(**kwargs)
         self.forward_calls = 0
 

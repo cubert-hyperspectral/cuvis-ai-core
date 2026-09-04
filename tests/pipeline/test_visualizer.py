@@ -26,6 +26,7 @@ class ConsumerNode(Node):
         "data": PortSpec(torch.Tensor, (-1, 3)),
     }
     OUTPUT_SPECS: dict[str, PortSpec] = {}
+    EXECUTION_STAGES = {ExecutionStage.TRAIN}
 
     def forward(self, **inputs):
         return {}
@@ -33,8 +34,8 @@ class ConsumerNode(Node):
 
 def _build_pipeline() -> CuvisPipeline:
     pipeline = CuvisPipeline("phase3")
-    source = ProducerNode(name="source", execution_stages={ExecutionStage.ALWAYS})
-    sink = ConsumerNode(name="sink", execution_stages={ExecutionStage.TRAIN})
+    source = ProducerNode(name="source")
+    sink = ConsumerNode(name="sink")
     pipeline.connect(source.outputs.data, sink.inputs.data)
     return pipeline, source, sink
 

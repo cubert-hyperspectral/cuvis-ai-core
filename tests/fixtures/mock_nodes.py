@@ -428,11 +428,9 @@ class SimpleLossNode(Node):
         ),
     }
 
-    # Loss nodes only execute during training/validation/test. Declared on the
-    # class like a real loss node; tests that exercise other stage sets reassign
-    # execution_stages on the instance, which the mutable opt-in allows.
+    # Loss nodes only execute during training/validation/test, declared on the
+    # class like a real loss node.
     EXECUTION_STAGES = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
-    EXECUTION_STAGES_MUTABLE = True
 
     def __init__(self, weight: float = 1.0, **kwargs):
         self.weight = weight
@@ -511,19 +509,11 @@ class MockMetricNode(Node):
         "metrics": PortSpec(dtype=list, shape=(), description="List of Metric objects"),
     }
 
-    def __init__(
-        self,
-        execution_stages: set[ExecutionStage] | None = None,
-        **kwargs,
-    ):
-        name, execution_stages = Node.consume_base_kwargs(
-            kwargs, execution_stages or {ExecutionStage.VAL, ExecutionStage.TEST}
-        )
-        super().__init__(
-            name=name,
-            execution_stages=execution_stages,
-            **kwargs,
-        )
+    # Metric nodes run in val/test only, declared on the class like a real one.
+    EXECUTION_STAGES = {ExecutionStage.VAL, ExecutionStage.TEST}
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def forward(self, predictions, targets, context: Context, **kwargs):
         """Compute simple accuracy-like metric (percentage of close predictions)."""

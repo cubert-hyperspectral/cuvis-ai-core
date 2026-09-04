@@ -17,7 +17,6 @@ import torch
 
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.pipeline import PortSpec
 from tests.fixtures import MockStatisticalTrainableNode, SimpleLossNode
 
@@ -62,11 +61,6 @@ class TestRequiredPortValidation:
             input_dim=8, hidden_dim=4
         )  # I: data, O: result
         loss_node = SimpleLossNode(weight=0.3)  # I: predictions, targets, O: loss
-        loss_node.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -102,11 +96,6 @@ class TestRequiredPortValidation:
         )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -142,11 +131,6 @@ class TestRequiredPortValidation:
             input_dim=4, hidden_dim=2, name="trainable"
         )
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -365,11 +349,6 @@ class TestStageAwareExecution:
         )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),
@@ -406,11 +385,6 @@ class TestStageAwareExecution:
         )
         trainable._statistically_initialized = True  # Mark as initialized for testing
         loss_node = SimpleLossNode(weight=0.3)
-        loss_node.execution_stages = {
-            ExecutionStage.TRAIN,
-            ExecutionStage.VAL,
-            ExecutionStage.TEST,
-        }
 
         pipeline.connect(
             (data.outputs.cube, statistical_node.data),

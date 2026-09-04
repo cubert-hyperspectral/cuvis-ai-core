@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.0 - 2026-09-04
+
+- **Execution stages are class-attribute only (breaking).** `Node.__init__` no longer takes
+  `execution_stages=`: the stages a node runs in are exactly its class's `EXECUTION_STAGES`.
+  Gone with it are the per-instance state, the `execution_stages` setter and the
+  `EXECUTION_STAGES_MUTABLE` opt-in (`node.execution_stages` is a read-only property returning
+  the class declaration; assigning to it raises `AttributeError`), and `Node.consume_base_kwargs`
+  (pass `**kwargs` straight to `super().__init__`). A pipeline yaml may still carry the inert
+  `hparams: {execution_stages: null}` that earlier releases wrote; it is accepted and dropped.
+  Any other value (`execution_stages: [inference]`) fails at load with a `TypeError` naming the
+  node: picking a different class is the only way to change a node's stages, so running the
+  TensorBoard monitor at inference is no longer a yaml opt-in (`Predictor.predict(stage=
+  ExecutionStage.TEST)` runs the val/test nodes over a dataset instead). Plugins that already
+  declare their stages on the class (adaclip 0.3.2, dinomaly 0.6.4, inspecscrap 0.3.0,
+  unet 0.3.0, augment 0.4.3) need no change; a subclass that still names `execution_stages`
+  in its own `__init__` signature must drop it.
+
 ## 0.14.1 - 2026-09-03
 
 - **Execution stages are now a class-level declaration.** `Node` gains
