@@ -2,7 +2,35 @@
 
 ## 0.16.2 - 2026-09-04
 
-- Added a post-training threshold-calibration phase to the trainrun flow. `cuvis_ai_core.training.calibrate_pipeline_deciders(pipeline, datamodule)` runs the trained pipeline over the validation split, collects the scores feeding each decider and the ground-truth `mask`, and calls `decider.calibrate(scores, targets)` so a saved checkpoint ships thresholds matched to its own weights instead of stale hparams. It is wired into both training paths: `restore_trainrun` (CLI) between the gradient fit and the save, and the gRPC gradient `Train` service (production / CuvisNEXT), after which the session's cached pipeline config is dropped so the save re-derives the calibrated hparams from the live pipeline. Skips with a log when the pipeline has no calibratable decider or the val split is single-class. The base `BinaryDecider` gains a no-op `calibrate` so the phase can treat any decider uniformly; the F1-max sweep math lives on the decider subclasses in cuvis-ai.
+- **Post-training threshold calibration for deciders.**
+  `cuvis_ai_core.training.calibrate_pipeline_deciders(pipeline, datamodule)` runs the trained
+  pipeline over the validation split, collects the scores feeding each decider and the ground-truth
+  `mask`, and calls `decider.calibrate(scores, targets)` so a saved checkpoint ships thresholds
+  matched to its own weights instead of stale hparams. It runs in every training path:
+  `restore_trainrun` (CLI) after the statistical or gradient fit and before the save, and both gRPC
+  `Train` paths (gradient and statistical; production / CuvisNEXT), after which the session's cached
+  pipeline config is dropped so the save re-derives the calibrated hparams from the live pipeline.
+  The base `BinaryDecider` gains a no-op `calibrate` so the phase can treat any decider uniformly;
+  the F1-max sweep math lives on the decider subclasses in cuvis-ai (0.15.1 and later).
+- **The outcome is visible, not just logged.** The phase returns a `CalibrationOutcome` (per-decider
+  reports and skip reasons, a phase-level reason, `calibrated`, `summary()`), and the completion
+  `TrainResponse.message` carries its one-line summary whenever the pipeline has a calibratable
+  decider: `thresholds calibrated on val: gate (image_threshold 2.5, pixel_threshold 2.5)` or
+  `thresholds not calibrated: val split is single-class (0/12 frames anomalous)`. CuvisNEXT shows
+  that message as the training status; the CLI logs the same line.
+- **Calibration never costs the trained weights.** A `calibrate` that raises (cuvis-ai's
+  `CalibrationError` on a shape mismatch, non-finite scores, single-class targets or an unsupported
+  `reduce_dims`, or any other error) and a failing inference pass over the split are logged with
+  their traceback, reported in the outcome, and the run continues to the save with the shipped
+  thresholds.
+- **Ground-truth `mask` discovery follows the originator.** The target mask is the `mask` output of
+  the node that produces it (no incoming `mask` edge); nodes that consume and re-emit `mask`, such
+  as an augmentation wrapper echoing it at inference, no longer make the phase skip. Two genuine
+  originators, or none, still skip with the candidates named in the reason.
+- Two things to know: the calibration pass is a full inference forward over the split, so sink nodes
+  (video / JSON writers) fire once more; and metrics reported on the same validation split after
+  calibration are optimistic, because the thresholds were chosen on it. Hold out a test split for
+  the numbers that matter.
 
 ## 0.16.1 - 2026-09-04
 

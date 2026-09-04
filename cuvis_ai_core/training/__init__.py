@@ -15,7 +15,10 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
     TrainRunConfig,
 )
-from cuvis_ai_core.training.calibration import calibrate_pipeline_deciders
+from cuvis_ai_core.training.calibration import (
+    CalibrationOutcome,
+    calibrate_pipeline_deciders,
+)
 from cuvis_ai_core.training.predictor import Predictor
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
 from cuvis_ai_schemas.execution import Context
@@ -37,5 +40,6 @@ __all__ = [
     "GradientTrainer",
     "StatisticalTrainer",
     # Post-training calibration
+    "CalibrationOutcome",
     "calibrate_pipeline_deciders",
 ]

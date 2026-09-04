@@ -19,6 +19,7 @@ from cuvis_ai_core.grpc.training_service import TrainingService
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
+from cuvis_ai_core.training import CalibrationOutcome
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 
 
@@ -657,11 +658,16 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
     # real (unset) event so the drained stream is not reported as cancelled.
     session = Mock(stop_event=threading.Event())
 
+    outcome = CalibrationOutcome(
+        split="val",
+        applicable=True,
+        reports={"dec": {"threshold": {"old": 0.5, "new": 0.42}}},
+    )
     with (
         patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
         patch(
             "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
-            return_value=[],
+            return_value=outcome,
         ),
     ):
         responses = list(
@@ -673,3 +679,69 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
     # completion.
     assert mock_gt.return_value.fit.called
     assert responses
+    # The post-fit calibration outcome rides on the completion message, and a
+    # calibrated pipeline drops the cached config so the save re-serializes it.
+    assert responses[-1].message == (
+        "Gradient training complete; thresholds calibrated on val: dec (threshold 0.42)"
+    )
+    assert session.pipeline_config is None
+
+
+def test_calibrate_session_deciders_message_and_cache_drop():
+    """Not-calibrated outcomes keep the cached config and still reach the message; a
+    pipeline without a calibratable decider stays silent; no pipeline, no phase."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    target = "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders"
+
+    session = Mock(stop_event=threading.Event())
+    cached = session.pipeline_config
+    skipped = CalibrationOutcome(
+        split="val", applicable=True, reason="val split is single-class (0/3 frames)"
+    )
+    with patch(target, return_value=skipped):
+        suffix = service._calibrate_session_deciders(session, Mock())
+    assert suffix == (
+        "; thresholds not calibrated: val split is single-class (0/3 frames)"
+    )
+    assert session.pipeline_config is cached
+
+    silent = CalibrationOutcome(split="val", applicable=False)
+    with patch(target, return_value=silent):
+        assert service._calibrate_session_deciders(session, Mock()) == ""
+
+    with patch(target) as mock_phase:
+        assert service._calibrate_session_deciders(Mock(pipeline=None), Mock()) == ""
+    mock_phase.assert_not_called()
+
+
+def test_train_statistical_calibrates_and_reports_on_completion():
+    """The statistical Train path runs the same post-fit calibration as the gradient
+    path and the CLI, and its completion message carries the outcome."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    session = Mock(stop_event=threading.Event())
+    outcome = CalibrationOutcome(
+        split="val",
+        applicable=True,
+        reports={"dec": {"quantile": {"old": 0.99, "new": 0.995}}},
+    )
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
+        patch(
+            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
+            return_value=outcome,
+        ) as mock_phase,
+    ):
+        responses = list(service._train_statistical(session, Mock()))
+
+    assert mock_st.return_value.fit.called
+    mock_phase.assert_called_once()
+    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+    assert responses[-1].message == (
+        "Statistical training complete; thresholds calibrated on val: "
+        "dec (quantile 0.995)"
+    )
+    assert session.pipeline_config is None

@@ -515,6 +515,10 @@ class TrainingService:
         # Store trainer in session for potential later use
         session.trainer = trainer
 
+        # Same post-fit threshold calibration as the gradient path and the CLI, so a
+        # statistical-only pipeline with a decider ships fitted thresholds too.
+        calibration = self._calibrate_session_deciders(session, datamodule)
+
         # Yield completion
         yield cuvis_ai_pb2.TrainResponse(
             context=cuvis_ai_pb2.Context(
@@ -524,7 +528,7 @@ class TrainingService:
                 global_step=1,
             ),
             status=cuvis_ai_pb2.TRAIN_STATUS_COMPLETE,
-            message="Statistical training complete",
+            message=f"Statistical training complete{calibration}",
         )
 
     def _train_gradient(
@@ -607,16 +611,7 @@ class TrainingService:
         if training_error is not None:
             raise training_error
 
-        # Calibrate decider thresholds on the validation split so a later save ships
-        # thresholds matched to these weights; drop the cached config so the save
-        # re-derives the calibrated hparams from the (now-mutated) live pipeline. No-op
-        # when the pipeline has no calibratable decider or the val split is single-class.
-        if session.pipeline is not None:
-            reports = calibrate_pipeline_deciders(
-                session.pipeline, datamodule, split="val"
-            )
-            if reports:
-                session.pipeline_config = None
+        calibration = self._calibrate_session_deciders(session, datamodule)
 
         final_context = Context(
             stage=ExecutionStage.TRAIN,
@@ -629,8 +624,27 @@ class TrainingService:
             losses={},
             metrics={},
             status="complete",
-            message="Gradient training complete",
+            message=f"Gradient training complete{calibration}",
         )
+
+    def _calibrate_session_deciders(
+        self, session: SessionState, datamodule: "pl.LightningDataModule"
+    ) -> str:
+        """Run the post-training threshold calibration on the session's pipeline.
+
+        The deciders are mutated in place; when any was calibrated the session's cached
+        pipeline config is dropped so the next save re-derives the calibrated hparams
+        from the live pipeline. Returns the suffix for the completion message: empty
+        when the pipeline has no calibratable decider, otherwise
+        ``"; thresholds calibrated on val: ..."`` or ``"; thresholds not calibrated: ..."``
+        so the caller sees the result without reading the log.
+        """
+        if session.pipeline is None:
+            return ""
+        outcome = calibrate_pipeline_deciders(session.pipeline, datamodule, split="val")
+        if outcome.calibrated:
+            session.pipeline_config = None
+        return f"; {outcome.summary()}" if outcome.applicable else ""
 
     def _deserialize_training_config(
         self, config_proto: cuvis_ai_pb2.TrainingConfig
