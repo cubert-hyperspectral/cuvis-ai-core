@@ -13,7 +13,11 @@ from tqdm import tqdm
 from cuvis_ai_core.data.datamodule import create_data_module
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training import GradientTrainer, StatisticalTrainer
+from cuvis_ai_core.training import (
+    GradientTrainer,
+    StatisticalTrainer,
+    calibrate_pipeline_deciders,
+)
 from cuvis_ai_core.training.config import TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
@@ -688,6 +692,11 @@ def restore_trainrun(
             grad_trainer.fit()
         else:
             logger.info("  Step 2: Skipped (statistical-only)")
+
+        # Calibrate decider thresholds on the validation split so the saved checkpoint
+        # ships thresholds matched to its own weights (no-op when the pipeline has no
+        # calibratable decider or the val split is single-class).
+        calibrate_pipeline_deciders(pipeline, datamodule, split="val")
 
         # Step 3: Save trained pipeline
         logger.info("  Step 3: Saving trained pipeline...")

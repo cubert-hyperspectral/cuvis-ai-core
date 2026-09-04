@@ -616,9 +616,7 @@ class TestTrainingServiceStatus:
         # A trainer alone (no recorded Train-stream progress) is UNSPECIFIED.
         request = cuvis_ai_pb2.GetTrainStatusRequest(session_id=session_id)
         response = self.service.get_train_status(request, self.ctx)
-        assert (
-            response.latest_progress.status == cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
-        )
+        assert response.latest_progress.status == cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED
 
         # Once the Train stream recorded progress, that response is served.
         session.latest_train_response = cuvis_ai_pb2.TrainResponse(
@@ -659,7 +657,13 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
     # real (unset) event so the drained stream is not reported as cancelled.
     session = Mock(stop_event=threading.Event())
 
-    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
+    with (
+        patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
+        patch(
+            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
+            return_value=[],
+        ),
+    ):
         responses = list(
             service._train_gradient(session, Mock(), Mock(), training_config)
         )

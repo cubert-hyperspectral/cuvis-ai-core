@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.2 - 2026-09-04
+
+- Added a post-training threshold-calibration phase to the trainrun flow. `cuvis_ai_core.training.calibrate_pipeline_deciders(pipeline, datamodule)` runs the trained pipeline over the validation split, collects the scores feeding each decider and the ground-truth `mask`, and calls `decider.calibrate(scores, targets)` so a saved checkpoint ships thresholds matched to its own weights instead of stale hparams. It is wired into both training paths: `restore_trainrun` (CLI) between the gradient fit and the save, and the gRPC gradient `Train` service (production / CuvisNEXT), after which the session's cached pipeline config is dropped so the save re-derives the calibrated hparams from the live pipeline. Skips with a log when the pipeline has no calibratable decider or the val split is single-class. The base `BinaryDecider` gains a no-op `calibrate` so the phase can treat any decider uniformly; the F1-max sweep math lives on the decider subclasses in cuvis-ai.
+
 ## 0.16.1 - 2026-09-04
 
 - **`SaveTrainRun` names the checkpoint after the pipeline yaml it writes.** A saved run is

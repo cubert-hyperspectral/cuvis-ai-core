@@ -13,6 +13,7 @@ import grpc
 import torch
 
 from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback, StopTrainingCallback
+from cuvis_ai_core.training import calibrate_pipeline_deciders
 from cuvis_ai_core.training.config import (
     DataConfig,
     TrainingConfig,
@@ -605,6 +606,17 @@ class TrainingService:
 
         if training_error is not None:
             raise training_error
+
+        # Calibrate decider thresholds on the validation split so a later save ships
+        # thresholds matched to these weights; drop the cached config so the save
+        # re-derives the calibrated hparams from the (now-mutated) live pipeline. No-op
+        # when the pipeline has no calibratable decider or the val split is single-class.
+        if session.pipeline is not None:
+            reports = calibrate_pipeline_deciders(
+                session.pipeline, datamodule, split="val"
+            )
+            if reports:
+                session.pipeline_config = None
 
         final_context = Context(
             stage=ExecutionStage.TRAIN,
