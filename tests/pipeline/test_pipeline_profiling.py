@@ -147,8 +147,8 @@ class TestStageSeparation:
     def test_stages_accumulated_separately(self) -> None:
         """Stats should be keyed by (stage, node_name)."""
         pipeline = CuvisPipeline("test")
-        n1 = _IdentityNode(execution_stages={ExecutionStage.ALWAYS})
-        n2 = _IdentityNode(execution_stages={ExecutionStage.ALWAYS})
+        n1 = _IdentityNode()
+        n2 = _IdentityNode()
         pipeline.connect(n1.outputs.y, n2.x)
 
         pipeline.set_profiling(enabled=True)

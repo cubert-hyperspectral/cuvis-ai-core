@@ -111,13 +111,10 @@ class Node(nn.Module, ABC, Serializable):
     # When the node runs. A class-level declaration like ``_category`` / ``_tags``:
     # subclasses override ``EXECUTION_STAGES`` on the class body (a set literal of
     # ``ExecutionStage`` members or stage names is normalized to a frozenset at
-    # class creation). Instances read it through ``execution_stages``; a
-    # constructor ``execution_stages=`` argument overrides it for that instance
-    # (which is how a pipeline yaml's ``hparams`` can move a node), and assignment
-    # after construction is refused unless the subclass opts in with
-    # ``EXECUTION_STAGES_MUTABLE = True``.
+    # class creation). Instances read it through ``execution_stages``. There is no
+    # per-instance override: every instance of a class runs in the same stages,
+    # and a pipeline yaml picks stages by picking the class.
     EXECUTION_STAGES: frozenset[ExecutionStage] = frozenset({ExecutionStage.ALWAYS})
-    EXECUTION_STAGES_MUTABLE: bool = False
 
     @classmethod
     def get_category(cls) -> NodeCategory:
@@ -133,7 +130,7 @@ class Node(nn.Module, ABC, Serializable):
 
     @classmethod
     def get_execution_stages(cls) -> frozenset[ExecutionStage]:
-        """Stages the class runs in by default (before any per-instance override)."""
+        """Stages the class runs in; every instance reports the same set."""
         return cls.EXECUTION_STAGES
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -141,8 +138,7 @@ class Node(nn.Module, ABC, Serializable):
 
         ``TRAINABLE_BUFFERS`` must be a tuple of strings; ``EXECUTION_STAGES`` is
         normalized to a ``frozenset[ExecutionStage]`` (a set literal or stage
-        names are accepted, anything else raises); ``EXECUTION_STAGES_MUTABLE``
-        must be a bool.
+        names are accepted, anything else raises).
         """
         super().__init_subclass__(**kwargs)
         if "TRAINABLE_BUFFERS" in cls.__dict__:
@@ -160,62 +156,43 @@ class Node(nn.Module, ABC, Serializable):
                 cls.__dict__["EXECUTION_STAGES"],
                 owner=f"{cls.__name__}.EXECUTION_STAGES",
             )
-        if "EXECUTION_STAGES_MUTABLE" in cls.__dict__ and not isinstance(
-            cls.__dict__["EXECUTION_STAGES_MUTABLE"], bool
-        ):
-            raise TypeError(f"{cls.__name__}.EXECUTION_STAGES_MUTABLE must be a bool.")
 
-    def __init__(
-        self,
-        name: str | None = None,
-        execution_stages: Iterable[ExecutionStage | str] | None = None,
-        *args,
-        **kwargs,
-    ) -> None:
-        """Initialize node with execution stage control.
+    def __init__(self, name: str | None = None, *args, **kwargs) -> None:
+        """Initialize the node.
 
         Parameters
         ----------
         name : str, optional
             Custom name for the node. If not provided, uses class name.
             Useful for loss/metric nodes to enable semantic logging names.
-        execution_stages : iterable of ExecutionStage or stage name, optional
-            Per-instance override of the class-level ``EXECUTION_STAGES``. Omit
-            it (the default) to run in the stages the class declares. Members or
-            their string values are accepted, so a pipeline yaml can carry
-            ``hparams: {execution_stages: [inference]}``; an unknown name raises
-            ``ValueError`` naming the node. Stages:
-            - ExecutionStage.ALWAYS: Execute in all stages (base-class default)
-            - ExecutionStage.TRAIN: Only during training
-            - ExecutionStage.VAL: Only during validation
-            - ExecutionStage.TEST: Only during testing
-            - ExecutionStage.INFERENCE: Only during inference
-            - {ExecutionStage.TRAIN, ExecutionStage.VAL}: Multiple stages
-            The value is popped before hparams are captured, so ``serialize()``
-            never writes it: an override lives in the yaml text that carried it.
+
+        ``execution_stages`` is not a constructor argument: the stages a node runs
+        in are declared on its class (``EXECUTION_STAGES``). A pipeline yaml
+        written for an earlier release may still carry the inert
+        ``hparams: {execution_stages: null}``; that key is accepted and dropped.
+        Any other value raises ``TypeError`` naming the node, because picking a
+        different class is the only way to change a node's stages.
         """
-        # Allow subclasses to forward name/execution_stages inside kwargs without duplication
+        # Allow subclasses to forward name inside kwargs without duplication
         if kwargs:
             name = kwargs.pop("name", name)
-            execution_stages = kwargs.pop("execution_stages", execution_stages)
+        legacy_stages = kwargs.pop("execution_stages", None)
+        if name is None:
+            name = type(self).__name__
+        if legacy_stages is not None:
+            raise TypeError(
+                f"{type(self).__name__} {name!r}: execution_stages is declared on "
+                "the class (EXECUTION_STAGES) and is no longer a constructor "
+                "argument; remove it from the yaml hparams or the call."
+            )
         # Initialize Serializable first to capture hparams
         Serializable.__init__(self, *args, **kwargs)
         # Then initialize nn.Module without any args/kwargs
         nn.Module.__init__(self)
 
-        if name is None:
-            name = type(self).__name__
         # Store custom name
         self._name = name
         self._pipeline_counter: int | None = None
-
-        # Execution stages: the class declaration unless this instance overrides it.
-        if execution_stages is None:
-            self._execution_stages = type(self).EXECUTION_STAGES
-        else:
-            self._execution_stages = _coerce_execution_stages(
-                execution_stages, owner=f"{type(self).__name__} {name!r}"
-            )
 
         self._statistically_initialized = False
         self._frozen = False
@@ -246,22 +223,12 @@ class Node(nn.Module, ABC, Serializable):
 
     @property
     def execution_stages(self) -> frozenset[ExecutionStage]:
-        """Stages this instance runs in (class default or constructor override)."""
-        return self._execution_stages
+        """Stages this node runs in: the class declaration ``EXECUTION_STAGES``.
 
-    @execution_stages.setter
-    def execution_stages(self, value: Iterable[ExecutionStage | str]) -> None:
-        """Refuse reassignment unless the class opted in with EXECUTION_STAGES_MUTABLE."""
-        if not type(self).EXECUTION_STAGES_MUTABLE:
-            raise AttributeError(
-                f"{type(self).__name__}.execution_stages is declared on the class "
-                "(EXECUTION_STAGES) and cannot be reassigned on an instance. Pass "
-                "execution_stages=... to the constructor for a per-instance override, "
-                "or set EXECUTION_STAGES_MUTABLE = True on the subclass."
-            )
-        self._execution_stages = _coerce_execution_stages(
-            value, owner=f"{type(self).__name__} {self.name!r}"
-        )
+        Read-only. There is no setter, so ``node.execution_stages = ...`` raises
+        ``AttributeError``; declare the stages on the class instead.
+        """
+        return type(self).EXECUTION_STAGES
 
     @property
     def requires_initial_fit(self) -> bool:
@@ -411,21 +378,6 @@ class Node(nn.Module, ABC, Serializable):
     def forward(self, **inputs: Any) -> dict[str, Any]:
         """Execute node computation returning a dictionary of named outputs."""
         raise NotImplementedError
-
-    @staticmethod
-    def consume_base_kwargs(
-        kwargs: dict[str, Any], default_stages: set[ExecutionStage] | None = None
-    ) -> tuple[str | None, set[ExecutionStage] | None]:
-        """Extract base Node kwargs centrally to avoid double-passing.
-
-        Subclasses can pop name/execution_stages here before calling super().__init__.
-        Kept for plugins written before ``EXECUTION_STAGES`` existed; new code
-        declares its default stages on the class body instead and lets
-        ``Node.__init__`` handle the optional per-instance override.
-        """
-        name = kwargs.pop("name", None)
-        execution_stages = kwargs.pop("execution_stages", default_stages)
-        return name, execution_stages
 
     def _create_ports(self) -> None:
         """Create port proxy objects from class-level specifications."""

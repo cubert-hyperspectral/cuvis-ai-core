@@ -318,11 +318,7 @@ class TestGraphStageFiltering:
         class TrainOnlyNode(Node):
             INPUT_SPECS = {"x": PortSpec(dtype=torch.float32, shape=(-1,))}
             OUTPUT_SPECS = {"y": PortSpec(dtype=torch.float32, shape=(-1,))}
-
-            def __init__(self):
-                super().__init__(
-                    execution_stages={ExecutionStage.TRAIN}
-                )  # Only executes in train stage
+            EXECUTION_STAGES = {ExecutionStage.TRAIN}  # Only executes in train stage
 
             def forward(self, x, **kwargs):
                 return {"y": x + 1}

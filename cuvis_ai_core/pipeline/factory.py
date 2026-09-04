@@ -206,7 +206,7 @@ class PipelineBuilder:
             # Extract parameters
             params = resolved_cfg.get("hparams", {})
 
-            # Instantiate node (all nodes accept **kwargs for name, execution_stages, etc.)
+            # Instantiate node (stages are declared on the class, not in hparams)
             node = node_class(**params)
 
             # Store with base name (counter will be assigned by pipeline.connect)

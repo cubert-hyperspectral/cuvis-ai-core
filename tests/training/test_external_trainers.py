@@ -70,6 +70,7 @@ class TestGradientTrainer:
         class SimpleLossNode(Node):
             INPUT_SPECS = {"value": PortSpec(dtype=torch.float32, shape=())}
             OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
+            EXECUTION_STAGES = {ExecutionStage.TRAIN, ExecutionStage.VAL}
 
             def forward(self, value, **kwargs):
                 return {"loss": value}
@@ -79,10 +80,7 @@ class TestGradientTrainer:
 
         pipeline = CuvisPipeline("test")
         source = SourceNode()
-        loss_node = SimpleLossNode(
-            name="test_loss",
-            execution_stages={ExecutionStage.TRAIN, ExecutionStage.VAL},
-        )
+        loss_node = SimpleLossNode(name="test_loss")
 
         # Nodes auto-added when connected
         pipeline.connect(source.outputs.out, loss_node.value)
@@ -123,6 +121,7 @@ class TestGradientTrainer:
         class SimpleLossNode(Node):
             INPUT_SPECS = {"value": PortSpec(dtype=torch.float32, shape=())}
             OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
+            EXECUTION_STAGES = {ExecutionStage.TRAIN, ExecutionStage.VAL}
 
             def forward(self, value, **kwargs):
                 return {"loss": value}
@@ -132,10 +131,7 @@ class TestGradientTrainer:
 
         pipeline = CuvisPipeline("test")
         source = SourceNode()
-        loss_node = SimpleLossNode(
-            name="test_loss",
-            execution_stages={ExecutionStage.TRAIN, ExecutionStage.VAL},
-        )
+        loss_node = SimpleLossNode(name="test_loss")
         pipeline.connect(source.outputs.out, loss_node.value)
 
         class MockDataModule(pl.LightningDataModule):
@@ -283,7 +279,6 @@ class TestGradientTrainer:
         normalizer = SimpleStatisticalNode()
         projection = TrainableProjection(input_dim=10, output_dim=10)
         loss_node = SimpleLossNode(name="mse_loss", weight=1.0)
-        loss_node.execution_stages = {ExecutionStage.TRAIN, ExecutionStage.VAL}
 
         # Connect nodes
         pipeline.connect(
@@ -548,6 +543,7 @@ class TestEpochPooledMetrics:
             }
             OUTPUT_SPECS = {"metrics": PortSpec(dtype=list, shape=())}
             POOLED_METRIC_NAMES = frozenset({"auroc"})
+            EXECUTION_STAGES = {ExecutionStage.VAL, ExecutionStage.TEST}
 
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
@@ -584,6 +580,11 @@ class TestEpochPooledMetrics:
 
             INPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
             OUTPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
+            EXECUTION_STAGES = {
+                ExecutionStage.TRAIN,
+                ExecutionStage.VAL,
+                ExecutionStage.TEST,
+            }
 
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
@@ -602,6 +603,11 @@ class TestEpochPooledMetrics:
         class MeanLoss(Node):
             INPUT_SPECS = {"scores": PortSpec(dtype=torch.float32, shape=(-1,))}
             OUTPUT_SPECS = {"loss": PortSpec(dtype=torch.float32, shape=())}
+            EXECUTION_STAGES = {
+                ExecutionStage.TRAIN,
+                ExecutionStage.VAL,
+                ExecutionStage.TEST,
+            }
 
             def forward(self, scores, **kwargs):
                 return {"loss": scores.mean() ** 2}
@@ -617,13 +623,9 @@ class TestEpochPooledMetrics:
 
         pipeline = CuvisPipeline("epoch_pooled_metrics")
         source = ScoreSource()
-        auroc = StreamingAUROC(
-            name="auroc_node",
-            execution_stages={ExecutionStage.VAL, ExecutionStage.TEST},
-        )
-        train_val_test = {ExecutionStage.TRAIN, ExecutionStage.VAL, ExecutionStage.TEST}
-        scaler = Scaler(name="scaler", execution_stages=train_val_test)
-        loss = MeanLoss(name="mean_loss", execution_stages=train_val_test)
+        auroc = StreamingAUROC(name="auroc_node")
+        scaler = Scaler(name="scaler")
+        loss = MeanLoss(name="mean_loss")
         # Metric reads the RAW source scores (so AUROC is decided purely by the
         # labels); the loss goes through the trainable scaler.
         pipeline.connect(
