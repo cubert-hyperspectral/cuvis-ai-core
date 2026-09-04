@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.16.0 - unreleased
+
+- **Model weights are served only from the `cubert-gmbh` Hugging Face mirrors (breaking for
+  cached installs).** Every `ModelWeights` registry entry now points at a public, ungated,
+  commit-pinned mirror under `cubert-gmbh/*` (`sam3`, `efficient-track-anything`, `dinov2`,
+  `clip`, `adaclip`) instead of the upstream repos, so `download-model` needs no Hugging Face
+  account or token and the sandboxed child resolves the same cache folders the provisioner fills.
+  The cache folder names change (`models--cubert-gmbh--*`), so an existing install re-downloads
+  its weights once; there is no migration. New registry entries: `efficienttam_s_512x512`,
+  `efficienttam_ti_512x512`, `dinov2_vitb14_reg4`, `clip_vit_l_14_336`, `adaclip_all`,
+  `adaclip_mvtec_colondb`, `adaclip_visa_clinicdb`. Entries carry `plugin` and `license`, and
+  `aux_files` is now a `{filename: sha256}` map whose companions are sha-verified too.
+- **`ModelWeights.resolve(name)` and `ModelWeights.materialize(name, dest_dir)`.** Plugins
+  resolve their weights through core instead of hardcoding an upstream repo id: `resolve`
+  returns the cached path, downloads on a miss when online (`download=None` follows
+  `HF_HUB_OFFLINE`), and raises `ModelWeightsMissingError` (a `ModelDownloadError`) naming the
+  `download-model` command when offline; `materialize` hardlinks or copies the file to a fixed
+  path for loaders that cannot read the Hugging Face cache layout. Neither writes to stdout.
+  Plugins that call them need the `hf` extra (`cuvis-ai-core[hf]`).
+- **`download-model list --json`** emits the registry as machine-readable rows (`name`,
+  `plugin`, `repo_id`, `filename`, `revision`, `sha256`, `aux_files`, `license`,
+  `requires_token`, `cache_dir_token`, `description`) for consumers such as CuvisNEXT.
+- **`tools/mirror_weights.py`** (maintainer tool, not packaged) builds, uploads and audits the
+  mirrors (`plan`, `upload`, `check`) and prints the registry entries to paste.
+- Removed the dead `cuvis_ai_core.node.huggingface` module (unreferenced, undeclared
+  `gradio_client` / `transformers` dependencies, read `HF_TOKEN` directly).
+
 ## 0.15.0 - 2026-09-04
 
 - **Execution stages are class-attribute only (breaking).** `Node.__init__` no longer takes
