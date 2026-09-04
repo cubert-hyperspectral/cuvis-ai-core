@@ -20,7 +20,8 @@ from cuvis_ai_core.training import (
     StatisticalTrainer,
     calibrate_pipeline_deciders,
 )
-from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_core.training.callbacks import build_runtime_callbacks
+from cuvis_ai_core.training.config import TrainRunConfig, create_callbacks_from_config
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
@@ -678,12 +679,19 @@ def restore_trainrun(
                 output_dir / "checkpoints"
             )
 
+        # An explicit callback list wins over the config-derived one inside the
+        # trainer, so the config callbacks are appended here rather than left
+        # for the trainer to build.
         grad_trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             training_config=training_config,
+            callbacks=[
+                *build_runtime_callbacks(training_config),
+                *create_callbacks_from_config(training_config.callbacks),
+            ],
         )
     else:
         logger.info("Detected statistical-only training configuration")

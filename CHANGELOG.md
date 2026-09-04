@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.16.3 - unreleased
+
+- **CUDA memory is reported around every validation pass.** A gradient run now logs
+  `cuda-mem phase=... allocated ... peak ... reserved ... gap ...` at fit start, at the end of
+  each train epoch, at the start of validation, after validation's first batch, and at the end
+  of validation, resetting the peak counter after each line so every one reads as "since the
+  previous phase". `gap` is `reserved - allocated`, the memory the caching allocator holds but
+  is not using. `CUVIS_CUDA_MEMORY_FRACTION=0.66` applies
+  `torch.cuda.set_per_process_memory_fraction` at fit start to reproduce a smaller card; it is a
+  soft cap (it excludes the CUDA context and transients can exceed it), and an invalid or
+  unsupported value warns and continues. The callback is a no-op without CUDA.
+- **`release_cuda_cache_on_validation: true`** in a trainrun's `training:` block adds a callback
+  that drops gradients (only when `accumulate_grad_batches == 1`) and empties the CUDA cache on
+  the way into validation, and empties it again on the way out. Off by default: each
+  `empty_cache` synchronizes the device.
+- **`limit_train_batches`, `limit_val_batches` and `num_sanity_val_steps`** in a trainrun's
+  `training:` block are forwarded to `pl.Trainer` (they come from `cuvis-ai-schemas` 0.11.0,
+  which is the new floor). Before, `extra="forbid"` rejected them outright.
+- **`--override` applies to flat trainruns.** A trainrun without a Hydra `defaults:` block went
+  straight to validation, so `restore-trainrun --override training.max_epochs=2` was accepted and
+  silently ignored. The dotlist is merged before validation now, and an override naming a field
+  the config does not have fails validation instead of disappearing.
+- `StatisticalTrainer.validate()` / `.test()` run under `torch.no_grad()`: they are evaluation
+  passes and never needed the autograd graph.
+- **Opt-in port freeing in `CuvisPipeline.forward`.** `forward(..., free_consumed_ports=True,
+  keep_ports=...)` drops each port from the forward's port table right after the last executing
+  node that reads it has run, so intermediate activations are released mid-forward instead of
+  surviving to the caller. Ports nobody reads in that forward (pipeline outputs, an `upto_node`'s
+  inputs) and `keep_ports` entries always come back. The default is `False`, so every existing
+  caller keeps the old contract; the opt-ins are the trainer step functions,
+  `StatisticalTrainer`'s evaluation passes, `Inference` when the request names `output_specs`,
+  and `Predictor` when `collect_ports` is set.
+- **Port-retention profile.** `CUVIS_PROFILE_PORT_RETENTION=1` (or
+  `pipeline.set_profiling(port_retention=True)`) logs one DEBUG line per executed node with the
+  bytes the port table still holds, CUDA subtotal included, for the first two forwards per stage.
+- **A dead child runtime now reports its cause.** The dead-child probe runs for `UNKNOWN`,
+  `CANCELLED` and `INTERNAL` as well as `UNAVAILABLE`, because a stream that was mid-flight
+  reports any of those when the process under it dies; only `UNAVAILABLE` pays a reap wait (now
+  3 s, overridable via `CUVIS_RUNTIME_DEAD_CHILD_REAP_SECONDS`), the rest poll only so a live
+  child's business error gains no latency. On a confirmed crash the parent preserves the child's
+  logs at that moment (rather than at `close_session`, after the error had already gone out),
+  names the directory in the `INTERNAL` detail, and attaches the postmortem as trailing metadata
+  under `cuvis-child-exit-code`, `cuvis-child-exit-text` and `cuvis-crash-log-dir` on every
+  forwarded RPC including the `Train` stream. `preserve_child_logs` is idempotent per session id,
+  so teardown reports the same directory instead of copying a second one. The stderr scan window
+  grows to 64 KiB and the last line naming a cause (OOM, CUDA error, traceback, fatal error) is
+  prepended when shutdown noise pushed it out of the 2 KiB tail.
+- **A stop no longer masks a training error.** The error wins unless the stop was already
+  requested when the run failed; an error a stop does swallow is logged at WARNING and named in
+  the `CANCELLED` detail.
+- New `cuvis_ai_core.node.metric_utils`: `subsample_hw(x, stride)` returns a strided
+  `[B, H, W, ...]` view (stride 1 is the identity) and `warn_below_vectorized_cutoff` logs once
+  per node when a subsample drops a frame under the 50k-element mark where the binned
+  torchmetrics implementations change code path. Shared by the metric nodes in the node library
+  and in the plugins.
+
 ## 0.16.2 - 2026-09-04
 
 - **Post-training threshold calibration for deciders.**

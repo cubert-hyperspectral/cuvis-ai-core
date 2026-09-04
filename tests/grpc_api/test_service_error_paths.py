@@ -687,6 +687,11 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
         "Gradient training complete; thresholds calibrated on val: dec (threshold 0.42)"
     )
     assert session.pipeline_config is None
+    # The runtime callbacks travel with the explicit list, and the config-derived
+    # ones are still appended after them.
+    registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
+    assert "CudaMemoryLogCallback" in registered
+    assert "CudaCacheReleaseCallback" not in registered  # opt-in, off by default
 
 
 def test_calibrate_session_deciders_message_and_cache_drop():
@@ -747,6 +752,32 @@ def test_train_statistical_calibrates_and_reports_on_completion():
         "dec (quantile 0.995)"
     )
     assert session.pipeline_config is None
+
+
+def test_train_gradient_registers_the_cache_release_when_the_config_asks(monkeypatch):
+    """``release_cuda_cache_on_validation`` reaches the trainer's callback list."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    monkeypatch.setattr(
+        service, "_configure_gradient_components", lambda *a, **k: ([], [])
+    )
+    training_config = TrainingConfig(
+        seed=7, max_epochs=1, release_cuda_cache_on_validation=True
+    )
+    session = Mock(stop_event=threading.Event())
+
+    with (
+        patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
+        patch(
+            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
+            return_value=CalibrationOutcome(split="val", applicable=False),
+        ),
+    ):
+        list(service._train_gradient(session, Mock(), Mock(), training_config))
+
+    registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
+    assert "CudaCacheReleaseCallback" in registered
 
 
 class TestRunOutcome:

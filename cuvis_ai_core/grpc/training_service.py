@@ -15,6 +15,7 @@ from loguru import logger
 
 from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback, StopTrainingCallback
 from cuvis_ai_core.training import calibrate_pipeline_deciders
+from cuvis_ai_core.training.callbacks import build_runtime_callbacks
 from cuvis_ai_core.training.config import (
     DataConfig,
     TrainingConfig,
@@ -621,6 +622,7 @@ class TrainingService:
         callback_list = [
             ProgressStreamCallback(progress_handler),
             StopTrainingCallback(session.stop_event),
+            *build_runtime_callbacks(training_config),
         ]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
