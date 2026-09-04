@@ -13,7 +13,12 @@ from tqdm import tqdm
 from cuvis_ai_core.data.datamodule import create_data_module
 from cuvis_ai_core.pipeline.factory import PipelineBuilder
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training import GradientTrainer, StatisticalTrainer
+from cuvis_ai_core.training import (
+    CalibrationOutcome,
+    GradientTrainer,
+    StatisticalTrainer,
+    calibrate_pipeline_deciders,
+)
 from cuvis_ai_core.training.config import TrainRunConfig
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
@@ -478,6 +483,15 @@ def _load_evaluation_weights(
     return None
 
 
+def _log_calibration_outcome(outcome: CalibrationOutcome) -> None:
+    """Report the post-fit threshold calibration: info when calibrated, warning when
+    a calibratable decider was left with its shipped thresholds, silent otherwise."""
+    if not outcome.applicable:
+        return
+    report = logger.info if outcome.calibrated else logger.warning
+    report(f"  Calibration: {outcome.summary()}")
+
+
 def restore_trainrun(
     trainrun_path: str | Path,
     mode: Literal["train", "validate", "test", "info"] = "info",
@@ -688,6 +702,13 @@ def restore_trainrun(
             grad_trainer.fit()
         else:
             logger.info("  Step 2: Skipped (statistical-only)")
+
+        # Calibrate decider thresholds on the validation split so the saved checkpoint
+        # ships thresholds matched to its own weights. Best effort: a skipped or failed
+        # calibration is reported here and the save below still happens.
+        _log_calibration_outcome(
+            calibrate_pipeline_deciders(pipeline, datamodule, split="val")
+        )
 
         # Step 3: Save trained pipeline
         logger.info("  Step 3: Saving trained pipeline...")

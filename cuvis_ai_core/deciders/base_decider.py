@@ -58,3 +58,22 @@ class BinaryDecider(Node):
         """
 
         pass
+
+    def calibrate(self, scores: Tensor, targets: Tensor) -> dict[str, Any] | None:
+        """Re-fit this decider's threshold(s) on a labelled split (no-op by default).
+
+        The in-training calibration phase collects the scores feeding this decider and the
+        ground-truth mask over the validation split, then calls this method. Subclasses that
+        support ground-truth calibration override it to sweep their own decision rule to
+        F1-max and update their thresholds in place, returning a small report; deciders that
+        do not override it are simply skipped. The base is a no-op so the phase can treat any
+        decider uniformly.
+
+        Args:
+            scores: Decider-input scores stacked over the split, shaped (N, H, W, C).
+            targets: Ground-truth anomaly mask, (N, H, W, C) or (N, H, W).
+
+        Returns:
+            A per-decider calibration report, or ``None`` when calibration is unsupported.
+        """
+        return None
