@@ -223,8 +223,14 @@ class InferenceService:
 
         This mirrors the Python API pattern where the pipeline is moved to a device
         (e.g., via ``pipeline.to('cuda')``) and dataloader batches are produced on
-        that device. Here, gRPC deserialization always yields CPU tensors, so we
-        align them with the pipeline device before forwarding.
+        that device. Here, most gRPC deserialization yields CPU tensors, so we align
+        them with the pipeline device before forwarding.
+
+        A ``cuda_ipc`` payload is the exception: it arrives already resident on the
+        GPU. ``_get_pipeline_device`` reports CPU for a pipeline whose nodes expose no
+        parameter or buffer, so moving such a tensor would copy it back to the host and
+        make the zero-copy transport slower than shared memory while still appearing to
+        work. Tensors already on a CUDA device are therefore left alone.
 
         Uses the same robust device detection pattern as StatisticalTrainer,
         iterating through all nodes to find one with parameters or buffers.
@@ -236,7 +242,7 @@ class InferenceService:
 
         moved: dict[str, Any] = {}
         for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
+            if isinstance(value, torch.Tensor) and not value.is_cuda:
                 moved[key] = value.to(device)
             else:
                 moved[key] = value

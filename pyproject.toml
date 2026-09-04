@@ -81,6 +81,13 @@ hf = [
     "huggingface-hub>=0.20.0",
 ]
 
+# Needed only to receive a Tensor with a cuda_ipc payload. Optional because a server
+# reached over the network, or one talking to a producer without GPU mode, never sees
+# one. Must be installed in the child runtime venv: that is the process that imports.
+cuda = [
+    "cuda-python>=13.0",
+]
+
 dev = [
     "ipykernel",
     "jupyterlab",
