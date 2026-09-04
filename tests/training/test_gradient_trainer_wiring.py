@@ -60,8 +60,7 @@ class _MockDataModule(pl.LightningDataModule):
 def _pipeline() -> CuvisPipeline:
     pipeline = CuvisPipeline("wiring")
     source = _TrainableNode()
-    loss = _LossNode(name="loss")
-    loss.execution_stages = {ExecutionStage.TRAIN}
+    loss = _LossNode(name="loss", execution_stages={ExecutionStage.TRAIN})
     pipeline.connect(source.outputs.out, loss.value)
     return pipeline
 

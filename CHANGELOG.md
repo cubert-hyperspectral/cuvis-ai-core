@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.1 - 2026-09-03
+
+- **Execution stages are now a class-level declaration.** `Node` gains
+  `EXECUTION_STAGES: frozenset[ExecutionStage]` (default `{ALWAYS}`) beside `_category` /
+  `_tags`; a subclass declares its stages on the class body (a set literal or stage names are
+  normalized to a frozenset at class creation, invalid entries raise at import) and no longer
+  needs to re-plumb an `execution_stages` default through every `__init__`. The constructor
+  argument stays as the per-instance override, which is what a pipeline yaml's
+  `hparams: {execution_stages: [inference]}` reaches through `PipelineFactory`; string values
+  are coerced and an unknown name (`[Inference]`, `[infer]`) raises `ValueError` naming the node
+  instead of silently never running it. `node.execution_stages` is a read-only property
+  returning the frozenset; assigning to it raises `AttributeError` unless the subclass opts in
+  with `EXECUTION_STAGES_MUTABLE = True`. `Node.get_execution_stages()` mirrors
+  `get_category()` / `get_tags()`. `consume_base_kwargs` is unchanged and still works.
+  **Breaking for code that assigned `node.execution_stages = {...}` after construction**
+  (two example scripts in cuvis-ai-unet do): pass the stages to the constructor, or declare the
+  class mutable. `should_execute`, serialization (stages are still not part of `hparams`) and the
+  pipeline's stage pruning are unchanged.
+
 ## 0.14.0 - 2026-08-26
 
 - **`restore-trainrun --mode validate` / `--mode test` now evaluate the trained weights** (#63).
