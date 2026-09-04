@@ -59,11 +59,16 @@ class InferenceService:
             batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
             stack.callback(batch.clear)
 
+            # With an explicit output filter, ports the client did not ask for
+            # are released during the forward; without one every port is kept.
+            output_specs = set(request.output_specs)
             outputs = session.pipeline.forward(
-                batch=batch, stage=ExecutionStage.INFERENCE
+                batch=batch,
+                stage=ExecutionStage.INFERENCE,
+                free_consumed_ports=bool(output_specs),
+                keep_ports=self._keep_ports_for(output_specs),
             )
 
-            output_specs = set(request.output_specs)
             available = [self._format_output_key(k) for k in outputs]
             logger.info(
                 f"Inference produced {len(available)} pipeline outputs "
@@ -310,6 +315,19 @@ class InferenceService:
             return True
         port_name = output_name.split(".", maxsplit=1)[-1]
         return output_name in specs or port_name in specs
+
+    @staticmethod
+    def _keep_ports_for(specs: set[str]) -> set[tuple[str, str] | str]:
+        """Translate ``output_specs`` into ``forward(keep_ports=...)`` entries.
+
+        Mirrors :meth:`_should_return`: ``node.port`` names one port exactly,
+        a bare ``port`` keeps that port on every node.
+        """
+        keep: set[tuple[str, str] | str] = set()
+        for spec in specs:
+            node_name, sep, port_name = spec.partition(".")
+            keep.add((node_name, port_name) if sep else spec)
+        return keep
 
     def _to_tensor(self, value: Any) -> torch.Tensor:
         """Coerce supported outputs to torch.Tensor."""

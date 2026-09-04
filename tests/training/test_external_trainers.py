@@ -462,6 +462,47 @@ class TestStatisticalTrainer:
         # Should not raise error even with no statistical nodes
         trainer.fit()
 
+    def test_validate_and_test_run_without_autograd(self):
+        """validate()/test() are evaluation passes: no autograd graph is built."""
+
+        class RecordingNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.ones(4))
+                self.grad_enabled: list[bool] = []
+                self.output_requires_grad: list[bool] = []
+
+            def forward(self, data, **kwargs):
+                self.grad_enabled.append(torch.is_grad_enabled())
+                out = data * self.weight
+                self.output_requires_grad.append(out.requires_grad)
+                return {"out": out}
+
+        pipeline = CuvisPipeline("no_grad")
+        node: Node = RecordingNode()
+        sink: Node = RecordingNode()
+        pipeline.connect(node.outputs.out, sink.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def val_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+            def test_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline, MockDataModule())
+        trainer.validate()
+        trainer.test()
+
+        assert node.grad_enabled == [False, False]
+        assert node.output_requires_grad == [False, False]
+
 
 class TestTrainerValidation:
     """Test trainer validation logic."""
