@@ -8,10 +8,19 @@ node entry with freshly introspected metadata, in place, preserving the
 manifest's comments and structure via a ruamel round-trip. ``data_module``
 entries carry no palette metadata and are left untouched.
 
+It also projects the plugin's model-weight declarations into the manifest's
+``weights:`` block: the ``WEIGHTS`` tuple of ``<package>.weights`` (the import
+root of the first capability, or ``--weights-module pkg.mod``), a
+side-effect-free module of ``PluginWeightEntry`` rows. Every ``selected_by`` and
+``explicit_path_hparams`` value must be a constructor parameter of one of the
+plugin's node classes, so a manifest can never name a hyper-parameter the
+nodes do not have. A plugin without a weights module leaves ``weights`` alone.
+
 One yaml file is one plugin (a bare manifest: ``name`` + source +
 ``capabilities``), so there is no plugin selector. Release CI runs this
 once a tag is cut; the ``--check`` mode is the drift guard (non-zero exit
-when the committed metadata no longer matches the live node specs).
+when the committed metadata no longer matches the live node specs or the
+live weight declarations).
 
 Usage::
 
@@ -31,6 +40,7 @@ import importlib
 import inspect
 import json
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +52,11 @@ from ruamel.yaml import YAML
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_schemas.enums import NodeCategory
 from cuvis_ai_schemas.pipeline import PortSpec
-from cuvis_ai_schemas.plugin import NodePortSpec, PluginCapabilityEntry
+from cuvis_ai_schemas.plugin import (
+    NodePortSpec,
+    PluginCapabilityEntry,
+    PluginWeightEntry,
+)
 
 
 _TORCH_DTYPE_NAMES = {
@@ -184,7 +198,11 @@ def _import_class(fqcn: str) -> type:
 
 def _node_entry(fqcn: str) -> PluginCapabilityEntry:
     """Introspect one node class into a PluginCapabilityEntry (class_name = FQCN)."""
-    node_class = _import_class(fqcn)
+    return _entry_from_class(fqcn, _import_class(fqcn))
+
+
+def _entry_from_class(fqcn: str, node_class: type) -> PluginCapabilityEntry:
+    """Introspect an already imported node class into its capability entry."""
     short_name = node_class.__name__
     category = _category_for(node_class, short_name)
     return PluginCapabilityEntry(
@@ -244,6 +262,127 @@ def _entry_to_manifest_dict(entry: PluginCapabilityEntry) -> dict:
     return out
 
 
+# Fields of a PluginWeightEntry that the manifest omits when they hold the default;
+# PluginWeightEntry fills them back in, so --check compares equal models.
+_WEIGHT_DEFAULTS: dict[str, Any] = {
+    "summary": "",
+    "kind": "weights",
+    "aux_files": [],
+    "license_file": None,
+    "aliases": [],
+    "selected_by": None,
+    "default": False,
+    "explicit_path_hparams": [],
+    "description": "",
+}
+
+
+def _weight_to_manifest_dict(entry: PluginWeightEntry) -> dict[str, Any]:
+    """Weight entry → manifest ``weights`` dict, dropping fields at their default."""
+    full = json.loads(entry.model_dump_json())
+    return {
+        key: value
+        for key, value in full.items()
+        if key not in _WEIGHT_DEFAULTS or value != _WEIGHT_DEFAULTS[key]
+    }
+
+
+def _weights_module_name(
+    capabilities: Sequence[Any], override: str | None
+) -> str | None:
+    """``--weights-module`` if given, else ``<import root of the first capability>.weights``."""
+    if override:
+        return override
+    for item in capabilities:
+        fqcn = item.get("class_name") if hasattr(item, "get") else None
+        if fqcn:
+            return f"{fqcn.split('.', 1)[0]}.weights"
+    return None
+
+
+def _load_weights(module_name: str) -> tuple[PluginWeightEntry, ...] | None:
+    """The ``WEIGHTS`` tuple of ``module_name``; ``None`` when the plugin has no such module."""
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            return None  # the plugin declares no weights
+        raise
+    weights = getattr(module, "WEIGHTS", None)
+    if weights is None:
+        raise ValueError(f"{module_name} exists but defines no WEIGHTS tuple")
+    entries = tuple(weights)
+    for entry in entries:
+        if not isinstance(entry, PluginWeightEntry):
+            raise TypeError(
+                f"{module_name}.WEIGHTS must hold PluginWeightEntry rows, got "
+                f"{type(entry).__name__}"
+            )
+    return entries
+
+
+def _constructor_params(node_classes: Iterable[type]) -> set[str]:
+    """Names every node class of the plugin accepts in its constructor."""
+    names: set[str] = set()
+    for node_class in node_classes:
+        try:
+            signature = inspect.signature(node_class.__init__)
+        except (
+            TypeError,
+            ValueError,
+        ):  # pragma: no cover - builtins without signatures
+            continue
+        names.update(
+            param.name
+            for param in signature.parameters.values()
+            if param.kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            and param.name != "self"
+        )
+    return names
+
+
+def _check_weight_references(
+    entries: Iterable[PluginWeightEntry], params: set[str], module_name: str
+) -> None:
+    """Every selector / explicit-path hyper-parameter must exist on some node class."""
+    for entry in entries:
+        referenced = list(entry.explicit_path_hparams)
+        if entry.selected_by is not None:
+            referenced.insert(0, entry.selected_by)
+        for hparam in referenced:
+            if hparam not in params:
+                raise ValueError(
+                    f"{module_name}: weight '{entry.name}' names hyper-parameter "
+                    f"'{hparam}', which no node class of this plugin accepts in its "
+                    "constructor"
+                )
+
+
+def _describe_weight_drift(
+    committed: Sequence[PluginWeightEntry] | None, fresh: Sequence[PluginWeightEntry]
+) -> str:
+    """One line naming what differs between the committed and the live weights."""
+    if committed is None:
+        return "the manifest has no weights block"
+    by_name_committed = {e.name: e for e in committed}
+    by_name_fresh = {e.name: e for e in fresh}
+    notes: list[str] = []
+    for name in sorted(set(by_name_committed) - set(by_name_fresh)):
+        notes.append(f"'{name}' only in the manifest")
+    for name in sorted(set(by_name_fresh) - set(by_name_committed)):
+        notes.append(f"'{name}' only in WEIGHTS")
+    for name in sorted(set(by_name_committed) & set(by_name_fresh)):
+        old = by_name_committed[name].model_dump(mode="json")
+        new = by_name_fresh[name].model_dump(mode="json")
+        fields = sorted(key for key in new if old.get(key) != new[key])
+        if fields:
+            notes.append(f"'{name}': {', '.join(fields)}")
+    if not notes and [e.name for e in committed] != [e.name for e in fresh]:
+        notes.append("row order")
+    return "; ".join(notes) or "no difference"
+
+
 def _yaml() -> YAML:
     y = YAML()
     y.preserve_quotes = True
@@ -255,15 +394,22 @@ def _yaml() -> YAML:
     return y
 
 
-def emit(manifest_path: Path, *, check: bool = False) -> bool:
-    """Regenerate (or, with ``check``, verify) a manifest's node metadata.
+def emit(
+    manifest_path: Path, *, check: bool = False, weights_module: str | None = None
+) -> bool:
+    """Regenerate (or, with ``check``, verify) a manifest's node metadata and weights.
 
     Reads each node entry's ``class_name`` (FQCN) from the bare manifest's
     ``capabilities`` list, imports the class, and rewrites the entry with
     freshly introspected palette metadata, preserving the manifest's
-    comments + structure. ``data_module`` entries are left untouched.
-    Returns True on success (or, in check mode, when the committed metadata
-    is already in sync); False when ``check`` finds drift.
+    comments + structure. ``data_module`` entries are left untouched. Then
+    projects the plugin's ``WEIGHTS`` declarations (``weights_module``, or the
+    ``<package>.weights`` convention) into the ``weights:`` block, after
+    checking that every selector and explicit-path hyper-parameter exists on
+    one of the imported node classes; a plugin without a weights module
+    leaves the block untouched. Returns True on success (or, in check mode,
+    when the committed metadata is already in sync); False when ``check``
+    finds drift in either block.
     """
     yaml_rt = _yaml()
     doc = yaml_rt.load(manifest_path.read_text(encoding="utf-8"))
@@ -275,6 +421,7 @@ def emit(manifest_path: Path, *, check: bool = False) -> bool:
     node_items = [item for item in capabilities if _is_node_entry(item)]
 
     fresh_by_fqcn: dict[str, PluginCapabilityEntry] = {}
+    node_classes: dict[str, type] = {}
     failures: list[tuple[str, str]] = []
     for item in node_items:
         fqcn = item.get("class_name") if hasattr(item, "get") else None
@@ -283,7 +430,8 @@ def emit(manifest_path: Path, *, check: bool = False) -> bool:
                 f"A 'capabilities' entry is missing 'class_name' in {manifest_path}"
             )
         try:
-            fresh_by_fqcn[fqcn] = _node_entry(fqcn)
+            node_classes[fqcn] = _import_class(fqcn)
+            fresh_by_fqcn[fqcn] = _entry_from_class(fqcn, node_classes[fqcn])
         except Exception as exc:
             failures.append((fqcn, f"{type(exc).__name__}: {exc}"))
             logger.error(f"Skipping '{fqcn}': {exc}")
@@ -306,15 +454,46 @@ def emit(manifest_path: Path, *, check: bool = False) -> bool:
         if committed != fresh:
             in_sync = False
 
+    # Weights: the plugin's declaration is the source; the manifest is its projection.
+    module_name = _weights_module_name(capabilities, weights_module)
+    fresh_weights = _load_weights(module_name) if module_name else None
+    committed_weights: list[PluginWeightEntry] | None = None
+    weights_in_sync = True
+    if fresh_weights is not None:
+        assert module_name is not None
+        _check_weight_references(
+            fresh_weights, _constructor_params(node_classes.values()), module_name
+        )
+        raw_committed = doc.get("weights")
+        if raw_committed is not None:
+            committed_weights = [
+                PluginWeightEntry.model_validate(_plainify(item))
+                for item in raw_committed
+            ]
+        weights_in_sync = committed_weights == list(fresh_weights)
+        if not weights_in_sync:
+            logger.info(
+                f"{manifest_path} weights differ from {module_name}.WEIGHTS: "
+                + _describe_weight_drift(committed_weights, fresh_weights)
+            )
+
     if check:
-        if in_sync:
-            logger.info(f"{manifest_path} capabilities are in sync")
+        if in_sync and weights_in_sync:
+            logger.info(f"{manifest_path} capabilities and weights are in sync")
         else:
+            stale = " and ".join(
+                part
+                for part, ok in (
+                    ("capabilities", in_sync),
+                    ("weights", weights_in_sync),
+                )
+                if not ok
+            )
             logger.error(
-                f"{manifest_path} capabilities are stale — "
+                f"{manifest_path} {stale} are stale — "
                 "re-run emit_metadata without --check to regenerate"
             )
-        return in_sync
+        return in_sync and weights_in_sync
 
     new_capabilities = [
         _entry_to_manifest_dict(fresh_by_fqcn[item["class_name"]])
@@ -324,10 +503,23 @@ def emit(manifest_path: Path, *, check: bool = False) -> bool:
     ]
     doc["capabilities"] = new_capabilities
 
+    if fresh_weights is not None:
+        new_weights = [_weight_to_manifest_dict(entry) for entry in fresh_weights]
+        if "weights" in doc:
+            doc["weights"] = new_weights
+        else:
+            # Right after capabilities, where a reader expects it.
+            position = list(doc.keys()).index("capabilities") + 1
+            doc.insert(position, "weights", new_weights)
+
     with manifest_path.open("w", encoding="utf-8") as f:
         yaml_rt.dump(doc, f)
+    weights_note = (
+        f", {len(fresh_weights)} weight(s)" if fresh_weights is not None else ""
+    )
     logger.info(
-        f"Updated {manifest_path}: {len(fresh_by_fqcn)} node(s), {len(failures)} failure(s)"
+        f"Updated {manifest_path}: {len(fresh_by_fqcn)} node(s){weights_note}, "
+        f"{len(failures)} failure(s)"
     )
     return True
 
@@ -342,11 +534,19 @@ def _main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Verify the committed metadata matches live specs; do not write.",
     )
+    parser.add_argument(
+        "--weights-module",
+        default=None,
+        help=(
+            "Module holding the plugin's WEIGHTS tuple (default: "
+            "<import root of the first capability>.weights)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        ok = emit(args.manifest, check=args.check)
-    except (KeyError, ValueError, RuntimeError) as exc:
+        ok = emit(args.manifest, check=args.check, weights_module=args.weights_module)
+    except (KeyError, ValueError, TypeError, RuntimeError) as exc:
         logger.error(f"Emit failed: {exc}")
         return 1
     return 0 if ok else 1
