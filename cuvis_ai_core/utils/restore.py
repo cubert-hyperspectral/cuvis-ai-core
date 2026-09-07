@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 import torch
 import yaml
 from loguru import logger
+from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from cuvis_ai_core.data.datamodule import create_data_module
@@ -19,7 +20,8 @@ from cuvis_ai_core.training import (
     StatisticalTrainer,
     calibrate_pipeline_deciders,
 )
-from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_core.training.callbacks import build_runtime_callbacks
+from cuvis_ai_core.training.config import TrainRunConfig, create_callbacks_from_config
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
@@ -572,6 +574,19 @@ def restore_trainrun(
             overrides=overrides,
         )
         trainrun_config = TrainRunConfig.model_validate(config_dict)
+    elif overrides:
+        # Config is already resolved, but --override must still apply: merge the
+        # dotlist onto the raw mapping before validation so a flat trainrun
+        # honours the same CLI as a Hydra-composed one instead of ignoring it.
+        # An override naming a field the config does not have fails validation,
+        # which is the intended answer to a typo.
+        merged = OmegaConf.merge(
+            OmegaConf.create(raw_config or {}),
+            OmegaConf.from_dotlist(list(overrides)),
+        )
+        trainrun_config = TrainRunConfig.model_validate(
+            OmegaConf.to_container(merged, resolve=True)
+        )
     else:
         # Config is already resolved - load directly
         trainrun_config: TrainRunConfig = TrainRunConfig.load_from_file(trainrun_path)
@@ -664,12 +679,19 @@ def restore_trainrun(
                 output_dir / "checkpoints"
             )
 
+        # An explicit callback list wins over the config-derived one inside the
+        # trainer, so the config callbacks are appended here rather than left
+        # for the trainer to build.
         grad_trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             training_config=training_config,
+            callbacks=[
+                *build_runtime_callbacks(training_config),
+                *create_callbacks_from_config(training_config.callbacks),
+            ],
         )
     else:
         logger.info("Detected statistical-only training configuration")

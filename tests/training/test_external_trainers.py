@@ -325,11 +325,16 @@ class TestGradientTrainer:
         assert projection_node_id is not None, "Could not find projection node"
 
         # Step 3: Gradient training
+        # No validation in this test: the trainer's own fields carry the
+        # Lightning passthroughs, so they go into the config, not into a
+        # post-construction __dict__ poke (which pydantic ignores).
         training_config = TrainingConfig(
             max_epochs=3,
             enable_progress_bar=False,
             enable_checkpointing=False,
             optimizer=OptimizerConfig(name="adam", lr=0.01),
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
         )
 
         grad_trainer = GradientTrainer(
@@ -337,14 +342,6 @@ class TestGradientTrainer:
             datamodule=datamodule,
             training_config=training_config,
             loss_nodes=[loss_node],
-        )
-
-        # Override to disable validation
-        grad_trainer.training_config.__dict__.update(
-            {
-                "num_sanity_val_steps": 0,
-                "limit_val_batches": 0,
-            }
         )
 
         grad_trainer.fit()
@@ -461,6 +458,47 @@ class TestStatisticalTrainer:
 
         # Should not raise error even with no statistical nodes
         trainer.fit()
+
+    def test_validate_and_test_run_without_autograd(self):
+        """validate()/test() are evaluation passes: no autograd graph is built."""
+
+        class RecordingNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.ones(4))
+                self.grad_enabled: list[bool] = []
+                self.output_requires_grad: list[bool] = []
+
+            def forward(self, data, **kwargs):
+                self.grad_enabled.append(torch.is_grad_enabled())
+                out = data * self.weight
+                self.output_requires_grad.append(out.requires_grad)
+                return {"out": out}
+
+        pipeline = CuvisPipeline("no_grad")
+        node: Node = RecordingNode()
+        sink: Node = RecordingNode()
+        pipeline.connect(node.outputs.out, sink.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def val_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+            def test_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline, MockDataModule())
+        trainer.validate()
+        trainer.test()
+
+        assert node.grad_enabled == [False, False]
+        assert node.output_requires_grad == [False, False]
 
 
 class TestTrainerValidation:

@@ -850,3 +850,161 @@ def test_restore_trainrun_redirects_checkpoint_dirpath(
 
     dirpath = captured["training_config"].callbacks.checkpoint.dirpath
     assert dirpath.endswith("checkpoints")
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun --override on a flat (non-Hydra) trainrun
+# ---------------------------------------------------------------------------
+
+
+def _capture_trainrun_config(monkeypatch) -> dict:
+    """Capture the TrainRunConfig restore_trainrun built, before it is used."""
+    captured: dict = {}
+
+    def _build(trainrun_config, **kwargs):
+        captured["config"] = trainrun_config
+        return FakeRestorePipeline(node_fits=(False,))
+
+    monkeypatch.setattr(restore_mod, "_build_pipeline_from_config", _build)
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+    return captured
+
+
+def test_override_applies_to_a_flat_trainrun(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A trainrun without Hydra defaults must honour --override too."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_trainrun_config(monkeypatch)
+
+    restore_mod.restore_trainrun(
+        path,
+        mode="train",
+        device="cpu",
+        overrides=[
+            "training.max_epochs=2",
+            "training.limit_val_batches=4",
+            "data.batch_size=1",
+        ],
+    )
+
+    config = captured["config"]
+    assert config.training.max_epochs == 2
+    assert config.training.limit_val_batches == 4
+    assert config.data.batch_size == 1
+
+
+def test_override_of_an_unknown_key_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A typo must fail loudly instead of being dropped."""
+    from pydantic import ValidationError
+
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _capture_trainrun_config(monkeypatch)
+
+    with pytest.raises(ValidationError):
+        restore_mod.restore_trainrun(
+            path,
+            mode="train",
+            device="cpu",
+            overrides=["training.max_epocs=2"],
+        )
+
+
+def test_no_overrides_leaves_the_flat_trainrun_untouched(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_trainrun_config(monkeypatch)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert (
+        captured["config"].training.max_epochs
+        == (mock_experiment_dict["training"]["max_epochs"])
+    )
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun registers the runtime callbacks
+# ---------------------------------------------------------------------------
+
+
+def _capture_gradient_kwargs(monkeypatch) -> dict:
+    """Capture the kwargs restore_trainrun hands GradientTrainer."""
+    captured: dict = {}
+
+    class _CapturingGrad(RecordingTrainer):
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_pipeline_from_config",
+        lambda *a, **k: FakeRestorePipeline(node_fits=(False,)),
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", _CapturingGrad)
+    return captured
+
+
+def test_restore_trainrun_registers_the_memory_log_callback(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_gradient_kwargs(monkeypatch)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    registered = [type(c).__name__ for c in captured["callbacks"]]
+    assert "CudaMemoryLogCallback" in registered
+    assert "CudaCacheReleaseCallback" not in registered
+
+
+def test_restore_trainrun_keeps_the_config_callbacks_alongside_the_runtime_ones(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """An explicit list wins inside the trainer, so it must carry both kinds."""
+    exp = dict(mock_experiment_dict)
+    exp["training"] = dict(exp["training"])
+    exp["training"]["callbacks"] = {"checkpoint": {"monitor": "val_loss"}}
+    path = _write_trainrun(tmp_path, exp, mock_pipeline_dict)
+    captured = _capture_gradient_kwargs(monkeypatch)
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    registered = [type(c).__name__ for c in captured["callbacks"]]
+    assert "CudaMemoryLogCallback" in registered
+    assert "ModelCheckpoint" in registered
+
+
+def test_restore_trainrun_registers_the_cache_release_on_request(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    captured = _capture_gradient_kwargs(monkeypatch)
+
+    restore_mod.restore_trainrun(
+        path,
+        mode="train",
+        device="cpu",
+        overrides=["training.release_cuda_cache_on_validation=true"],
+    )
+
+    registered = [type(c).__name__ for c in captured["callbacks"]]
+    assert "CudaCacheReleaseCallback" in registered

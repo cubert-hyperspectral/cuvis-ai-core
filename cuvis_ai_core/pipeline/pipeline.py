@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 import time
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from copy import deepcopy
 from datetime import datetime
 from functools import cached_property
@@ -31,6 +32,38 @@ from cuvis_ai_schemas.pipeline import (
 
 if TYPE_CHECKING:
     from cuvis_ai_core.training.config import PipelineConfig, PipelineMetadata
+
+
+# Port-retention profile: one DEBUG line per executed node with the bytes still
+# held in the forward's port table. Switched on process-wide by this env var or
+# per pipeline via ``set_profiling(port_retention=True)``; capped at two forwards
+# per stage so a long run does not pay the per-node tensor walk indefinitely.
+PORT_RETENTION_ENV = "CUVIS_PROFILE_PORT_RETENTION"
+_PORT_RETENTION_MAX_FORWARDS = 2
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _tensor_bytes(value: Any) -> tuple[int, int]:
+    """Return ``(total, cuda)`` logical bytes of the tensors inside ``value``.
+
+    Walks lists, tuples and dicts. Logical bytes (``numel * element_size``):
+    two views of one storage are counted twice, which is the honest upper
+    bound for what a port table keeps reachable.
+    """
+    total = cuda = 0
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, torch.Tensor):
+            nbytes = item.numel() * item.element_size()
+            total += nbytes
+            if item.is_cuda:
+                cuda += nbytes
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+    return total, cuda
 
 
 # Minimal, dependency-free pan/zoom for the pipeline SVG in a Jupyter / VS Code cell.
@@ -120,11 +153,23 @@ class CuvisPipeline:
         self._plugins: list[str] = []
         self.strict_runtime_io_validation = strict_runtime_io_validation
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
+        # Per (stage, upto_node id): which executed node is the last reader of
+        # each produced port. Feeds ``forward(free_consumed_ports=True)``.
+        self._last_consumer_cache: dict[
+            tuple[ExecutionStage | str, int | None], dict[tuple[str, str], int]
+        ] = {}
 
         # Profiling state (opt-in, zero overhead when disabled)
         self._profiling_enabled: bool = False
         self._profiler: PipelineProfiler | None = None
         self._synchronize_cuda: bool = False
+        # Port-retention profile (see PORT_RETENTION_ENV). The env switch is read
+        # once per pipeline; ``set_profiling(port_retention=...)`` is the API switch.
+        self._port_retention_env: bool = (
+            os.environ.get(PORT_RETENTION_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
+        )
+        self._port_retention_requested: bool = False
+        self._port_retention_forwards: dict[str, int] = {}
 
     @property
     def name(self) -> str:
@@ -218,6 +263,8 @@ class CuvisPipeline:
                 del self.__dict__["_sorted_nodes"]
             # Clear validation cache since graph structure has changed
             self._validation_cache.clear()
+            # A new edge can add a later reader for an existing port.
+            self._last_consumer_cache.clear()
 
     def _assign_counter_and_add_node(self, node: Node) -> None:
         """Assign counter to node based on existing nodes with same base name.
@@ -636,12 +683,15 @@ class CuvisPipeline:
                 )
 
         self._validation_cache.clear()
+        self._last_consumer_cache.clear()
         if "_sorted_nodes" in self.__dict__:
             del self.__dict__["_sorted_nodes"]
 
         self._profiler = None
         self._profiling_enabled = False
         self._synchronize_cuda = False
+        self._port_retention_requested = False
+        self._port_retention_forwards.clear()
         self._graph = nx.MultiDiGraph()
 
     def _restore_weights_from_checkpoint(
@@ -846,6 +896,9 @@ class CuvisPipeline:
         stage: ExecutionStage = ExecutionStage.INFERENCE,
         upto_node: Node | None = None,
         context: Context | None = None,
+        *,
+        free_consumed_ports: bool = False,
+        keep_ports: Collection[tuple[str, str] | str] | None = None,
     ) -> dict[tuple[str, str], Any]:
         """Execute graph with context-aware filtering and port-based routing.
 
@@ -862,14 +915,21 @@ class CuvisPipeline:
         context : Context, optional
             Execution context with epoch, batch_idx, and global_step. If not provided,
             a default Context will be created with the specified stage.
-        **entry_inputs : Any
-            Additional entry inputs keyed by "node_name.port_name"
-            These override batch keys if there's a conflict.
+        free_consumed_ports : bool, optional
+            When ``True``, drop each port as soon as the last executing node that
+            reads it has run, so intermediate activations are released during the
+            forward instead of surviving to the caller. Ports no executing node
+            reads (pipeline outputs and, with ``upto_node``, that node's inputs)
+            are always returned. The default ``False`` returns every port.
+        keep_ports : collection of (node_name, port_name) or port_name, optional
+            Ports to return even when ``free_consumed_ports`` would drop them. A
+            bare port name keeps that port on every node.
 
         Returns
         -------
         dict[tuple[str, str], Any]
-            All outputs keyed by (node_name, port_name) tuples
+            Outputs keyed by (node_name, port_name) tuples: every produced port
+            by default, the surviving ones with ``free_consumed_ports=True``.
         """
 
         # Create or use provided context
@@ -919,8 +979,28 @@ class CuvisPipeline:
             self._validate_graph_inputs(batch, execution_stage, executable_nodes)
             self._validation_cache[cache_key] = None
 
+        # Port lifetime with free_consumed_ports=True (a -> b -> c, c also reads a.out)
+        #
+        #   exec a: port_data {a.out}
+        #   exec b: reads a.out; store b.out           last_consumer(a.out)=c -> keep
+        #   exec c: reads a.out, b.out; store c.out    del a.out, del b.out
+        #   return {c.out}                              (consumer-less = pipeline output)
+        #
+        # A port is dropped right after the last executing node that reads it has
+        # run. Ports nobody in this forward reads (pipeline outputs, the inputs of
+        # ``upto_node``) and ``keep_ports`` survive to the returned dict.
+        release_after: dict[int, list[tuple[str, str]]] | None = None
+        if free_consumed_ports:
+            release_after = self._release_schedule(
+                execution_stage, upto_node_id, upto_node, executable_nodes, keep_ports
+            )
+        # ``stage`` may reach us as a bare string; ExecutionStage is a StrEnum, so
+        # str() yields the same key for both spellings.
+        stage_key = str(execution_stage)
+        profile_retention = self._start_port_retention_profile(stage_key)
+
         # Execute nodes in topological order
-        for node in executable_nodes:
+        for index, node in enumerate(executable_nodes):
             # Gather inputs from both batch and connections
             node_inputs = self._gather_node_inputs(node, port_data, batch)
 
@@ -936,7 +1016,7 @@ class CuvisPipeline:
             )
             outputs = node.forward(**node_inputs, context=context)
             if t0 is not None:
-                self._stop_profiling_timer(t0, node, node_inputs, execution_stage.value)
+                self._stop_profiling_timer(t0, node, node_inputs, stage_key)
 
             if not isinstance(outputs, dict):
                 raise TypeError(
@@ -954,7 +1034,134 @@ class CuvisPipeline:
                     raise ValueError(f"Duplicate output key detected: {key}")
                 port_data[key] = value
 
+            # Release every port whose last reader was this node.
+            if release_after is not None:
+                for key in release_after.get(index, ()):
+                    port_data.pop(key, None)
+
+            if profile_retention:
+                self._log_port_retention(
+                    stage_key, node, port_data, free_consumed_ports
+                )
+
         return port_data
+
+    # ------------------------------------------------------------------
+    # Port freeing helpers (forward(free_consumed_ports=True))
+    # ------------------------------------------------------------------
+
+    def _last_consumer_index(
+        self,
+        executable_nodes: list[Node],
+        upto_node: Node | None = None,
+    ) -> dict[tuple[str, str], int]:
+        """Map each produced port to the index of its last reader in ``executable_nodes``.
+
+        A port with no executing reader is absent from the map: it is a
+        pipeline output (or, with ``upto_node``, one of the inputs the caller
+        reads from the returned dict) and is never freed. Nodes the stage skips
+        do not run, so they are not readers in this forward.
+        """
+        last_reader: dict[tuple[str, str], int] = {}
+        for index, node in enumerate(executable_nodes):
+            for predecessor in self._graph.predecessors(node):
+                for edge_data in self._graph[predecessor][node].values():
+                    last_reader[(predecessor.name, edge_data["from_port"])] = index
+        if upto_node is not None:
+            # ``upto_node`` itself does not run; its inputs are what the caller
+            # came for, so they must survive to the returned dict.
+            for predecessor in self._graph.predecessors(upto_node):
+                for edge_data in self._graph[predecessor][upto_node].values():
+                    last_reader.pop((predecessor.name, edge_data["from_port"]), None)
+        return last_reader
+
+    def _release_schedule(
+        self,
+        execution_stage: ExecutionStage | str,
+        upto_node_id: int | None,
+        upto_node: Node | None,
+        executable_nodes: list[Node],
+        keep_ports: Collection[tuple[str, str] | str] | None,
+    ) -> dict[int, list[tuple[str, str]]]:
+        """Invert the (cached) last-reader map into ``{node index: ports to drop}``.
+
+        The last-reader map depends only on the stage and ``upto_node`` and is
+        cached like the graph-input validation; ``keep_ports`` varies per call
+        and is applied on top.
+        """
+        cache_key = (execution_stage, upto_node_id)
+        last_reader = self._last_consumer_cache.get(cache_key)
+        if last_reader is None:
+            last_reader = self._last_consumer_index(executable_nodes, upto_node)
+            self._last_consumer_cache[cache_key] = last_reader
+
+        keep_exact, keep_names = self._normalize_keep_ports(keep_ports)
+        schedule: dict[int, list[tuple[str, str]]] = {}
+        for key, index in last_reader.items():
+            if key in keep_exact or key[1] in keep_names:
+                continue
+            schedule.setdefault(index, []).append(key)
+        return schedule
+
+    @staticmethod
+    def _normalize_keep_ports(
+        keep_ports: Collection[tuple[str, str] | str] | None,
+    ) -> tuple[set[tuple[str, str]], set[str]]:
+        """Split ``keep_ports`` into exact ``(node, port)`` keys and bare port names."""
+        exact: set[tuple[str, str]] = set()
+        names: set[str] = set()
+        for entry in keep_ports or ():
+            if isinstance(entry, str):
+                names.add(entry)
+            elif isinstance(entry, tuple) and len(entry) == 2:
+                exact.add((entry[0], entry[1]))
+            else:
+                raise TypeError(
+                    "keep_ports entries must be (node_name, port_name) tuples or "
+                    f"bare port names, got {entry!r}"
+                )
+        return exact, names
+
+    # ------------------------------------------------------------------
+    # Port-retention profile
+    # ------------------------------------------------------------------
+
+    def _start_port_retention_profile(self, stage_value: str) -> bool:
+        """Decide whether this forward logs the retention profile (two per stage)."""
+        if not (self._port_retention_requested or self._port_retention_env):
+            return False
+        count = self._port_retention_forwards.get(stage_value, 0)
+        if count >= _PORT_RETENTION_MAX_FORWARDS:
+            return False
+        self._port_retention_forwards[stage_value] = count + 1
+        return True
+
+    def _log_port_retention(
+        self,
+        stage_value: str,
+        node: Node,
+        port_data: dict[tuple[str, str], Any],
+        freeing: bool,
+    ) -> None:
+        """Log one DEBUG line with the bytes the port table holds after ``node`` ran."""
+        total = cuda = 0
+        for value in port_data.values():
+            value_total, value_cuda = _tensor_bytes(value)
+            total += value_total
+            cuda += value_cuda
+        mib = 1024 * 1024
+        logger.debug(
+            "port-retention stage={} forward={} node={} freeing={} ports={} "
+            "retained_bytes={} ({:.2f} MiB, cuda {:.2f} MiB)",
+            stage_value,
+            self._port_retention_forwards.get(stage_value, 0),
+            node.name,
+            freeing,
+            len(port_data),
+            total,
+            total / mib,
+            cuda / mib,
+        )
 
     # ------------------------------------------------------------------
     # Profiling API
@@ -972,6 +1179,7 @@ class CuvisPipeline:
         synchronize_cuda: bool = False,
         reset: bool = False,
         skip_first_n: int = 0,
+        port_retention: bool = False,
     ) -> None:
         """Configure node runtime profiling (full-replace semantics).
 
@@ -989,12 +1197,22 @@ class CuvisPipeline:
             If ``True``, discard all previously accumulated statistics.
         skip_first_n : int
             Number of initial samples per node to discard (warm-up skip).
+        port_retention : bool
+            If ``True``, log one DEBUG line per executed node with the bytes the
+            forward's port table still holds (CUDA subtotal included), for the
+            first two forwards per stage; passing it re-arms that cap. Independent
+            of ``enabled``. The ``CUVIS_PROFILE_PORT_RETENTION=1`` environment
+            variable switches the same profile on for every pipeline of the
+            process and is not affected by this flag.
         """
         if skip_first_n < 0:
             raise ValueError(f"skip_first_n must be >= 0, got {skip_first_n}")
 
         self._synchronize_cuda = synchronize_cuda
         self._profiling_enabled = enabled
+        self._port_retention_requested = port_retention
+        if reset or port_retention:
+            self._port_retention_forwards.clear()
 
         if reset or self._profiler is None:
             self._profiler = PipelineProfiler(skip_first_n=skip_first_n)

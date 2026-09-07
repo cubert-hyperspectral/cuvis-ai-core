@@ -78,7 +78,14 @@ class Predictor:
                         batch_idx=batch_idx,
                         global_step=batch_idx,
                     )
-                    outputs = self.pipeline.forward(batch=moved_batch, context=context)
+                    # With a port filter, everything else may be released during
+                    # the forward; without one every port is returned as before.
+                    outputs = self.pipeline.forward(
+                        batch=moved_batch,
+                        context=context,
+                        free_consumed_ports=collect_ports is not None,
+                        keep_ports=collect_ports,
+                    )
                     if collect_outputs:
                         collected.append(self._select_outputs(outputs, collect_ports))
                     batch_idx += 1

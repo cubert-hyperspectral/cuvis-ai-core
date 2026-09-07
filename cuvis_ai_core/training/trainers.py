@@ -25,7 +25,18 @@ class TrainingCancelled(Exception):
     Raised by :class:`StatisticalTrainer` at batch / node boundaries. A node
     interrupted mid-initialization is left partially fitted; the cancelled run
     must not be treated as trained.
+
+    ``swallowed_error`` carries the exception the run raised when the stop
+    had already been requested, so the cancelled answer can still name the
+    failure instead of hiding it.
     """
+
+    def __init__(
+        self, *args: object, swallowed_error: BaseException | None = None
+    ) -> None:
+        """Store the optional error this cancellation took precedence over."""
+        super().__init__(*args)
+        self.swallowed_error = swallowed_error
 
 
 class GradientTrainer(pl.LightningModule):
@@ -126,6 +137,14 @@ class GradientTrainer(pl.LightningModule):
                     f"{set(pooled_names)} but has no pooled_metrics() method, so those "
                     "metrics would never be logged."
                 )
+        # The ports the step functions read back after a forward. Everything
+        # else may be dropped mid-forward (free_consumed_ports=True), so a loss
+        # or metric output that some downstream node also consumes stays put.
+        self._retained_ports: frozenset[tuple[str, str]] = frozenset(
+            (node.name, port_name)
+            for node in (*self.loss_nodes, *self.metric_nodes)
+            for port_name in getattr(node, "OUTPUT_SPECS", {})
+        )
         self.training_config = training_config or TrainingConfig()
         self.optimizer_config = self.training_config.optimizer
         self.scheduler_config = self.training_config.scheduler
@@ -418,8 +437,14 @@ class GradientTrainer(pl.LightningModule):
             global_step=self.global_step,
         )
 
-        # Execute graph
-        outputs = self.pipeline.forward(batch=batch, context=context)
+        # Execute graph; intermediate ports are released as soon as their last
+        # reader has run, only the loss/metric outputs are needed below.
+        outputs = self.pipeline.forward(
+            batch=batch,
+            context=context,
+            free_consumed_ports=True,
+            keep_ports=self._retained_ports,
+        )
 
         # Transform outputs once for efficient access (O(n) operation)
         node_outputs = restructure_output_to_node_dict(outputs)
@@ -446,8 +471,14 @@ class GradientTrainer(pl.LightningModule):
             global_step=self.global_step,
         )
 
-        # Execute graph
-        outputs = self.pipeline.forward(batch=batch, context=context)
+        # Execute graph; intermediate ports are released as soon as their last
+        # reader has run, only the loss/metric outputs are needed below.
+        outputs = self.pipeline.forward(
+            batch=batch,
+            context=context,
+            free_consumed_ports=True,
+            keep_ports=self._retained_ports,
+        )
 
         # Transform outputs once for efficient access (O(n) operation)
         node_outputs = restructure_output_to_node_dict(outputs)
@@ -475,8 +506,14 @@ class GradientTrainer(pl.LightningModule):
             global_step=self.global_step,
         )
 
-        # Execute graph
-        outputs = self.pipeline.forward(batch=batch, context=context)
+        # Execute graph; intermediate ports are released as soon as their last
+        # reader has run, only the loss/metric outputs are needed below.
+        outputs = self.pipeline.forward(
+            batch=batch,
+            context=context,
+            free_consumed_ports=True,
+            keep_ports=self._retained_ports,
+        )
 
         # Transform outputs once for efficient access (O(n) operation)
         node_outputs = restructure_output_to_node_dict(outputs)
@@ -610,48 +647,40 @@ class StatisticalTrainer:
         self._raise_if_cancelled()
 
     def validate(self) -> None:
-        """Run validation on the validation dataset.
+        """Run every validation batch through the pipeline at the VAL stage.
 
-        Returns
-        -------
-        list[dict[tuple[str, str], Any]]
-            List of output dictionaries (one per batch), where each dict maps
-            (node_id, port_name) tuples to output tensors
+        Outputs are not returned: metric and sink nodes consume them inside the
+        forward. Runs under ``torch.no_grad()`` (no autograd graph is kept for
+        an evaluation pass) and lets the forward release intermediate ports.
         """
         self.datamodule.setup(stage="val")
         val_loader = self.datamodule.val_dataloader()
-
-        for batch_idx, batch in enumerate(val_loader):
-            batch = self._move_batch_to_device(batch)
-            context = Context(
-                stage=ExecutionStage.VAL,
-                epoch=0,
-                batch_idx=batch_idx,
-                global_step=batch_idx,
-            )
-            self.pipeline.forward(batch=batch, context=context)
+        self._run_evaluation_pass(val_loader, ExecutionStage.VAL)
 
     def test(self) -> None:
-        """Run test on the test dataset.
+        """Run every test batch through the pipeline at the TEST stage.
 
-        Returns
-        -------
-        list[dict[tuple[str, str], Any]]
-            List of output dictionaries (one per batch), where each dict maps
-            (node_id, port_name) tuples to output tensors
+        Same contract as :meth:`validate`: outputs are consumed by the pipeline's
+        own metric and sink nodes, nothing is returned, gradients are disabled.
         """
         self.datamodule.setup(stage="test")
         test_loader = self.datamodule.test_dataloader()
+        self._run_evaluation_pass(test_loader, ExecutionStage.TEST)
 
-        for batch_idx, batch in enumerate(test_loader):
-            batch = self._move_batch_to_device(batch)
-            context = Context(
-                stage=ExecutionStage.TEST,
-                epoch=0,
-                batch_idx=batch_idx,
-                global_step=batch_idx,
-            )
-            self.pipeline.forward(batch=batch, context=context)
+    def _run_evaluation_pass(self, loader, stage: ExecutionStage) -> None:
+        """Forward each batch of ``loader`` at ``stage`` without gradients."""
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(loader):
+                batch = self._move_batch_to_device(batch)
+                context = Context(
+                    stage=stage,
+                    epoch=0,
+                    batch_idx=batch_idx,
+                    global_step=batch_idx,
+                )
+                self.pipeline.forward(
+                    batch=batch, context=context, free_consumed_ports=True
+                )
 
     def _get_pipeline_device(self) -> torch.device:
         """Get the device of the pipeline from its parameters/buffers."""

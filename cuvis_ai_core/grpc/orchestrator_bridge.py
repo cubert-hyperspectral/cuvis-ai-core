@@ -48,6 +48,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     DeclaredPaths,
     LocalChildRuntimeSpawner,
     dead_child_details,
+    format_exit_code,
 )
 from cuvis_ai_schemas.plugin import PluginManifest, parse_plugin_manifest
 from cuvis_ai_core.utils.plugin_resolver import resolve_against_catalog
@@ -55,6 +56,28 @@ from cuvis_ai_core.utils.plugin_resolver import resolve_against_catalog
 _NO_CHILD_DETAIL = (
     "No child runtime is attached to this session. "
     "Call LoadPipeline or RestoreTrainRun first."
+)
+
+# gRPC trailing-metadata keys carrying a dead child's postmortem. These three
+# names are the wire contract with the desktop client, which reads them off the
+# call's trailing metadata to build a typed error, so they are literals here and
+# there: renaming one silently degrades the client to a message-only error.
+TRAILER_CHILD_EXIT_CODE = "cuvis-child-exit-code"
+TRAILER_CHILD_EXIT_TEXT = "cuvis-child-exit-text"
+TRAILER_CRASH_LOG_DIR = "cuvis-crash-log-dir"
+
+# Statuses a forwarded RPC can fail with when the child process died under it.
+# UNAVAILABLE is the endpoint refusing connections; UNKNOWN, CANCELLED and
+# INTERNAL are what a stream that was mid-flight reports instead. Each is also
+# a status a live child can legitimately return, so a dead-child answer is only
+# given once the process is confirmed gone.
+_CRASH_PROBE_CODES = frozenset(
+    {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.UNKNOWN,
+        grpc.StatusCode.CANCELLED,
+        grpc.StatusCode.INTERNAL,
+    }
 )
 
 # Type aliases for the injectable seams.
@@ -379,6 +402,7 @@ def forward_load_pipeline(
         request,
         context,
         lambda: cuvis_ai_pb2.LoadPipelineResponse(success=False),
+        session=session,
     )
 
 
@@ -405,6 +429,7 @@ def forward_inference(
         request,
         context,
         cuvis_ai_pb2.InferenceResponse,
+        session=session,
     )
 
 
@@ -430,7 +455,9 @@ def forward_train(
         try:
             yield from child.stub().Train(request)
         except grpc.RpcError as exc:
-            _propagate_child_failure(child, exc, context)
+            # Trailers are set here, before the generator returns: that is the
+            # last point at which a streaming RPC can still attach them.
+            _propagate_child_failure(child, exc, context, session=session)
 
     return _proxy()
 
@@ -539,6 +566,7 @@ def forward_restore_train_run(
         request,
         context,
         cuvis_ai_pb2.RestoreTrainRunResponse,
+        session=parent_session,
     )
     # Contract: the child reuses the session_id we pinned via
     # InitializeSession, so an empty session_id in its response means
@@ -576,7 +604,7 @@ def _forward_pipeline_op(
         context.set_details(_NO_CHILD_DETAIL)
         return empty_response_factory()
     return _call_child_with_error_propagation(
-        child, stub_method, request, context, empty_response_factory
+        child, stub_method, request, context, empty_response_factory, session=session
     )
 
 
@@ -589,28 +617,94 @@ def _propagate_rpc_error(exc: grpc.RpcError, context: grpc.ServicerContext) -> N
 
 
 def _propagate_child_failure(
-    child, exc: grpc.RpcError, context: grpc.ServicerContext
+    child,
+    exc: grpc.RpcError,
+    context: grpc.ServicerContext,
+    *,
+    session: SessionState | None = None,
 ) -> None:
     """Turn a transport failure into a child-crash status when the child is gone.
 
-    A dead child fails every forwarded RPC with a bare transport error
-    (UNAVAILABLE "connection refused") that tells the caller nothing. When
-    :func:`dead_child_details` confirms the child process exited, the
-    parent answers ``INTERNAL`` naming the exit code and the tail of the
-    child's stderr log instead. The probe runs only for ``UNAVAILABLE`` —
-    any other code came from a live child that answered the RPC, and
-    probing it would stall every business error on the probe's reap wait —
-    so a live child's own status is copied through unchanged.
+    A dead child fails every forwarded RPC with a status that tells the
+    caller nothing: UNAVAILABLE while the endpoint refuses connections,
+    but also UNKNOWN, CANCELLED or INTERNAL depending on how far the
+    stream had got when the process died. When :func:`dead_child_details`
+    confirms the child process exited, the parent answers ``INTERNAL``
+    naming the exit code and the cause found in the child's stderr log,
+    preserves the child's logs right there (so the client learns the
+    location while the failure is being reported, not at teardown), and
+    attaches the postmortem as trailing metadata.
+
+    Only UNAVAILABLE pays the reap wait. The other three codes are
+    equally plausible from a live child answering a business error, so
+    their probe is poll-only and adds no latency to that path. A live
+    child's own status is copied through unchanged.
     """
-    details = (
-        dead_child_details(child) if exc.code() == grpc.StatusCode.UNAVAILABLE else None
-    )
+    code = exc.code() if hasattr(exc, "code") else None
+    if code not in _CRASH_PROBE_CODES:
+        _propagate_rpc_error(exc, context)
+        return
+    # None lets the spawner resolve its own (env-overridable) reap grace.
+    wait_s = None if code == grpc.StatusCode.UNAVAILABLE else 0.0
+    details = dead_child_details(child, wait_s=wait_s)
     if details is None:
         _propagate_rpc_error(exc, context)
         return
+    crash_dir = _preserve_crash_logs(child, session)
+    if crash_dir is not None:
+        details = f"{details}; logs preserved at {crash_dir}"
     logger.warning(f"Forwarded RPC failed: {details}")
     context.set_code(grpc.StatusCode.INTERNAL)
     context.set_details(details)
+    _set_crash_trailers(context, getattr(child, "returncode", None), crash_dir)
+
+
+def _preserve_crash_logs(child, session: SessionState | None) -> Path | None:
+    """Copy the dead child's logs aside and record the directory on the session.
+
+    Returns the crash-log directory, or ``None`` when there is no session
+    to attribute the crash to or nothing could be preserved.
+    ``preserve_child_logs`` is idempotent per session id, so the later
+    ``close_session`` teardown reports this same directory.
+    """
+    if session is None:
+        return None
+    # Lazy import: crash_logs pulls the composer's cache-root resolution.
+    from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
+
+    crash_dir = preserve_child_logs(
+        (getattr(child, "stdout_log", None), getattr(child, "stderr_log", None)),
+        session_id=session.session_id,
+        exit_code=getattr(child, "returncode", None),
+        endpoint=getattr(child, "endpoint", None),
+    )
+    if crash_dir is not None:
+        session.crash_log_dir = crash_dir
+    return crash_dir
+
+
+def _set_crash_trailers(
+    context: grpc.ServicerContext, exit_code: Any, crash_dir: Path | None
+) -> None:
+    """Attach the child postmortem to the RPC's trailing metadata.
+
+    Set on every forwarded RPC that a dead child failed, the streaming
+    ``Train`` included (before its generator returns, which is the last
+    moment trailers can still be set). Absent trailers are the older
+    server's behaviour, so a client must treat them as optional.
+    """
+    trailers = [
+        (TRAILER_CHILD_EXIT_CODE, str(exit_code) if exit_code is not None else ""),
+        (
+            TRAILER_CHILD_EXIT_TEXT,
+            format_exit_code(exit_code) if isinstance(exit_code, int) else "",
+        ),
+        (TRAILER_CRASH_LOG_DIR, str(crash_dir) if crash_dir is not None else ""),
+    ]
+    try:
+        context.set_trailing_metadata(tuple(trailers))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"Could not set crash trailers: {exc}")
 
 
 def _call_child_with_error_propagation(
@@ -619,12 +713,14 @@ def _call_child_with_error_propagation(
     request,
     context: grpc.ServicerContext,
     empty_response_factory,
+    *,
+    session: SessionState | None = None,
 ):
     """Invoke a child stub method and surface its status code on the parent's context."""
     try:
         return getattr(child.stub(), stub_method)(request)
     except grpc.RpcError as exc:
-        _propagate_child_failure(child, exc, context)
+        _propagate_child_failure(child, exc, context, session=session)
         return empty_response_factory()
 
 
@@ -781,6 +877,7 @@ class _InMemoryContext:
     def __init__(self) -> None:
         self._code: grpc.StatusCode | None = None
         self._details: str = ""
+        self._trailing_metadata: tuple[tuple[str, str], ...] = ()
         # Registered termination callbacks. The in-memory transport is
         # synchronous, so nothing fires them automatically; tests invoke them
         # to simulate a client-dropped stream.
@@ -790,6 +887,14 @@ class _InMemoryContext:
         """Record an RPC-termination callback (mirrors grpc.ServicerContext)."""
         self.callbacks.append(callback)
         return True
+
+    def set_trailing_metadata(self, metadata) -> None:
+        """Record trailing metadata (mirrors grpc.ServicerContext)."""
+        self._trailing_metadata = tuple(metadata)
+
+    def trailing_metadata(self) -> tuple[tuple[str, str], ...]:
+        """Return the trailing metadata set on this call, empty when none."""
+        return self._trailing_metadata
 
     def set_code(self, code: grpc.StatusCode) -> None:
         self._code = code

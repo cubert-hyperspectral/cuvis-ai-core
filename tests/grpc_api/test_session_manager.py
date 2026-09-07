@@ -339,6 +339,16 @@ def test_close_session_isolates_trainer_cleanup_failure():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _forget_preserved_sessions():
+    """Preservation is idempotent per session id via module state; reset it."""
+    from cuvis_ai_core.orchestrator.crash_logs import reset_for_tests
+
+    reset_for_tests()
+    yield
+    reset_for_tests()
+
+
 def _session_with_child(tmp_path, *, returncode, terminate_result):
     """Session with a fake child handle and a real runtime tree on disk."""
     manager = SessionManager()
@@ -420,3 +430,36 @@ def test_close_session_without_child_handle_reaps_tree(monkeypatch, tmp_path):
 
     assert not base.exists()
     assert not crash_root.exists()
+
+
+def test_close_session_reuses_a_directory_the_failing_rpc_already_made(
+    monkeypatch, tmp_path
+):
+    """The crash was already preserved when the RPC failed: no second copy."""
+    from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
+
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager, sid = _session_with_child(tmp_path, returncode=3, terminate_result=3)
+    child = manager.get_session(sid).child_handle
+    first = preserve_child_logs(
+        (child.stdout_log, child.stderr_log), session_id=sid, exit_code=3
+    )
+
+    manager.close_session(sid)
+
+    assert first is not None
+    assert [p.name for p in crash_root.iterdir()] == [first.name]
+
+
+def test_close_session_records_the_crash_dir_on_the_session(monkeypatch, tmp_path):
+    crash_root = tmp_path / "crashes"
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(crash_root))
+    manager, sid = _session_with_child(tmp_path, returncode=3, terminate_result=3)
+    state = manager.get_session(sid)
+    assert state.crash_log_dir is None
+
+    manager.close_session(sid)
+
+    assert state.crash_log_dir is not None
+    assert state.crash_log_dir.name.endswith(sid)

@@ -11,9 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 import grpc
 import torch
+from loguru import logger
 
 from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback, StopTrainingCallback
 from cuvis_ai_core.training import calibrate_pipeline_deciders
+from cuvis_ai_core.training.callbacks import build_runtime_callbacks
 from cuvis_ai_core.training.config import (
     DataConfig,
     TrainingConfig,
@@ -34,6 +36,56 @@ from .v1 import cuvis_ai_pb2
 
 if TYPE_CHECKING:  # pragma: no cover - for type hints only
     import pytorch_lightning as pl
+
+
+# Base text of the CANCELLED answer. A run that also raised gets the failure
+# appended so a stop can never hide a crash.
+_CANCELLED_DETAIL = (
+    "Training cancelled; the pipeline holds the state of the last completed step"
+)
+
+
+def _run_outcome(
+    training_error: Exception | None,
+    stop_set_at_failure: bool,
+    stop_set_now: bool,
+) -> Exception | None:
+    """Decide what a finished gradient run raises: the error, a cancel, or nothing.
+
+    A stop takes precedence only when it was already requested at the
+    moment the run failed, because then the failure is teardown noise from
+    a trainer that was winding down. An error that arrived first wins even
+    if a stop followed it, so a crash is never reported as a clean
+    cancellation. A swallowed error is logged and travels on the
+    :class:`TrainingCancelled` it lost to.
+
+    Parameters
+    ----------
+    training_error : Exception, optional
+        What the training thread raised, if anything.
+    stop_set_at_failure : bool
+        Whether the session's stop event was already set when the run failed.
+    stop_set_now : bool
+        Whether the stop event is set now that the run has finished.
+
+    Returns
+    -------
+    Exception or None
+        The exception to raise, or ``None`` when the run completed.
+    """
+    if training_error is not None and not stop_set_at_failure:
+        return training_error
+    if not stop_set_now:
+        return training_error
+    if training_error is not None:
+        logger.opt(exception=training_error).warning(
+            f"Gradient training was stopped by request and also raised: "
+            f"{training_error!r}. Reporting the run as cancelled."
+        )
+        return TrainingCancelled(
+            "Gradient training stopped via StopTrain", swallowed_error=training_error
+        )
+    return TrainingCancelled("Gradient training stopped via StopTrain")
 
 
 class TrainingService:
@@ -176,11 +228,14 @@ class TrainingService:
                 session.latest_train_response = response
                 yield response
 
-        except TrainingCancelled:
-            response = self._cancelled_response(
-                "Training cancelled; the pipeline holds the state of the last "
-                "completed step"
-            )
+        except TrainingCancelled as cancelled:
+            detail = _CANCELLED_DETAIL
+            swallowed = getattr(cancelled, "swallowed_error", None)
+            if swallowed is not None:
+                detail = (
+                    f"{detail} (stopped by request; the run also raised: {swallowed})"
+                )
+            response = self._cancelled_response(detail)
             session.latest_train_response = response
             yield response
             return
@@ -567,6 +622,7 @@ class TrainingService:
         callback_list = [
             ProgressStreamCallback(progress_handler),
             StopTrainingCallback(session.stop_event),
+            *build_runtime_callbacks(training_config),
         ]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
@@ -583,12 +639,18 @@ class TrainingService:
         training_complete = threading.Event()
         training_error: Exception | None = None
 
+        stop_set_at_failure = False
+
         def _run_training() -> None:
-            nonlocal training_error
+            nonlocal training_error, stop_set_at_failure
             try:
                 trainer.fit()
             except Exception as exc:  # pragma: no cover - surfaced via progress stream
                 training_error = exc
+                # Read the stop flag here, not after the loop: only a stop that
+                # was already requested when the run blew up may take
+                # precedence over the error.
+                stop_set_at_failure = session.stop_event.is_set()
             finally:
                 training_complete.set()
 
@@ -603,13 +665,11 @@ class TrainingService:
             else:
                 yield progress
 
-        # A stop takes precedence over a late error: once cancellation fired,
-        # teardown noise from the winding-down trainer is not a real failure.
-        if session.stop_event.is_set():
-            raise TrainingCancelled("Gradient training stopped via StopTrain")
-
-        if training_error is not None:
-            raise training_error
+        outcome = _run_outcome(
+            training_error, stop_set_at_failure, session.stop_event.is_set()
+        )
+        if outcome is not None:
+            raise outcome
 
         calibration = self._calibrate_session_deciders(session, datamodule)
 
