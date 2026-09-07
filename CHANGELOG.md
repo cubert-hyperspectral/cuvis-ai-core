@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.0 - unreleased
+## 0.17.0 - 2026-09-07
 
 - `ModelWeights` is now a registry of `cuvis_ai_schemas.plugin.PluginWeightEntry` rows: a plugin declares its weights in a side-effect-free `weights` module and calls `ModelWeights.register(plugin, WEIGHTS)` from its package `__init__`; `ModelWeights.load_manifests(dirs)` reads the `weights:` blocks of plugin manifests for environments without the plugins; the built-in table shrank to the four Cubert-trained Dinomaly pipelines (`dinomaly_bedding_all6`, `dinomaly_lentils_cir`, `dinomaly_lentils_custom`, `dinomaly_lentils_rgb`). The ten plugin rows left core, so upgrade the plugins together with core (breaking).
 - Precedence: an imported plugin's declaration wins over its manifest row, a differing pin is reported once on stderr and flagged `pin_mismatch`; two manifests declaring one name raise `ModelRegistryConflict`, as does any name or alias collision across plugins; `used_for` labels must come from `USED_FOR_LABELS`.
