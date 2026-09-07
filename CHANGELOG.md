@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.3 - unreleased
+## 0.16.3 - 2026-09-07
 
 - **CUDA memory is reported around every validation pass.** A gradient run now logs
   `cuda-mem phase=... allocated ... peak ... reserved ... gap ...` at fit start, at the end of
