@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.1 - 2026-09-07
+
+- `ModelWeights.materialize` hard-links the blob behind a snapshot entry instead of the entry itself. On Linux the Hugging Face cache stores `snapshots/<revision>/<file>` as a symlink into `blobs/`, and `os.link` does not follow it, so the materialized file (anomalib's DINOv2 backbone in the dinomaly plugin, the CLIP backbone in adaclip) was a dangling link that failed to load; caches on Windows hold regular files and were unaffected.
+
 ## 0.17.0 - 2026-09-07
 
 - `ModelWeights` is now a registry of `cuvis_ai_schemas.plugin.PluginWeightEntry` rows: a plugin declares its weights in a side-effect-free `weights` module and calls `ModelWeights.register(plugin, WEIGHTS)` from its package `__init__`; `ModelWeights.load_manifests(dirs)` reads the `weights:` blocks of plugin manifests for environments without the plugins; the built-in table shrank to the four Cubert-trained Dinomaly pipelines (`dinomaly_bedding_all6`, `dinomaly_lentils_cir`, `dinomaly_lentils_custom`, `dinomaly_lentils_rgb`). The ten plugin rows left core, so upgrade the plugins together with core (breaking).
