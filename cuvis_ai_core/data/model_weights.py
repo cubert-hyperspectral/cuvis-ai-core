@@ -753,9 +753,13 @@ class ModelWeights:
         (a vendored CLIP loader, anomalib's DINOv2 loader). An existing
         destination is returned untouched, so a seeded directory never triggers
         a cache lookup or a download. Otherwise the weight is resolved (see
-        :meth:`resolve`) and hardlinked into place; when a hardlink is not
-        possible (different volume) it is copied through a ``.part`` file and
-        renamed, so an interrupted copy never leaves a truncated destination.
+        :meth:`resolve`) and hardlinked into place. The link targets the real
+        blob: on POSIX the Hugging Face cache stores a snapshot entry as a
+        symlink into ``blobs/``, and ``os.link`` does not follow it, so linking
+        the entry itself would leave a dangling link at ``dst``. When a hardlink
+        is not possible (different volume) the file is copied through a
+        ``.part`` file and renamed, so an interrupted copy never leaves a
+        truncated destination.
         """
         weight = cls.get(name)
         dest_dir = Path(dest_dir)
@@ -765,7 +769,7 @@ class ModelWeights:
         src = cls.resolve(name, download=download, cache_dir=cache_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
         try:
-            os.link(src, dst)
+            os.link(os.path.realpath(src), dst)
         except OSError:
             if dst.exists():  # another process finished first
                 return dst

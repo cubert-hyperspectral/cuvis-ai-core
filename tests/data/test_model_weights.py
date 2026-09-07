@@ -634,6 +634,28 @@ def test_materialize_copies_when_hardlink_is_impossible(
     )
 
 
+def test_materialize_links_the_blob_behind_a_symlinked_snapshot_entry(
+    tmp_path, registry, no_network
+):
+    """POSIX caches store snapshot entries as symlinks into blobs/; the link must follow them."""
+    entry = registry["efficienttam_ti"]
+    primary = _seed(tmp_path, entry)
+    blob = (
+        tmp_path / ModelWeights.cache_dir_token(entry.repo_id) / "blobs" / entry.sha256
+    )
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    primary.replace(blob)
+    try:
+        os.symlink(os.path.relpath(blob, primary.parent), primary)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available on this machine")
+    out = ModelWeights.materialize(
+        "efficienttam_ti", tmp_path / "d", cache_dir=tmp_path
+    )
+    assert not out.is_symlink()
+    assert out.read_bytes() == ETAM_TI_BYTES
+
+
 def test_materialize_offline_miss_raises(tmp_path, registry, monkeypatch, no_network):
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     with pytest.raises(ModelWeightsMissingError):
