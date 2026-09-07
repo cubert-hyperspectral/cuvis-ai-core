@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/download-model/export.schema.json",
+  "title": "download-model export --json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "export_dir", "models"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "export_dir": {"type": "string", "minLength": 1},
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "exported", "path"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "exported": {"type": "boolean"},
+          "path": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

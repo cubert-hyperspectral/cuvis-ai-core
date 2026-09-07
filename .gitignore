@@ -204,3 +204,6 @@ experiments/
 cuvis-ai-core.code-workspace
 .gitnexus
 AGENTS.md
+
+# Local copies of pretrained weights; provision them through download-model instead
+pre_trained/

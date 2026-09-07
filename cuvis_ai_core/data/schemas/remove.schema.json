@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/download-model/remove.schema.json",
+  "title": "download-model remove --json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "cache_dir", "removed"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "cache_dir": {"type": "string", "minLength": 1},
+    "removed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["freed_bytes"],
+        "oneOf": [{"required": ["name"]}, {"required": ["dir"]}],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "dir": {"type": "string", "pattern": "^models--"},
+          "freed_bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    }
+  }
+}

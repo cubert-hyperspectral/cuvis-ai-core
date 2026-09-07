@@ -25,7 +25,7 @@ creates one commit per mirror repo (the repo is created private and made public
 and ungated once the commit has landed) and prints the registry entries with the
 mirror commit as ``revision``. ``check`` audits an existing mirror: sha256 pins
 against the Hub metadata, LICENSE bytes against a fresh upstream copy, repo
-visibility and gating, and the core registry (``ModelWeights._models`` of the
+visibility and gating, and the core registry (``ModelWeights.rows()`` of the
 checkout you run from) against the Hub.
 
 The AdaCLIP heads live on Google Drive; ``gdown`` is imported lazily, so run the
@@ -672,20 +672,32 @@ def _resolve_mirror(
 def _registry_entries(
     mirror: Mirror, resolved: dict[str, tuple[Path, str]], revision: str
 ) -> dict[str, dict]:
+    """The pins a plugin's ``weights.py`` needs, keyed by registry name.
+
+    Each value carries the mirror repo id, the primary file with its sha256 and
+    size, the aux files (path, size, sha256) and the licence label; the plugin
+    author adds the user-facing fields (display name, summary, used_for) and the
+    selection contract (selected_by, default, aliases, explicit_path_hparams).
+    """
     entries: dict[str, dict] = {}
     for f in mirror.files:
         if not f.registry_name:
             continue
-        aux = {
-            a.name: resolved[a.name][1]
+        aux = [
+            {
+                "path": a.name,
+                "size_bytes": resolved[a.name][0].stat().st_size,
+                "sha256": resolved[a.name][1],
+            }
             for a in mirror.files
             if a.aux_of == f.registry_name
-        }
-        entry = {
+        ]
+        entry: dict = {
             "repo_id": mirror.repo_id,
             "filename": f.name,
             "revision": revision,
             "sha256": resolved[f.name][1],
+            "size_bytes": resolved[f.name][0].stat().st_size,
         }
         if aux:
             entry["aux_files"] = aux
@@ -701,11 +713,29 @@ def _registry_entries(
 
 
 def _print_registry(entries: dict[str, dict]) -> None:
+    """Print the pins as ``PluginWeightEntry(...)`` rows for the plugin's ``weights.py``."""
+    click.echo(
+        "# Pins for the plugin's weights.py; add display_name, summary, used_for and"
+    )
+    click.echo(
+        "# the selection fields (selected_by, default, aliases, explicit_path_hparams)."
+    )
     for name, e in entries.items():
-        click.echo(f'        "{name}": {{')
-        for k, v in e.items():
-            click.echo(f"            {json.dumps(k)}: {json.dumps(v)},")
-        click.echo("        },")
+        click.echo("    PluginWeightEntry(")
+        click.echo(f"        name={json.dumps(name)},")
+        for key in ("repo_id", "filename", "revision", "sha256", "size_bytes"):
+            click.echo(f"        {key}={json.dumps(e[key])},")
+        if e.get("aux_files"):
+            click.echo("        aux_files=[")
+            for a in e["aux_files"]:
+                click.echo(
+                    f"            AuxFile(path={json.dumps(a['path'])}, "
+                    f"size_bytes={a['size_bytes']}, sha256={json.dumps(a['sha256'])}),"
+                )
+            click.echo("        ],")
+        click.echo(f"        license={json.dumps(e['license'])},")
+        click.echo(f"        description={json.dumps(e['description'])},")
+        click.echo("    ),")
 
 
 # ----------------------------------------------------------------------------
@@ -835,12 +865,15 @@ def upload(ctx: click.Context, names: tuple[str, ...], message: str | None) -> N
 @click.pass_context
 def check(ctx: click.Context, names: tuple[str, ...]) -> None:
     """Audit mirrors: sha256 pins, upstream LICENSE text, visibility, gating, and
-    the core registry (``ModelWeights._models`` of the checkout you run from)
-    against the Hub."""
+    the core registry (every row ``ModelWeights`` knows in the checkout you run
+    from: the built-ins, the plugins installed in this env and the manifests of
+    an installed cuvis-ai) against the Hub."""
     from huggingface_hub import HfApi, hf_hub_download
 
-    from cuvis_ai_core.data.model_weights import ModelWeights
+    from cuvis_ai_core.data.model_weights import ModelWeights, default_plugins_dirs
 
+    ModelWeights.load_manifests(default_plugins_dirs())
+    weight_rows = [r for r in ModelWeights.rows() if r.entry.kind == "weights"]
     work_dir, token = ctx.obj["work_dir"], ctx.obj["token"]
     api = HfApi(token=token)
     failures = 0
@@ -896,33 +929,47 @@ def check(ctx: click.Context, names: tuple[str, ...]) -> None:
                 )
         # The runtime registry must agree with the Hub: every file it names exists
         # with the pinned sha256, and its revision is a commit of the mirror repo.
-        for name, entry in ModelWeights._models.items():
-            if entry["repo_id"] != mirror.repo_id:
+        for row in weight_rows:
+            entry = row.entry
+            if entry.repo_id != mirror.repo_id:
                 continue
-            pinned = {entry["filename"]: entry["sha256"]}
-            pinned.update(entry.get("aux_files") or {})
+            pinned = {entry.filename: entry.sha256}
+            pinned.update({aux.path: aux.sha256 for aux in entry.aux_files})
             for fname, sha in pinned.items():
                 sib = by_name.get(fname)
                 if sib is None:
-                    report(False, f"registry {name}: {fname} missing on the Hub")
+                    report(False, f"registry {row.name}: {fname} missing on the Hub")
                     continue
                 report(
-                    hub_sha(mirror, sib) == sha, f"registry {name}: sha256 of {fname}"
+                    hub_sha(mirror, sib) == sha,
+                    f"registry {row.name}: sha256 of {fname}",
                 )
-            revision = entry.get("revision")
+                size = getattr(sib, "size", None)
+                expected_size = (
+                    entry.size_bytes
+                    if fname == entry.filename
+                    else next(a.size_bytes for a in entry.aux_files if a.path == fname)
+                )
+                if size is not None:
+                    report(
+                        size == expected_size,
+                        f"registry {row.name}: size of {fname} ({size} bytes)",
+                    )
+            revision = entry.revision
             try:
                 rev_info = api.repo_info(mirror.repo_id, revision=revision)
                 report(
-                    rev_info.sha == revision, f"registry {name}: revision {revision}"
+                    rev_info.sha == revision,
+                    f"registry {row.name}: revision {revision}",
                 )
             except Exception as exc:  # unknown revision surfaces as an HTTP error
-                report(False, f"registry {name}: revision {revision} ({exc})")
+                report(False, f"registry {row.name}: revision {revision} ({exc})")
     if not names or "all" in names:
         covered = {m.repo_id for m in selected}
-        for name, entry in ModelWeights._models.items():
+        for row in weight_rows:
             report(
-                entry["repo_id"] in covered,
-                f"registry {name}: repo {entry['repo_id']} has a mirror table entry",
+                row.entry.repo_id in covered,
+                f"registry {row.name}: repo {row.entry.repo_id} has a mirror table entry",
             )
     if failures:
         raise SystemExit(f"{failures} check(s) failed")

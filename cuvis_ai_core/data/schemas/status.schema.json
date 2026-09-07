@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/download-model/status.schema.json",
+  "title": "download-model status / download / import --json",
+  "description": "Rows are the SPEC of model_list.schema.json plus the STATUS fields; download adds `downloaded`, import adds `imported` (and `reason` for skipped rows).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "cache_dir", "models"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "cache_dir": {"type": "string", "minLength": 1},
+    "models": {"type": "array", "items": {"$ref": "#/$defs/status_row"}}
+  },
+  "$defs": {
+    "aux_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "spec_properties": {
+      "name": {"type": "string", "minLength": 1},
+      "display_name": {"type": "string", "minLength": 1},
+      "summary": {"type": "string", "maxLength": 60},
+      "used_for": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+      "plugin": {"type": "string", "minLength": 1},
+      "family": {"type": "string", "minLength": 1},
+      "kind": {"enum": ["weights", "trained_pipeline"]},
+      "aux_files": {"type": "array", "items": {"$ref": "#/$defs/aux_file"}},
+      "repo_id": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+      "filename": {"type": "string", "minLength": 1},
+      "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+      "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "size_bytes": {"type": "integer", "minimum": 1},
+      "total_bytes": {"type": "integer", "minimum": 1},
+      "license": {"type": "string", "minLength": 1},
+      "license_file": {"type": ["string", "null"]},
+      "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}},
+      "selected_by": {"type": ["string", "null"]},
+      "default": {"type": "boolean"},
+      "plugin_default": {"type": "boolean"},
+      "explicit_path_hparams": {"type": "array", "items": {"type": "string", "minLength": 1}},
+      "cache_dir_name": {"type": "string", "pattern": "^models--"},
+      "description": {"type": "string"},
+      "source": {"enum": ["plugin", "manifest", "dict"]},
+      "pin_mismatch": {"type": "boolean"}
+    },
+    "status_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "display_name", "summary", "used_for", "plugin", "family", "kind", "aux_files",
+        "repo_id", "filename", "revision", "sha256", "size_bytes", "total_bytes", "license",
+        "license_file", "aliases", "selected_by", "default", "plugin_default",
+        "explicit_path_hparams", "cache_dir_name", "description", "source", "pin_mismatch",
+        "state", "present", "path", "size_bytes_on_disk", "size_ok", "sha256_ok", "aux_ok",
+        "partial_bytes"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/spec_properties/name"},
+        "display_name": {"$ref": "#/$defs/spec_properties/display_name"},
+        "summary": {"$ref": "#/$defs/spec_properties/summary"},
+        "used_for": {"$ref": "#/$defs/spec_properties/used_for"},
+        "plugin": {"$ref": "#/$defs/spec_properties/plugin"},
+        "family": {"$ref": "#/$defs/spec_properties/family"},
+        "kind": {"$ref": "#/$defs/spec_properties/kind"},
+        "aux_files": {"$ref": "#/$defs/spec_properties/aux_files"},
+        "repo_id": {"$ref": "#/$defs/spec_properties/repo_id"},
+        "filename": {"$ref": "#/$defs/spec_properties/filename"},
+        "revision": {"$ref": "#/$defs/spec_properties/revision"},
+        "sha256": {"$ref": "#/$defs/spec_properties/sha256"},
+        "size_bytes": {"$ref": "#/$defs/spec_properties/size_bytes"},
+        "total_bytes": {"$ref": "#/$defs/spec_properties/total_bytes"},
+        "license": {"$ref": "#/$defs/spec_properties/license"},
+        "license_file": {"$ref": "#/$defs/spec_properties/license_file"},
+        "aliases": {"$ref": "#/$defs/spec_properties/aliases"},
+        "selected_by": {"$ref": "#/$defs/spec_properties/selected_by"},
+        "default": {"$ref": "#/$defs/spec_properties/default"},
+        "plugin_default": {"$ref": "#/$defs/spec_properties/plugin_default"},
+        "explicit_path_hparams": {"$ref": "#/$defs/spec_properties/explicit_path_hparams"},
+        "cache_dir_name": {"$ref": "#/$defs/spec_properties/cache_dir_name"},
+        "description": {"$ref": "#/$defs/spec_properties/description"},
+        "source": {"$ref": "#/$defs/spec_properties/source"},
+        "pin_mismatch": {"$ref": "#/$defs/spec_properties/pin_mismatch"},
+        "state": {"enum": ["present", "damaged", "partial", "absent"]},
+        "present": {"type": "boolean"},
+        "path": {"type": "string", "minLength": 1},
+        "size_bytes_on_disk": {"type": ["integer", "null"], "minimum": 0},
+        "size_ok": {"type": ["boolean", "null"]},
+        "sha256_ok": {"type": ["boolean", "null"]},
+        "aux_ok": {"type": ["boolean", "null"]},
+        "partial_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "downloaded": {"type": "boolean"},
+        "imported": {"type": "boolean"},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}
