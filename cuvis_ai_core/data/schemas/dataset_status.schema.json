@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/dataset/dataset_status.schema.json",
+  "title": "dataset status / download --json",
+  "description": "Rows are the DSPEC of dataset_list.schema.json plus the DSTATUS fields; download adds `downloaded` and `stale_files`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "data_dir", "datasets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "data_dir": {"type": "string", "minLength": 1},
+    "datasets": {"type": "array", "items": {"$ref": "#/$defs/status_row"}}
+  },
+  "$defs": {
+    "status_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "display_name", "summary", "repo_id", "target_dir", "revision", "size_bytes",
+        "file_count", "license", "tags", "camera", "description", "aliases",
+        "state", "present", "path", "bytes_on_disk", "files_ok"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "maxLength": 60},
+        "repo_id": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+        "target_dir": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "file_count": {"type": "integer", "minimum": 1},
+        "license": {"type": "string", "minLength": 1},
+        "tags": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "camera": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "state": {"enum": ["present", "damaged", "incomplete", "outdated", "foreign", "absent"]},
+        "present": {"type": "boolean"},
+        "path": {"type": "string", "minLength": 1},
+        "bytes_on_disk": {"type": ["integer", "null"], "minimum": 0},
+        "files_ok": {"type": ["boolean", "null"]},
+        "downloaded": {"type": "boolean"},
+        "stale_files": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
