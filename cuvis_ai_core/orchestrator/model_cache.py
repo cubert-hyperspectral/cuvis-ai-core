@@ -7,9 +7,9 @@ timm, anomalib, OpenCLIP) and path-keyed loaders then resolve weights offline
 after the first fetch, and an operator can pre-populate the cache once for
 offline / shipped installs.
 
-Import-light on purpose: module-level imports are stdlib only, and the composer
-cache-root lookup is imported lazily inside the function, so importing this
-module never drags ``torch`` or the heavy runtime graph.
+Import-light on purpose: module-level imports are stdlib plus the stdlib-only
+``cache_paths`` leaf, so importing this module never drags ``torch`` or the
+heavy runtime graph.
 """
 
 from __future__ import annotations
@@ -18,25 +18,23 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-# Operator override for the shared cache location. When unset the cache lives
-# under the composer's cache root so venv + weight caches share one tree.
-_MODEL_CACHE_DIR_ENV = "CUVIS_MODEL_CACHE_DIR"
-_MODEL_CACHE_DIRNAME = "model_cache"
+from cuvis_ai_core.orchestrator.cache_paths import (
+    MODEL_CACHE_DIR_ENV,
+    MODEL_CACHE_DIRNAME,
+    resolve_cache_root,
+)
 
 
 def model_cache_dir() -> Path:
     """Resolve the shared model-weight cache directory.
 
-    ``$CUVIS_MODEL_CACHE_DIR`` when set, else ``<composer cache root>/model_cache``.
+    ``$CUVIS_MODEL_CACHE_DIR`` when set, else ``<cache root>/model_cache`` (the
+    same root the composer places its envs under, so both caches share one tree).
     """
-    override = os.environ.get(_MODEL_CACHE_DIR_ENV)
+    override = os.environ.get(MODEL_CACHE_DIR_ENV)
     if override:
         return Path(override)
-    # Lazy import keeps this module free of the composer's (and its transitive)
-    # import cost for light consumers and tests.
-    from cuvis_ai_core.orchestrator.composer import resolve_cache_root
-
-    return resolve_cache_root(None) / _MODEL_CACHE_DIRNAME
+    return resolve_cache_root(None) / MODEL_CACHE_DIRNAME
 
 
 def hf_cache_dir(env: Mapping[str, str]) -> Path:
@@ -73,9 +71,9 @@ def model_cache_env(parent_env: Mapping[str, str]) -> dict[str, str]:
     pre-provisioned weight and the offline child never disagree. Sets
     ``TORCH_HOME`` and ``HF_HUB_OFFLINE=1`` unless the operator already set them.
     ``HF_HUB_OFFLINE=1`` keeps the untrusted, token-less child off the network;
-    gated weights are provisioned out-of-band by a trusted tool (the
-    ``download-model`` CLI or the CuvisNEXT action). Creates the target dirs so
-    the first write succeeds.
+    weights are provisioned out-of-band by a trusted tool (the ``download-model``
+    CLI or the CuvisNEXT action). Creates the target dirs so the first write
+    succeeds.
     """
     cache = model_cache_dir()
     cache.mkdir(parents=True, exist_ok=True)

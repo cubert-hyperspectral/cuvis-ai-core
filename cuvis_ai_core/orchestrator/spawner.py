@@ -528,7 +528,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         # Point HF / torch weight caches at one shared, persistent model cache and
         # run the child HF_HUB_OFFLINE=1 so it resolves weights from that
         # pre-provisioned cache instead of re-downloading into the wiped per-run
-        # HOME. The HF token is denied above; gated weights are provisioned
+        # HOME. The HF token is denied above; weights are provisioned
         # out-of-band by a trusted tool, never fetched by the untrusted child.
         env.update(model_cache_env(env))
 
