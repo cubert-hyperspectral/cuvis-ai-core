@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.0 - 2026-09-07
+
+- `ModelWeights` is now a registry of `cuvis_ai_schemas.plugin.PluginWeightEntry` rows: a plugin declares its weights in a side-effect-free `weights` module and calls `ModelWeights.register(plugin, WEIGHTS)` from its package `__init__`; `ModelWeights.load_manifests(dirs)` reads the `weights:` blocks of plugin manifests for environments without the plugins; the built-in table shrank to the four Cubert-trained Dinomaly pipelines (`dinomaly_bedding_all6`, `dinomaly_lentils_cir`, `dinomaly_lentils_custom`, `dinomaly_lentils_rgb`). The ten plugin rows left core, so upgrade the plugins together with core (breaking).
+- Precedence: an imported plugin's declaration wins over its manifest row, a differing pin is reported once on stderr and flagged `pin_mismatch`; two manifests declaring one name raise `ModelRegistryConflict`, as does any name or alias collision across plugins; `used_for` labels must come from `USED_FOR_LABELS`.
+- `download-model list --json` is an object (`schema_version`, `used_for_labels`, `weights_hosts`, `models`) instead of the 0.16 bare array, rows carry the manifest fields plus `plugin`, `family`, `total_bytes`, `plugin_default`, `cache_dir_name`, `source` and `pin_mismatch`, and `plugin` is the manifest name (`sam3`, not `cuvis-ai-sam3`) (breaking).
+- New `download-model` subcommands: `status [--verify]`, `export --to DIR`, `import DIR` (staged on the cache volume, verified, all or nothing), `remove NAME | --dir models--*`, `schema NAME`; `--plugins-dir` (repeatable) on every subcommand, defaulting to cuvis-ai's packaged `configs/plugins` when cuvis-ai is installed; `--progress-json` on `download`, `export` and `import`, mutually exclusive with `--json`.
+- Presence is decided by the pinned snapshot path, the registered size and the aux files, never by `refs/main` (still written for `hf cache ls`); a hit skips both the network and hashing; registry downloads send no token (`token=False`) and only the explicit `--repo-id` form forwards `--token` / `$HF_TOKEN`.
+- Every operation that writes under a cache root holds `<root>/.cuvis-cache.lock`; a second instance waits, says so on stderr and emits a `waiting` progress event.
+- Hub errors map to fixed sentences: repo not found or not public, gated mirror, pinned revision or file missing, offline miss, HTTP 401, HTTP 429 / 5xx ("retry in a few minutes"), other HTTP codes.
+- The `--json` and `--progress-json` contracts ship as JSON Schemas under `cuvis_ai_core/data/schemas/` (`model_list`, `status`, `export`, `remove`, `progress_event`, `dataset_list`, `dataset_status`); the tests validate every payload against them.
+- `scripts/emit_metadata.py` projects a plugin's `WEIGHTS` tuple (`<package>.weights`, or `--weights-module`) into the manifest's `weights:` block right after `capabilities`, checks that every `selected_by` and `explicit_path_hparams` is a constructor parameter of one of the plugin's node classes, and `--check` names the drifted rows and fields.
+- `PublicDatasets` rows are typed `DatasetSpec`s pinned to a dataset revision with exact `size_bytes`, `file_count`, task `tags` and `camera`; a two-phase `.cuvis-dataset.json` marker (`downloading`, then `complete` with the file manifest) decides `present`, `damaged`, `incomplete`, `outdated`, `foreign` or `absent`; `download` refuses a foreign folder without `adopt`, reports files the pinned revision dropped and deletes them only with `prune_stale`; `remove` deletes only folders whose marker names the expected repo; the `dataset` CLI gains `status`, `remove`, `schema`, `--json`, `--progress-json` (file counts), `--adopt` and `--prune-stale`.
+- `cuvis_ai_core/orchestrator/cache_paths.py` is the stdlib-only leaf for the cache-root constants; `model_cache` and `crash_logs` import it instead of the composer.
+- `tools/mirror_weights.py check` audits every registry row (built-ins, installed plugins, installed cuvis-ai manifests) including file sizes, and `plan` / `upload` print `PluginWeightEntry(...)` rows for a plugin's `weights.py`.
+- Floors: `cuvis-ai-schemas[proto]>=0.12.0`; `jsonschema` joins the dev group.
+
 ## 0.16.3 - 2026-09-07
 
 - **CUDA memory is reported around every validation pass.** A gradient run now logs

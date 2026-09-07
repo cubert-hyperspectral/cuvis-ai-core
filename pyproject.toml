@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "cuvis-ai-schemas[proto]>=0.11.0",
+    "cuvis-ai-schemas[proto]>=0.12.0",
     # Core framework dependencies
     "torch>=2.11.0",
     "torchvision>=0.26.0",
@@ -90,6 +90,9 @@ dev = [
     "types-PyYAML>=6.0.0",
     "pytest",
     "pytest-cov",
+    # The download-model / dataset --json contracts ship as JSON Schemas; the tests
+    # validate every payload against them.
+    "jsonschema>=4.20",
     # Comment-preserving YAML round-trip for scripts/emit_metadata.py
     "ruamel.yaml>=0.18",
     "ipympl>=0.9.8",
@@ -133,6 +136,10 @@ provision = "scripts.provision:main"
 where = ["."]
 include = ["cuvis_ai_core", "scripts*"]
 namespaces = true
+
+[tool.setuptools.package-data]
+# The --json contracts of download-model / dataset ship with the package.
+cuvis_ai_core = ["data/schemas/*.schema.json"]
 
 [tool.black]
 line-length = 88

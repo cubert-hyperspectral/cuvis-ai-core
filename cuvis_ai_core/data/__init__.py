@@ -10,6 +10,15 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from cuvis_ai_core.data.model_weights import (
+        TRAINED_PIPELINES,
+        ModelDownloadError,
+        ModelRegistryConflict,
+        ModelStatus,
+        ModelWeights,
+        ModelWeightsMissingError,
+        RegisteredWeight,
+    )
     from cuvis_ai_core.data.public_datasets import PublicDatasets
     from cuvis_ai_core.data.rle import (
         coco_rle_area,
@@ -25,7 +34,14 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "ModelDownloadError",
+    "ModelRegistryConflict",
+    "ModelStatus",
+    "ModelWeights",
+    "ModelWeightsMissingError",
     "PublicDatasets",
+    "RegisteredWeight",
+    "TRAINED_PIPELINES",
     "coco_rle_area",
     "coco_rle_decode",
     "coco_rle_encode",
@@ -37,6 +53,19 @@ __all__ = [
 ]
 
 _SUBMODULE_MAP: dict[str, tuple[str, str]] = {
+    "ModelDownloadError": ("cuvis_ai_core.data.model_weights", "ModelDownloadError"),
+    "ModelRegistryConflict": (
+        "cuvis_ai_core.data.model_weights",
+        "ModelRegistryConflict",
+    ),
+    "ModelStatus": ("cuvis_ai_core.data.model_weights", "ModelStatus"),
+    "ModelWeights": ("cuvis_ai_core.data.model_weights", "ModelWeights"),
+    "ModelWeightsMissingError": (
+        "cuvis_ai_core.data.model_weights",
+        "ModelWeightsMissingError",
+    ),
+    "RegisteredWeight": ("cuvis_ai_core.data.model_weights", "RegisteredWeight"),
+    "TRAINED_PIPELINES": ("cuvis_ai_core.data.model_weights", "TRAINED_PIPELINES"),
     "PublicDatasets": ("cuvis_ai_core.data.public_datasets", "PublicDatasets"),
     "coco_rle_area": ("cuvis_ai_core.data.rle", "coco_rle_area"),
     "coco_rle_decode": ("cuvis_ai_core.data.rle", "coco_rle_decode"),

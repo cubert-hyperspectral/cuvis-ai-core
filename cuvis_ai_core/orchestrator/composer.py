@@ -32,6 +32,12 @@ from cuvis_ai_core.orchestrator.cache_key import (
     compute_cache_key,
     spec_hash_of,
 )
+from cuvis_ai_core.orchestrator.cache_paths import (
+    DEFAULT_RUN_CACHE_ROOT,
+    MODEL_CACHE_DIRNAME,
+    RUN_CACHE_ROOT_ENV,
+    resolve_cache_root,
+)
 from cuvis_ai_core.orchestrator.env_config import number_from_env
 from cuvis_ai_core.orchestrator.runtime_project import (
     PluginManifest,
@@ -46,8 +52,11 @@ from cuvis_ai_core.orchestrator.uv_runner import (
     uv_sync,
 )
 
-_DEFAULT_CACHE_ROOT_ENV = "CUVIS_RUN_CACHE_DIR"
-_DEFAULT_CACHE_ROOT = Path.home() / ".cuvis_runs"
+# The cache-root constants live in the stdlib-only ``cache_paths`` leaf so light
+# consumers (model_cache, crash_logs, model_weights) never import the composer;
+# the private aliases stay for existing importers and tests.
+_DEFAULT_CACHE_ROOT_ENV = RUN_CACHE_ROOT_ENV
+_DEFAULT_CACHE_ROOT = DEFAULT_RUN_CACHE_ROOT
 _LOCK_TIMEOUT_SECONDS = 1800  # cold-start install can take a long time
 
 # Pin composed child envs to the composing interpreter's minor version. Leaving
@@ -264,21 +273,6 @@ def _build_or_reuse(
     return venv_dir, True
 
 
-def resolve_cache_root(override: Path | None = None) -> Path:
-    """Resolve the composed-env / model cache root.
-
-    Resolves ``override`` -> ``$CUVIS_RUN_CACHE_DIR`` -> the default
-    ``~/.cuvis_runs``. Shared with the model-weight cache (``model_cache``) so
-    the venv and weight caches sit under one root.
-    """
-    if override is not None:
-        return Path(override)
-    env_val = os.environ.get(_DEFAULT_CACHE_ROOT_ENV)
-    if env_val:
-        return Path(env_val)
-    return _DEFAULT_CACHE_ROOT
-
-
 def _sweep_stale_partials(root: Path) -> None:
     """Remove ``.building.*`` directories older than the staleness threshold."""
     if not root.exists():
@@ -414,7 +408,7 @@ def _ready_entries(root: Path) -> list[tuple[Path, float, int | None]]:
         name = entry.name
         if (
             name.startswith(".")
-            or name == "model_cache"
+            or name == MODEL_CACHE_DIRNAME
             or _BUILDING_TAG in name
             or _BROKEN_TAG in name
             or _EVICTING_TAG in name

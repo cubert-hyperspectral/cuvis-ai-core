@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/download-model/progress_event.schema.json",
+  "title": "download-model / dataset --progress-json: one event per stdout line",
+  "description": "`waiting` (another process holds the cache lock), `progress` (bytes or files landed; pct null = indeterminate), `verifying` (all bytes on disk, sha256 running), then exactly one terminal `done` or `error` per item; no progress line follows an item's terminal event.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event"],
+      "properties": {"event": {"const": "waiting"}}
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "name", "bytes_done", "bytes_total", "pct"],
+      "properties": {
+        "event": {"const": "progress"},
+        "name": {"type": "string", "minLength": 1},
+        "bytes_done": {"type": ["integer", "null"], "minimum": 0},
+        "bytes_total": {"type": ["integer", "null"], "minimum": 0},
+        "files_done": {"type": "integer", "minimum": 0},
+        "files_total": {"type": ["integer", "null"], "minimum": 0},
+        "pct": {"type": ["number", "null"], "minimum": 0, "maximum": 100}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "name"],
+      "properties": {"event": {"const": "verifying"}, "name": {"type": "string", "minLength": 1}}
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "name", "path"],
+      "properties": {
+        "event": {"const": "done"},
+        "name": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "name", "message"],
+      "properties": {
+        "event": {"const": "error"},
+        "name": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  ]
+}

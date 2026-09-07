@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuvis.ai/schemas/download-model/model_list.schema.json",
+  "title": "download-model list --json (also cuvis-ai's weights.index.json)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "used_for_labels", "weights_hosts", "models"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "used_for_labels": {
+      "description": "The fixed used_for vocabulary in display order; a consumer renders facets in it.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1
+    },
+    "weights_hosts": {
+      "description": "Hosts a download talks to (the hub and its CDN); an installer preflight probes them.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1
+    },
+    "models": {
+      "description": "Every registry row, sorted by name.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/spec"}
+    }
+  },
+  "$defs": {
+    "aux_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "spec": {
+      "description": "One registry row: the manifest weight entry plus the fields core derives.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "display_name", "summary", "used_for", "plugin", "family", "kind", "aux_files",
+        "repo_id", "filename", "revision", "sha256", "size_bytes", "total_bytes", "license",
+        "license_file", "aliases", "selected_by", "default", "plugin_default",
+        "explicit_path_hparams", "cache_dir_name", "description", "source", "pin_mismatch"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "maxLength": 60},
+        "used_for": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "plugin": {"type": "string", "minLength": 1},
+        "family": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["weights", "trained_pipeline"]},
+        "aux_files": {"type": "array", "items": {"$ref": "#/$defs/aux_file"}},
+        "repo_id": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+        "filename": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "total_bytes": {"type": "integer", "minimum": 1},
+        "license": {"type": "string", "minLength": 1},
+        "license_file": {"type": ["string", "null"]},
+        "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "selected_by": {"type": ["string", "null"]},
+        "default": {"type": "boolean"},
+        "plugin_default": {"type": "boolean"},
+        "explicit_path_hparams": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "cache_dir_name": {"type": "string", "pattern": "^models--"},
+        "description": {"type": "string"},
+        "source": {"enum": ["plugin", "manifest", "dict"]},
+        "pin_mismatch": {"type": "boolean"}
+      }
+    }
+  }
+}

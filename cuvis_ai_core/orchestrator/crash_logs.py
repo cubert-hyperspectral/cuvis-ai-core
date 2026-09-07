@@ -12,9 +12,8 @@ logs at the moment of death so the client learns where they are, and the
 later ``close_session`` teardown asks again and is handed the same
 directory instead of copying a second one.
 
-The composer cache-root lookup stays a lazy import inside
-:func:`crash_dir_root`, so importing this module never pays the
-composer's (and its transitive) import cost.
+The cache root comes from the stdlib-only ``cache_paths`` leaf, so importing
+this module never pays the composer's (and its transitive) import cost.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from cuvis_ai_core.orchestrator.cache_paths import resolve_cache_root
 from cuvis_ai_core.orchestrator.spawner import format_exit_code
 
 # Operator override for where preserved logs land. When unset they live
@@ -65,10 +65,6 @@ def crash_dir_root() -> Path:
     override = os.environ.get(_CRASH_DIR_ENV)
     if override:
         return Path(override)
-    # Lazy import mirrors model_cache: light consumers never pay the
-    # composer's (and its transitive) import cost.
-    from cuvis_ai_core.orchestrator.composer import resolve_cache_root
-
     return resolve_cache_root(None) / CRASH_LOGS_DIRNAME
 
 

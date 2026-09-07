@@ -16,9 +16,9 @@ from pathlib import Path
 import click
 
 from cuvis_ai_core.orchestrator import leases
+from cuvis_ai_core.orchestrator.cache_paths import resolve_cache_root
 from cuvis_ai_core.orchestrator.composer import (
     evict_run_cache,
-    resolve_cache_root,
     wait_for_deleter,
 )
 from cuvis_ai_core.orchestrator.uv_runner import (

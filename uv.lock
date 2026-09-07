@@ -744,6 +744,7 @@ dev = [
     { name = "ipdb" },
     { name = "ipykernel" },
     { name = "ipympl" },
+    { name = "jsonschema" },
     { name = "jupyterlab" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -772,7 +773,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "click", specifier = ">=8.4.2" },
-    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.11.0" },
+    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.12.0" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
@@ -788,6 +789,7 @@ requires-dist = [
     { name = "ipdb", marker = "extra == 'dev'", specifier = ">=0.13.13" },
     { name = "ipykernel", marker = "extra == 'dev'" },
     { name = "ipympl", marker = "extra == 'dev'", specifier = ">=0.9.8" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.20" },
     { name = "jupyterlab", marker = "extra == 'dev'" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -827,15 +829,15 @@ provides-extras = ["hf", "dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.11.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/80/4a392009138858afab9f9fad3c46416c5e2654b0e31ef694643b7f5bd601/cuvis_ai_schemas-0.11.0.tar.gz", hash = "sha256:84035e20b062b2e22209d56646939ca0877d1dbeb418c53ab3b3db0d6975680b", size = 255987, upload-time = "2026-09-07T07:47:09.466Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/53/f3f5b322ef73150aabe78eafc6eaa019c5163116151b841b116b40196308/cuvis_ai_schemas-0.12.0.tar.gz", hash = "sha256:b64951217e70214f32acf78fb11c9129a722cac6d4ed71efcabbc8b46242e9ff", size = 263678, upload-time = "2026-09-07T11:13:40.286Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/fc/4f766dfdd32e05c8001b66825b1a0c77ca386dd00c0bafedd89dc2e0405d/cuvis_ai_schemas-0.11.0-py3-none-any.whl", hash = "sha256:482eca59b12fff5153fc8b1095dd855cef47fd58ec08a34fa17ecfa6bfa3c542", size = 77737, upload-time = "2026-09-07T07:47:08.083Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/a2/7f6ff12994a617d684b0bf2dd7ee021d3d24618c0f4ff8000bf1ec2ae648/cuvis_ai_schemas-0.12.0-py3-none-any.whl", hash = "sha256:32692c41272e95ee8b64acb2b0fe828931b951cb8668ab84b30f93870e61c250", size = 81724, upload-time = "2026-09-07T11:13:38.752Z" },
 ]
 
 [package.optional-dependencies]
