@@ -17,7 +17,7 @@ preset configs installed (the trainrun path below points into that package):
 
     python -m cuvis_ai_core.grpc.production_server   # terminal 1
     python examples/cuvisnext_train_flow.py \
-        --trainrun <site-packages>/cuvis_ai/configs/trainrun/dinomaly_rgb_cuvisnext.yaml \
+        --trainrun <site-packages>/cuvis_ai/configs/trainrun/dinomaly_custom_cuvisnext.yaml \
         --plugins-dir <site-packages>/cuvis_ai/configs/plugins \
         --data-dir D:/data/lentils_cu3s \
         --splits-json D:/experiments/splits/lentils_gui.json   # terminal 2
