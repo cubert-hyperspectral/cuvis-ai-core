@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.17.2 - 2026-09-10
+
+- A selector that matches some of what it asked for, but not all, says so. A
+  `file_indices` selector requesting frames `[0, 999]` of a seven-frame recording
+  selected frame 0 and reported nothing: `resolve_selectors` raises only when a selector
+  matches *nothing*, `verify_universe` skips explicit selectors by design, the
+  constraints only inspect the refs that survived, and `samples_per_frame` merely repeats
+  them, so a split trained on fewer samples than it named with no signal anywhere. The
+  resolver now logs a warning naming the source, how many of the requested indices (or
+  sources, for `files`) matched, and which are missing. A selector that matches nothing is
+  deliberately untouched: at the top level it already raises, and inside a set operation an
+  absent operand is meaningful, so `except(files[a], files[gone])` stays quiet.
+
 ## 0.17.1 - 2026-09-07
 
 - `ModelWeights.materialize` hard-links the blob behind a snapshot entry instead of the entry itself. On Linux the Hugging Face cache stores `snapshots/<revision>/<file>` as a symlink into `blobs/`, and `os.link` does not follow it, so the materialized file (anomalib's DINOv2 backbone in the dinomaly plugin, the CLIP backbone in adaclip) was a dangling link that failed to load; caches on Windows hold regular files and were unaffected.

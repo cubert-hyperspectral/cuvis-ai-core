@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from cuvis_ai_core.data.selectors import (
@@ -384,3 +386,86 @@ def test_file_indices_different_file_still_matches_zero():
             ],
             refs,
         )
+
+
+# -- partly-satisfied selectors ------------------------------------------------
+# A selector may ask for frames a recording does not have. Everything downstream
+# is blind to it: verify_universe skips explicit selectors, the constraints only
+# inspect surviving refs, and samples_per_frame only repeats them. So the
+# resolver warns, which is the one place that knows requested and matched.
+
+
+def test_file_indices_partial_match_warns_naming_the_missing_ids(caplog):
+    refs = _universe()
+    with caplog.at_level(logging.WARNING, logger="cuvis_ai_core.data.selectors"):
+        got = resolve_selectors(
+            [Selector(kind=SelectorKind.FILE_INDICES, source="a.cu3s", ids=[0, 99])],
+            refs,
+        )
+    assert _uids(got) == ["a.cu3s#0"]  # the run still proceeds on what exists
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "matched 1 of 2 requested index(es)" in message
+    assert "missing index: 99" in message
+    assert "a.cu3s" in message
+
+
+def test_file_indices_full_match_is_silent(caplog):
+    refs = _universe()
+    with caplog.at_level(logging.WARNING, logger="cuvis_ai_core.data.selectors"):
+        got = resolve_selectors(
+            [Selector(kind=SelectorKind.FILE_INDICES, source="a.cu3s", ids=[0, 1])],
+            refs,
+        )
+    assert _uids(got) == ["a.cu3s#0", "a.cu3s#1"]
+    assert caplog.records == []
+
+
+def test_file_indices_total_miss_raises_without_warning(caplog):
+    """Nothing matched is the existing loud case; it must not also warn."""
+    refs = _universe()
+    with caplog.at_level(logging.WARNING, logger="cuvis_ai_core.data.selectors"):
+        with pytest.raises(ValueError, match="matched 0 samples"):
+            resolve_selectors(
+                [Selector(kind=SelectorKind.FILE_INDICES, source="gone.cu3s", ids=[0])],
+                refs,
+            )
+    assert caplog.records == []
+
+
+def test_files_partial_match_warns_naming_the_missing_source(caplog):
+    refs = _universe()
+    with caplog.at_level(logging.WARNING, logger="cuvis_ai_core.data.selectors"):
+        got = resolve_selectors(
+            [Selector(kind=SelectorKind.FILES, paths=["a.cu3s", "gone.cu3s"])], refs
+        )
+    assert _uids(got) == ["a.cu3s#0", "a.cu3s#1", "a.cu3s#2"]
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "matched 1 of 2 requested source(es)" in message
+    assert "gone.cu3s" in message
+
+
+def test_except_operand_that_matches_nothing_stays_silent(caplog):
+    """An absent subtrahend is legitimate, so it must not warn.
+
+    ``except(files[a], files[gone])`` subtracts whatever is present. A consumer
+    that pre-opens the files a split mentions relies on this: a source reached
+    only through a set operation need not exist.
+    """
+    refs = _universe()
+    with caplog.at_level(logging.WARNING, logger="cuvis_ai_core.data.selectors"):
+        got = resolve_selectors(
+            [
+                Selector(
+                    kind=SelectorKind.EXCEPT,
+                    of=[
+                        Selector(kind=SelectorKind.FILES, paths=["a.cu3s"]),
+                        Selector(kind=SelectorKind.FILES, paths=["gone.cu3s"]),
+                    ],
+                )
+            ],
+            refs,
+        )
+    assert _uids(got) == ["a.cu3s#0", "a.cu3s#1", "a.cu3s#2"]
+    assert caplog.records == []

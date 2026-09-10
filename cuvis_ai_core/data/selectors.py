@@ -318,6 +318,45 @@ def _norm_source(path: str) -> str:
     return normalized.casefold() if windowsish else normalized
 
 
+def _warn_partial_match(
+    sel: Selector,
+    *,
+    requested: list,
+    matched: set,
+    noun: str,
+) -> None:
+    """Warn when a selector matched some of what it asked for, but not all.
+
+    A selector that matches *nothing* is deliberately left alone: at the top
+    level :func:`resolve_selectors` already raises for it, and inside a set
+    operation an absent operand is meaningful (``except`` subtracts whatever is
+    there, so naming a file that no longer exists is legitimate). The silent
+    case is the middle one, e.g. a ``file_indices`` selector asking for frames
+    ``[0, 999]`` of a seven-frame recording: frame 0 is selected, 999 is
+    dropped, and nothing downstream can tell. ``verify_universe`` skips
+    explicit selectors, the constraints only inspect the refs that survived,
+    and ``samples_per_frame`` merely repeats them. So the split trains on fewer
+    samples than it asks for, with no signal at all -- hence the warning here,
+    at the one place that knows both sides of the comparison.
+    """
+    if not matched:
+        return
+    missing = [item for item in requested if item not in matched]
+    if not missing:
+        return
+    where = f" of {sel.source!r}" if sel.source else ""
+    logger.warning(
+        "selector '%s'%s matched %d of %d requested %s(es); missing %s: %s",
+        sel.kind.value,
+        where,
+        len(requested) - len(missing),
+        len(requested),
+        noun,
+        noun,
+        ", ".join(str(item) for item in missing),
+    )
+
+
 def _resolve_one(
     sel: Selector, refs: list[SampleRef], *, name_to_id: dict[str, int] | None
 ) -> list[SampleRef]:
@@ -328,15 +367,29 @@ def _resolve_one(
         return list(refs)
     if kind == SelectorKind.FILES:
         wanted = {_norm_source(p) for p in sel.paths}
-        return [r for r in refs if _norm_source(r.source) in wanted]
+        matched = [r for r in refs if _norm_source(r.source) in wanted]
+        _warn_partial_match(
+            sel,
+            requested=sorted(wanted),
+            matched={_norm_source(r.source) for r in matched},
+            noun="source",
+        )
+        return matched
     if kind == SelectorKind.FILE_INDICES:
         wanted_ids = set(_expand_int_ids(sel.ids, sel))
         wanted_source = _norm_source(sel.source)
-        return [
+        matched = [
             r
             for r in refs
             if _norm_source(r.source) == wanted_source and r.index in wanted_ids
         ]
+        _warn_partial_match(
+            sel,
+            requested=sorted(wanted_ids),
+            matched={r.index for r in matched},
+            noun="index",
+        )
+        return matched
     if kind == SelectorKind.DIR_INDICES:
         positions = _expand_int_ids(sel.ids, sel)
         size = len(refs)
