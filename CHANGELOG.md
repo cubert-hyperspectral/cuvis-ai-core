@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.2 - 2026-09-16
+
+- Security: raised the `pytorch-lightning` floor and lock to `>=2.6.6` (was 2.6.0) for PYSEC-2026-3967, a remote-code-execution vulnerability in the checkpoint `_load_state` path that imports and executes attacker-controlled module names from a crafted checkpoint's `_instantiator` hyperparameters, bypassing `weights_only=True` when `LightningModule.load_from_checkpoint` runs. Only `pytorch-lightning` moved; the torch and torchvision cu128 pins are unchanged. Downstream plugins that pin their own `pytorch-lightning` floor (the `--strict` core-lock audit) inherit the fix from this release.
+
 ## 0.17.1 - 2026-09-07
 
 - `ModelWeights.materialize` hard-links the blob behind a snapshot entry instead of the entry itself. On Linux the Hugging Face cache stores `snapshots/<revision>/<file>` as a symlink into `blobs/`, and `os.link` does not follow it, so the materialized file (anomalib's DINOv2 backbone in the dinomaly plugin, the CLIP backbone in adaclip) was a dangling link that failed to load; caches on Windows hold regular files and were unaffected.
