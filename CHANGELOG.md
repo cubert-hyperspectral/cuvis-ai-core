@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.3 - 2026-09-16
+
+- Security: raised the `pytorch-lightning` floor and lock to `>=2.6.6` (was 2.6.0) for PYSEC-2026-3967, a remote-code-execution vulnerability in the checkpoint `_load_state` path that imports and executes attacker-controlled module names from a crafted checkpoint's `_instantiator` hyperparameters, bypassing `weights_only=True` when `LightningModule.load_from_checkpoint` runs. Only `pytorch-lightning` moved; the torch and torchvision cu128 pins are unchanged. Downstream plugins that floor their own `pytorch-lightning>=2.6.6` against core's lock (the `--strict` core-lock audit) inherit the fix from this release.
+
 ## 0.17.2 - 2026-09-10
 
 - A selector that matches some of what it asked for, but not all, says so. A
