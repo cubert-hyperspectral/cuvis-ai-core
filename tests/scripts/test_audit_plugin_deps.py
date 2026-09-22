@@ -137,6 +137,106 @@ def test_host_filters_inapplicable_marker(tmp_path: Path) -> None:
     assert warnings == []
 
 
+def _fork_markers() -> tuple[str, str]:
+    """A marker that holds on this platform and its complement."""
+    return f"sys_platform == '{sys.platform}'", f"sys_platform != '{sys.platform}'"
+
+
+def _forked_lock(name: str, here_version: str, elsewhere_version: str) -> str:
+    """Two uv lock entries for one package, one per marker fork."""
+    here, elsewhere = _fork_markers()
+    return (
+        f'[[package]]\nname = "{name}"\nversion = "{here_version}"\n'
+        f'resolution-markers = [\n    "{here}",\n]\n\n'
+        f'[[package]]\nname = "{name}"\nversion = "{elsewhere_version}"\n'
+        f'resolution-markers = [\n    "{elsewhere}",\n]\n\n'
+    )
+
+
+def test_host_compares_with_the_lock_entry_that_installs_here(tmp_path: Path) -> None:
+    # uv writes one entry per marker fork (torchcodec 0.11 beside a cu128 torch, 0.16 beside
+    # cu130), each tagged with resolution-markers. The requirement that applies here must meet
+    # the entry that installs here, not whichever entry the lock lists last.
+    here, elsewhere = _fork_markers()
+    repo = _make_repo(
+        tmp_path,
+        [f"torchcodec>=0.11.1,<0.12 ; {here}", f"torchcodec>=0.16.0 ; {elsewhere}"],
+        {},
+    )
+    (repo / "uv.lock").write_text(
+        _forked_lock("torchcodec", "0.11.1", "0.16.0"), encoding="utf-8"
+    )
+    findings, warnings = apd.check_host(repo)
+    assert findings == []
+    assert warnings == []
+
+
+def test_host_stale_floor_is_judged_against_the_entry_that_installs_here(
+    tmp_path: Path,
+) -> None:
+    here, elsewhere = _fork_markers()
+    repo = _make_repo(
+        tmp_path,
+        [f"torchcodec>=0.11.0 ; {here}", f"torchcodec>=0.16.0 ; {elsewhere}"],
+        {},
+    )
+    (repo / "uv.lock").write_text(
+        _forked_lock("torchcodec", "0.11.1", "0.16.0"), encoding="utf-8"
+    )
+    findings, _ = apd.check_host(repo)
+    assert [(f.name, f.kind, f.locked) for f in findings] == [
+        ("torchcodec", "stale", "0.11.1")
+    ]
+
+
+def test_host_audits_an_index_forked_source(tmp_path: Path) -> None:
+    # A list-form source is uv's per-platform index fork (torch from cu128 / cu130), not a local
+    # checkout: its floors are audited like any other. Only an entry with a path / workspace /
+    # git / url key marks a sibling, in a list as much as in a table.
+    here, elsewhere = _fork_markers()
+    sources = (
+        "\n[tool.uv.sources]\ntorch = [\n"
+        f'    {{ index = "pytorch-cu128", group = "cuda", marker = "{here}" }},\n'
+        f'    {{ index = "pytorch-cu130", group = "cuda", marker = "{elsewhere}" }},\n'
+        "]\n"
+        'sibling = [\n    { path = "../sibling", editable = true },\n]\n'
+    )
+    repo = _make_repo(
+        tmp_path,
+        [f"torch>=2.10.0 ; {here}", f"torch>=2.11.0 ; {elsewhere}", "sibling>=1.0"],
+        {},
+        sources_toml=sources,
+    )
+    (repo / "uv.lock").write_text(
+        _forked_lock("torch", "2.11.0+cu128", "2.14.0+cu130")
+        + '[[package]]\nname = "sibling"\nversion = "2.0.0"\n\n',
+        encoding="utf-8",
+    )
+    findings, warnings = apd.check_host(repo)
+    assert [(f.name, f.kind, f.locked) for f in findings] == [
+        ("torch", "stale", "2.11.0+cu128")
+    ]
+    assert warnings == []
+
+
+def test_local_source_names_reads_list_form_entries() -> None:
+    pyproject = {
+        "tool": {
+            "uv": {
+                "sources": {
+                    "torch": [
+                        {"index": "pytorch-cu128", "marker": "sys_platform == 'win32'"}
+                    ],
+                    "sibling": [{"path": "../sibling", "editable": True}],
+                    "Core_Lib": {"path": "../core", "editable": True},
+                    "pinned": {"index": "pytorch-cu128"},
+                }
+            }
+        }
+    }
+    assert apd.local_source_names(pyproject) == {"sibling", "core-lib"}
+
+
 def test_host_not_in_lock_is_warning_not_finding(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, ["ghost>=1.0"], {"numpy": "2.4.1"})
     findings, warnings = apd.check_host(repo)

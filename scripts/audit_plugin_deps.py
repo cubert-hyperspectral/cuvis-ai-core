@@ -7,7 +7,9 @@ Two independent checks, selectable with ``--check``:
   therefore tested) version, and direct dependencies that declare no lower bound
   at all. Dependencies sourced from a local path / workspace / VCS (editable
   siblings) are skipped, as are dependencies whose environment marker does not
-  apply to the current platform.
+  apply to the current platform. A package uv forked per platform (one lock
+  entry per ``resolution-markers`` set) is compared with the entry that
+  installs on the current platform.
 * ``plugins`` — each plugin manifest's requirements against the version that
   cuvis-ai-core locks. Flags a plugin dependency whose specifier excludes the
   version core has locked, which would make the plugin uninstallable alongside
@@ -26,6 +28,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
+from packaging.markers import InvalidMarker, Marker
 from packaging.requirements import Requirement
 from packaging.version import InvalidVersion, Version
 
@@ -47,11 +50,33 @@ def load_pyproject(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+def _entry_installs_here(pkg: dict) -> bool:
+    """Whether a lock entry is the one this platform installs.
+
+    uv writes one entry per marker fork (torch from the cu128 and the cu130 index, torchcodec
+    in two ranges), each tagged with ``resolution-markers``; an entry without them applies
+    everywhere. A marker this ``packaging`` cannot read counts as holding, so an unknown
+    marker never hides a package from the audit.
+    """
+    markers = pkg.get("resolution-markers") or []
+    if not markers:
+        return True
+    for text in markers:
+        try:
+            if Marker(text).evaluate():
+                return True
+        except InvalidMarker:
+            return True
+    return False
+
+
 def load_lock(path: Path) -> dict[str, Version]:
-    """Map every package in a ``uv.lock`` to its locked version."""
+    """Map every package in a ``uv.lock`` to the version this platform installs."""
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     locked: dict[str, Version] = {}
     for pkg in data.get("package", []):
+        if not _entry_installs_here(pkg):
+            continue
         try:
             locked[normalize(pkg["name"])] = Version(pkg["version"])
         except (InvalidVersion, KeyError):
@@ -119,12 +144,19 @@ def project_dependencies(pyproject: dict) -> list[Requirement]:
 
 
 def local_source_names(pyproject: dict) -> set[str]:
-    """Names resolved from a local/VCS source via ``[tool.uv.sources]``."""
+    """Names resolved from a local/VCS source via ``[tool.uv.sources]``.
+
+    A source may be a list of entries (uv's per-platform fork); it is local when any entry
+    is. An index-only fork (torch from the cu128 and the cu130 index) is a registry source
+    and stays audited.
+    """
     sources = pyproject.get("tool", {}).get("uv", {}).get("sources", {}) or {}
     local: set[str] = set()
     for name, spec in sources.items():
-        if isinstance(spec, list) or (
-            isinstance(spec, dict) and any(k in spec for k in _LOCAL_SOURCE_KEYS)
+        entries = spec if isinstance(spec, list) else [spec]
+        if any(
+            isinstance(entry, dict) and any(k in entry for k in _LOCAL_SOURCE_KEYS)
+            for entry in entries
         ):
             local.add(normalize(name))
     return local
