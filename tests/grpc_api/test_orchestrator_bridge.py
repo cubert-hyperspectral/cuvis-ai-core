@@ -1152,7 +1152,14 @@ def test_forward_restore_train_run_bad_yaml_is_invalid_argument(monkeypatch, tmp
     assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
 
 
-def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_path):
+def test_forward_restore_train_run_compose_failure_is_failed_precondition(
+    monkeypatch, tmp_path
+):
+    """A compose / spawn failure is the server's answer, not a transport fault.
+
+    Surfaced as FAILED_PRECONDITION with the cause, so a client keeps whatever
+    it had instead of retrying the same failing compose on a fresh session.
+    """
     sm = SessionManager()
     fake_cfg = SimpleNamespace(pipeline="pl.yaml")
     pl = tmp_path / "pl.yaml"
@@ -1164,7 +1171,32 @@ def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_pat
         MagicMock(side_effect=RuntimeError("compose failed")),
     )
     ctx = _InMemoryContext()
-    with pytest.raises(RuntimeError, match="compose failed"):
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "compose failed" in ctx.details()
+    # The allocated parent session was dropped before answering.
+    assert sm._sessions == {}
+
+
+def test_forward_restore_train_run_reraises_unclassified_error(monkeypatch, tmp_path):
+    """Anything that is not a compose / spawn failure still surfaces as a bug."""
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=KeyError("a bug")),
+    )
+    ctx = _InMemoryContext()
+    with pytest.raises(KeyError, match="a bug"):
         orchestrator_bridge.forward_restore_train_run(
             sm,
             cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),

@@ -1,24 +1,19 @@
 # TODOs
 
-## Map `UvRunnerError` to a structured gRPC status on the orchestrator servicer path
+## A run-cache eviction whose delete fails leaves a whole venv on disk
 
-- **What:** Decorate the parent orchestrator servicer methods (`grpc/service.py`, e.g.
-  `LoadPipeline`) so compose failures like `UvRunnerError` surface as a structured status
-  (`FAILED_PRECONDITION`) instead of `UNKNOWN` with message text only.
-- **Why:** Today `TheiaService.LoadPipeline` delegates undecorated, so any compose-time error
-  reaches clients as `StatusCode.UNKNOWN`. The error *message* is now descriptive (uv/git
-  resolution hardening), but clients that want to branch programmatically (retry, surface a
-  setup dialog, distinguish "env broken" from "pipeline invalid") have to parse strings.
-- **Pros:** Clean client contract for every host (CuvisNEXT and beyond); aligns the parent
-  servicer with the `@grpc_handler` mapping the in-process child services already use
-  (`grpc/error_handling.py` maps `FileNotFoundError` → `NOT_FOUND` etc.).
-- **Cons:** Touches the parent servicer's error-handling architecture; needs a deliberate
-  decision on which exceptions map to which codes and whether `@grpc_handler` is reused or a
-  dedicated mapping is added; risk of changing behavior clients already depend on.
-- **Context:** Identified during the CuvisNEXT MR !191 uv-discovery review (2026-07-18). The
-  orchestrator composes per-pipeline envs by spawning `uv`; a missing binary used to surface as
-  an opaque `[WinError 2]`. The resolution/diagnosability fix landed in
-  `orchestrator/uv_runner.py` (`CUVIS_UV` → `shutil.which` → `uv.find_uv_bin`, clear
-  `UvRunnerError`) and `orchestrator/runtime_project.py` (`git` named when missing). This item
-  is the remaining structural half.
-- **Depends on / blocked by:** the uv/git resolution hardening (same change set as this file).
+- **What:** `evict_run_cache` renames the entry to `<digest>.evicting.<ts>.<tag>` and deletes it
+  on the deleter thread; when a file inside is locked (a child that has not exited, an
+  antivirus scan) the delete stops and the renamed directory stays, `.venv` and all. Seen
+  2026-09-22 on a developer machine: `5503c850aa175e15.evicting.1790064749.32e21b` with a
+  complete venv of a `[sam3]` env, several GB.
+- **Why:** The bound the eviction exists for (`CUVIS_RUN_CACHE_MAX_ENTRIES`) is silently
+  exceeded by the leftovers, which no later pass touches.
+- **Pros:** The cache stays within its bound without operator clean-up.
+- **Cons:** A retry has to decide when an `.evicting` directory is abandoned (the deleter of
+  another live server may still be working on it).
+- **Context:** `orchestrator/composer.py` (`evict_run_cache`, `_sweep_stale_partials`, the
+  deleter thread) and the `clean-run-cache` CLI. A reasonable rule: sweep `.evicting.*`
+  directories older than the eviction pass's own age floor at server start and in
+  `clean-run-cache`, with a retrying `rmtree` that logs the file it could not remove.
+- **Depends on / blocked by:** nothing.

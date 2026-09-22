@@ -295,6 +295,11 @@ class ChildHandle:
     process: subprocess.Popen
     stderr_log: Path | None = None
     stdout_log: Path | None = None
+    # Set by the parent right before it stops this child on purpose (a pipeline
+    # switch replaced it, or the session closed). A request that still reaches
+    # the handle afterwards is then answered as a replacement, not as a crash:
+    # the exit code the parent caused is not a postmortem worth preserving.
+    retired_by_parent: bool = field(default=False, init=False)
     _channel: grpc.Channel | None = field(default=None, init=False, repr=False)
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
