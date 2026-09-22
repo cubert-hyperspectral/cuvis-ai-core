@@ -240,6 +240,36 @@ def test_preserve_child_logs_still_separates_distinct_sessions(monkeypatch, tmp_
     assert one is not None and two is not None and one != two
 
 
+def test_preserve_child_logs_separates_the_children_of_one_session(
+    monkeypatch, tmp_path
+):
+    """A session runs several children over its life (dead-child recovery, a pipeline
+    switch); the second crashed child gets its own copy, not the first crash's directory."""
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    stdout_log, stderr_log = _write_logs(tmp_path)
+
+    one = preserve_child_logs(
+        (stdout_log, stderr_log), session_id="s", exit_code=1, endpoint="127.0.0.1:1"
+    )
+    again = preserve_child_logs(
+        (stdout_log, stderr_log), session_id="s", exit_code=1, endpoint="127.0.0.1:1"
+    )
+    assert one is not None
+    assert again == one
+
+    # A second child of the same session, crashed later: its own directory.
+    monkeypatch.setattr(
+        "cuvis_ai_core.orchestrator.crash_logs.time.strftime",
+        lambda fmt: "20260922-200000",
+    )
+    two = preserve_child_logs(
+        (stdout_log, stderr_log), session_id="s", exit_code=1, endpoint="127.0.0.1:2"
+    )
+    assert two is not None
+    assert two != one
+    assert (two / stderr_log.name).exists()
+
+
 def test_preserve_child_logs_two_threads_produce_one_directory(monkeypatch, tmp_path):
     """close_session and the failing RPC can race; the lock leaves one folder."""
     monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))

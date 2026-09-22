@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
@@ -60,6 +61,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     ChildRuntimeSpawner,
     DeclaredPaths,
     LocalChildRuntimeSpawner,
+    SpawnError,
     dead_child_details,
     format_exit_code,
 )
@@ -71,13 +73,15 @@ _NO_CHILD_DETAIL = (
     "Call LoadPipeline or RestoreTrainRun first."
 )
 
-# Answer for a request that reached a child the parent had already retired
-# (a pipeline switch replaced it). Deliberately not a crash status: the exit
-# code is ours, there is nothing to postmortem, and the client's next request
-# lands on the replacement.
+# Answer for a request that reached a child the parent itself had stopped:
+# a pipeline switch replaced it, the session closed, or an earlier stop is
+# still in progress. Deliberately not a crash status: the exit code is ours,
+# there is nothing to postmortem, and the client's next request lands on the
+# session's current runtime (or on NOT_FOUND once the session is gone).
 _REPLACED_DETAIL = (
-    "The session's child runtime was replaced by a pipeline switch; this "
-    "request went to the previous runtime. Repeat the request."
+    "The session's child runtime was stopped by the server (replaced by a "
+    "pipeline switch, or the session closed); this request went to the "
+    "previous runtime. Repeat the request."
 )
 
 # gRPC trailing-metadata keys carrying a dead child's postmortem. These three
@@ -236,8 +240,12 @@ def child_can_serve(
     (a re-registered plugin pointing at another tag or path is another
     plugin), and whose data module is either none or the one the env was
     composed with. Anything else needs a new env: a plugin family the child
-    never installed fails inside it with a module import error.
+    never installed fails inside it with a module import error. A child the
+    parent has already told to stop (a retire that hit a survivor) serves
+    nothing any more, whatever it was composed for.
     """
+    if getattr(session.child_handle, "retired_by_parent", False) is True:
+        return False
     current = session.resolved_plugins or {}
     for name, manifest in resolved.items():
         have = current.get(name)
@@ -314,6 +322,11 @@ def ensure_child_for_session(
         )
 
     declared = _default_declared_paths(session_id)
+    # Record the child's scratch root (output/scratch share this parent) right
+    # away, so close_session removes it whether or not the spawn below
+    # succeeds: the spawner writes the child's logs into it before anything
+    # else can fail.
+    session.runtime_base_dir = declared.output_dir.parent
     cache_root = venv.parent.parent
     entry_digest = venv.parent.name
     # Lease lifecycle applies only to real composed cache entries — the
@@ -325,9 +338,18 @@ def ensure_child_for_session(
     if lease_root is not None:
         # Intent lease BEFORE the spawn: endpoint/health polling can take
         # minutes and the freshly composed entry must already be protected
-        # from eviction. A lease-write failure fails the whole spawn — an
-        # unprotected child is worse than a clean error.
-        leases.write_intent_lease(lease_root, session_id, entry_digest)
+        # from eviction. It cannot be written earlier: one lease file per
+        # session, and until the retire above returned it still had to name
+        # the old child's digest. Between compose and this line the new entry
+        # is protected by the composer's hot floor alone. A lease-write
+        # failure fails the whole spawn — an unprotected child is worse than a
+        # clean error.
+        try:
+            leases.write_intent_lease(lease_root, session_id, entry_digest)
+        except OSError as exc:
+            raise SpawnError(
+                f"Could not write the runtime lease for session {session_id!r}: {exc}"
+            ) from exc
         session.lease_cache_root = lease_root
     try:
         handle = get_spawner().spawn(
@@ -341,10 +363,16 @@ def ensure_child_for_session(
             declared_paths=declared,
             request_gpu=_gpu_requested(),
         )
-    except Exception:
+    except Exception as exc:
         if lease_root is not None:
             leases.remove_lease(lease_root, session_id)
             session.lease_cache_root = None
+        if isinstance(exc, OSError) and not isinstance(exc, RuntimeError):
+            # Popen, mkdtemp or a log file open failed below the spawner's own
+            # SpawnError: still a spawn failure the caller can be told about.
+            raise SpawnError(
+                f"Could not start the child runtime for session {session_id!r}: {exc}"
+            ) from exc
         raise
 
     try:
@@ -372,9 +400,11 @@ def ensure_child_for_session(
         raise
 
     if not session_manager.has_session(session_id):
-        # The session was closed while the child was being prepared (a close
-        # from inside this load's own lock scope, or a session swept away).
-        # Nothing may own the fresh child: stop it and drop its lease.
+        # The session was closed while the child was being prepared. Every
+        # pop happens under this same lock, so from another thread this
+        # cannot fire; it guards a close from inside this load's own lock
+        # scope (the lock is re-entrant). Nothing may own the fresh child:
+        # stop it, drop its lease and the scratch tree recreated for it.
         try:
             handle.terminate(grace_s=2.0)
         except Exception as exc:  # pragma: no cover - best effort
@@ -384,14 +414,13 @@ def ensure_child_for_session(
         if lease_root is not None:
             leases.remove_lease(lease_root, session_id)
             session.lease_cache_root = None
+        session.runtime_base_dir = None
+        shutil.rmtree(declared.output_dir.parent, ignore_errors=True)
         raise SessionClosedDuringLoad(session_id)
 
     session.child_handle = handle
     session.resolved_plugins = dict(resolved)
     session.child_data_module = data_module
-    # Record the child's scratch root (output/scratch share this parent) so
-    # close_session can remove it once the child exits.
-    session.runtime_base_dir = declared.output_dir.parent
     return handle
 
 
@@ -404,25 +433,38 @@ def _initialize_child_session(
 ) -> None:
     """Hand the freshly-spawned child its session context via InitializeSession.
 
-    Terminates the child and raises if it rejects the init handshake.
+    Terminates the child and raises :class:`SpawnError` if it rejects the init
+    handshake, whether as an ``ok=False`` answer or as an RPC error (the
+    child's servicer is undecorated, so a plugin import failure inside
+    ``register_plugins_installed`` arrives as UNKNOWN). Either way the server
+    has answered and a fresh session would fail the same way, which is what
+    the caller's FAILED_PRECONDITION mapping tells the client.
     """
     # resolved_plugins_json is a JSON list of single-plugin manifests; each
     # manifest carries its own `name`, so the list is self-describing.
     payload = json.dumps([cfg.model_dump() for cfg in resolved.values()]).encode(
         "utf-8"
     )
-    init_response = handle.stub().InitializeSession(
-        cuvis_ai_pb2.InitializeSessionRequest(
-            session_id=session_id,
-            search_paths=list(session.search_paths),
-            resolved_plugins_json=payload,
-            output_dir=str(declared.output_dir),
-            scratch_dir=str(declared.scratch_dir),
-        )
+    request = cuvis_ai_pb2.InitializeSessionRequest(
+        session_id=session_id,
+        search_paths=list(session.search_paths),
+        resolved_plugins_json=payload,
+        output_dir=str(declared.output_dir),
+        scratch_dir=str(declared.scratch_dir),
     )
+    try:
+        init_response = handle.stub().InitializeSession(request)
+    except grpc.RpcError as exc:
+        handle.terminate(grace_s=2.0)
+        code = exc.code().name if hasattr(exc, "code") else "UNKNOWN"
+        details = exc.details() if hasattr(exc, "details") else str(exc)
+        raise SpawnError(
+            f"Child runtime failed InitializeSession for session {session_id!r} "
+            f"({len(resolved)} plugins: {sorted(resolved)}): {code}: {details}"
+        ) from exc
     if not init_response.ok:
         handle.terminate(grace_s=2.0)
-        raise RuntimeError(
+        raise SpawnError(
             f"Child runtime rejected InitializeSession for session "
             f"{session_id!r} ({len(resolved)} plugins: {sorted(resolved)})."
         )
@@ -508,16 +550,24 @@ def forward_load_pipeline(
             context.set_details(str(exc))
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
         except ChildStillRunning as exc:
-            # The old child would not die; the pipeline was not replaced and
-            # the old one still serves. Not a precondition the caller can fix.
-            context.set_code(grpc.StatusCode.INTERNAL)
+            # The old child would not die; the pipeline was not replaced. The
+            # old handle stays attached and marked, so the caller's next load
+            # retries the stop. FAILED_PRECONDITION, not INTERNAL: a client
+            # that treats INTERNAL as a transport fault would close the
+            # session and spawn a fresh runtime beside the survivor, the very
+            # thing the confirmed exit refused.
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(str(exc))
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
         except RuntimeError as exc:
             # Compose and spawn failures (uv, git, the plugin source resolver,
-            # the child's endpoint or health check): the server answered, and
-            # a fresh session would run into the same failure. A client keeps
-            # its working pipeline instead of retrying on a new session.
+            # the child's endpoint, health check or InitializeSession): the
+            # server answered, and a fresh session would run into the same
+            # failure, so the client shows it once instead of retrying on a
+            # new session. A compose failure leaves the old child and its
+            # pipeline intact; a spawn failure after the retire leaves the
+            # session childless (inference answers FAILED_PRECONDITION, no
+            # child) until the next load recovers.
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(f"Preparing the pipeline's runtime failed: {exc}")
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
@@ -661,6 +711,15 @@ def forward_restore_train_run(
     # from the reuse-or-replace decision through the forwarded call. The lock
     # is re-entrant, so _drop_owned_session may close the session from here.
     with parent_session.child_lock:
+        if not session_manager.has_session(parent_session_id):
+            # A close held the lock first and popped the caller's session:
+            # NOT_FOUND, as forward_load_pipeline answers the same race, so
+            # the client replays on a fresh session instead of reading a
+            # refusal of the trainrun. (An owned session cannot be in this
+            # state; nothing else knows its id yet.)
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Session {parent_session_id} was closed")
+            return cuvis_ai_pb2.RestoreTrainRunResponse()
         try:
             ensure_child_for_session(
                 session_manager,
@@ -687,8 +746,10 @@ def forward_restore_train_run(
             context.set_details(str(exc))
             return cuvis_ai_pb2.RestoreTrainRunResponse()
         except ChildStillRunning as exc:
+            # See forward_load_pipeline: the old child stays attached and
+            # marked; the next load retries the stop.
             _drop_owned_session()
-            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details(str(exc))
             return cuvis_ai_pb2.RestoreTrainRunResponse()
         except RuntimeError as exc:
@@ -699,8 +760,8 @@ def forward_restore_train_run(
             context.set_details(f"Preparing the trainrun's runtime failed: {exc}")
             return cuvis_ai_pb2.RestoreTrainRunResponse()
         except Exception:
-            # Compose / spawn failed for some other reason; re-raise so the grpc
-            # handler decorator surfaces it.
+            # Anything else is a bug, not a compose / spawn failure; re-raise.
+            # The parent servicer is undecorated, so grpc reports it as UNKNOWN.
             _drop_owned_session()
             raise
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -25,14 +26,23 @@ import pytest
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
+from cuvis_ai_core.grpc import session_manager as session_manager_mod
 from cuvis_ai_core.grpc.orchestrator_bridge import (
     _InMemoryChildHandle,
     _InMemoryContext,
     _InMemoryRpcError,
     _InMemorySpawner,
+    _InMemoryStub,
 )
 from cuvis_ai_core.grpc.session_manager import ChildStillRunning, SessionManager
 from cuvis_ai_core.orchestrator import leases as leases_mod
+from cuvis_ai_core.orchestrator.spawner import SpawnError
+
+
+def _scratch_tree(sid: str) -> Path:
+    """The per-session scratch tree the bridge declares for a child."""
+    return Path(tempfile.gettempdir()) / "cuvis_runtime_sessions" / sid
+
 
 NODE_A = "tests.fixtures.mock_nodes.MinMaxNormalizer"
 NODE_B = "tests.fixtures.mock_nodes.MockBinaryDecider"
@@ -148,6 +158,10 @@ def test_child_can_serve_table(two_plugins):
     assert orchestrator_bridge.child_can_serve(session, same, None)
     assert not orchestrator_bridge.child_can_serve(session, same, "tiff_paired")
 
+    # A child the parent already told to stop serves nothing, whatever its set.
+    session.child_handle = SimpleNamespace(retired_by_parent=True, returncode=None)
+    assert not orchestrator_bridge.child_can_serve(session, same, "cu3s")
+
 
 # ---------------------------------------------------------------------------
 # ensure_child_for_session: reuse vs swap
@@ -247,8 +261,22 @@ def test_compose_failure_on_swap_keeps_the_old_child_and_lease(two_plugins, tmp_
     assert lease is not None and lease.entry_digest == "digest0001"
     assert len(lease_spawner.handles) == 1
 
+    # Through the RPC path the same failure is the server's answer, not a
+    # fault, and the old child keeps serving.
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_b"]), ctx
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "no network" in ctx.details()
+    assert session.child_handle is first
+    assert first.returncode is None
+    ((_path, lease),) = leases_mod.read_leases(root)
+    assert lease is not None and lease.entry_digest == "digest0001"
 
-def test_spawn_failure_after_detach_leaves_session_childless_and_next_load_recovers(
+
+def test_spawn_failure_after_retire_leaves_session_childless_and_next_load_recovers(
     two_plugins,
 ):
     sm, sid, spawner = two_plugins
@@ -278,6 +306,10 @@ def test_spawn_failure_after_detach_leaves_session_childless_and_next_load_recov
     assert first.returncode is not None  # the old child was retired before the spawn
     assert session.child_handle is None
     assert session.resolved_plugins is None
+    # The scratch tree declared for the failed spawn is recorded, so a close
+    # removes it even though no child ever attached.
+    assert session.runtime_base_dir == _scratch_tree(sid)
+    assert session.runtime_base_dir.exists()
 
     recovered = orchestrator_bridge.ensure_child_for_session(
         sm, sid, _pipeline(["plugin_b"], [NODE_B])
@@ -358,20 +390,25 @@ def test_close_session_after_swap_terminates_only_the_live_child(two_plugins):
     base = sm.get_session(sid).runtime_base_dir
     assert base is not None and base.exists()
 
+    # Spy both handles: the in-memory terminate always reports 0, so the
+    # retired child's return code alone could not show a second stop.
     terminations: list[str] = []
-    real_terminate = second.terminate
+    for name, handle in (("first", first), ("second", second)):
 
-    def spying_terminate(grace_s=5.0):
-        terminations.append("second")
-        return real_terminate(grace_s)
+        def spying_terminate(grace_s=5.0, _name=name, _real=handle.terminate):
+            terminations.append(_name)
+            return _real(grace_s)
 
-    second.terminate = spying_terminate  # type: ignore[method-assign]
-    first_code = first.returncode
+        def spying_kill(_name=name, _real=handle.kill):
+            terminations.append(_name)
+            return _real()
+
+        handle.terminate = spying_terminate  # type: ignore[method-assign]
+        handle.kill = spying_kill  # type: ignore[method-assign]
 
     sm.close_session(sid)
 
     assert terminations == ["second"]
-    assert first.returncode == first_code
     assert not base.exists()
 
 
@@ -403,7 +440,7 @@ class _SurvivorFirstSpawner(_RecordingSpawner):
         )
 
 
-def test_detach_child_refuses_a_survivor(two_plugins):
+def test_retire_child_refuses_a_survivor(two_plugins):
     sm, sid, _spawner = two_plugins
     spawner = _SurvivorFirstSpawner()
     orchestrator_bridge.set_spawner(spawner)
@@ -420,14 +457,42 @@ def test_detach_child_refuses_a_survivor(two_plugins):
     assert session.child_handle is survivor
     assert sorted(session.resolved_plugins) == ["plugin_a"]
     assert len(spawner.handles) == 1
+    # The survivor stays attached for the retry but MARKED: StopRun, terminate
+    # and kill were delivered, so it serves nothing any more.
+    assert survivor.retired_by_parent is True
 
+    # The server's answer, not a fault: a client that retried INTERNAL on a
+    # fresh session would spawn a runtime beside the survivor.
     ctx = _InMemoryContext()
     resp = orchestrator_bridge.forward_load_pipeline(
         sm, _load_request(sid, ["plugin_b"]), ctx
     )
     assert resp.success is False
-    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
     assert "could not be stopped" in ctx.details()
+
+    # A request that still reaches the stopping child is a replacement, not a crash.
+    ctx = _InMemoryContext()
+    orchestrator_bridge._propagate_child_failure(
+        survivor,
+        _InMemoryRpcError(grpc.StatusCode.UNAVAILABLE, "connection refused"),
+        ctx,
+        session=session,
+    )
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert ctx.trailing_metadata() == ()
+
+    # The kill lands late. The next load sees an exited child the parent had
+    # stopped: no crash logs, a fresh child, and the pipeline it asked for.
+    survivor._returncode = 1
+    recovered = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_b"], [NODE_B])
+    )
+    assert recovered is not survivor
+    assert session.child_handle is recovered
+    assert sorted(session.resolved_plugins) == ["plugin_b"]
+    assert session.crash_log_dir is None
+    assert len(spawner.handles) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +510,52 @@ def test_inference_racing_a_swap_reports_replacement_not_crash(two_plugins):
     )
     assert first.retired_by_parent is True
 
+    # Through the forwarding wrapper, the production path: the retired child's
+    # servicer refuses the pipeline-less Inference, the RpcError reaches the
+    # marker check first.
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge._call_child_with_error_propagation(
+        first,
+        "Inference",
+        cuvis_ai_pb2.InferenceRequest(session_id=sid),
+        ctx,
+        lambda: cuvis_ai_pb2.InferenceResponse(),
+        session=sm.get_session(sid),
+    )
+
+    assert resp == cuvis_ai_pb2.InferenceResponse()
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "replaced" in ctx.details()
+    assert ctx.trailing_metadata() == ()
+    assert sm.get_session(sid).crash_log_dir is None
+
+
+def test_dead_child_recovery_keeps_crash_status_for_racing_requests(
+    two_plugins, monkeypatch, tmp_path
+):
+    """A child that died on its own is not marked; a racing request keeps the crash."""
+    sm, sid, _spawner = two_plugins
+    monkeypatch.setenv("CUVIS_RUNTIME_CRASH_DIR", str(tmp_path / "crashes"))
+    first = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_a"], [NODE_A])
+    )
+    # The child crashed: its exit code is set and a stop cannot change it (the
+    # in-memory terminate would otherwise report 0 for a process that is gone).
+    first._returncode = 137
+    first.terminate = lambda grace_s=5.0: 137  # type: ignore[method-assign]
+
+    second = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_a"], [NODE_A])
+    )
+    assert second is not first
+    assert first.retired_by_parent is False
+
+    preserved: list[object] = []
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "_preserve_crash_logs",
+        lambda child, session: preserved.append(child) or None,
+    )
     ctx = _InMemoryContext()
     orchestrator_bridge._propagate_child_failure(
         first,
@@ -452,11 +563,11 @@ def test_inference_racing_a_swap_reports_replacement_not_crash(two_plugins):
         ctx,
         session=sm.get_session(sid),
     )
-
-    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
-    assert "replaced" in ctx.details()
-    assert ctx.trailing_metadata() == ()
-    assert sm.get_session(sid).crash_log_dir is None
+    assert ctx.code() is grpc.StatusCode.INTERNAL
+    assert "exited unexpectedly" in ctx.details()
+    assert preserved == [first]
+    trailers = dict(ctx.trailing_metadata())
+    assert trailers[orchestrator_bridge.TRAILER_CHILD_EXIT_CODE] == "137"
 
 
 def test_retired_child_never_preserves_crash_logs(two_plugins, monkeypatch):
@@ -504,7 +615,9 @@ def test_compose_failure_maps_to_failed_precondition(two_plugins):
     assert "could not resolve torch" in ctx.details()
 
 
-def test_unclassified_compose_exception_stays_internal(two_plugins):
+def test_unclassified_compose_exception_propagates_to_the_servicer(two_plugins):
+    """A bug is not mapped: it escapes the bridge (the undecorated servicer
+    reports it as UNKNOWN) instead of being dressed up as a precondition."""
     sm, sid, _spawner = two_plugins
 
     def composer(plugins, *, core_source, active_data_module=None):
@@ -558,13 +671,18 @@ def test_competing_loads_on_one_session_serialise_whole_operation(
         )
 
     threads = [
-        threading.Thread(target=load, args=(p,)) for p in ("plugin_a", "plugin_b")
+        threading.Thread(target=load, args=(p,), daemon=True)
+        for p in ("plugin_a", "plugin_b")
     ]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=10)
 
+    assert not any(t.is_alive() for t in threads), (
+        "load threads did not finish (lock held?)"
+    )
+    assert set(results) == {"plugin_a", "plugin_b"}
     assert all(r.success for r in results.values())
     assert state["max_active"] == 1
     assert len(spawner.handles) == 2
@@ -606,3 +724,214 @@ def test_close_during_spawn_leaves_no_orphan(two_plugins, tmp_path):
     assert spawner.handles[0].returncode is not None
     assert leases_mod.read_leases(root) == []
     assert not sm.has_session(sid)
+    # The scratch tree recreated for the fresh child went with it.
+    assert not _scratch_tree(sid).exists()
+
+
+def test_close_from_another_thread_waits_for_the_load_then_tears_down(
+    two_plugins, tmp_path, monkeypatch
+):
+    """A CloseSession on another thread blocks on the session's lock until the load has
+    attached its child, then finds that child to tear down: no orphan, no lease."""
+    sm, sid, _spawner = two_plugins
+    root = _lease_root(tmp_path)
+    orchestrator_bridge.set_composer(_counting_composer(root))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "_call_child_with_error_propagation",
+        lambda *a, **k: cuvis_ai_pb2.LoadPipelineResponse(success=True),
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    class _GatedSpawner(_LeaseAwareRecordingSpawner):
+        def spawn(self, venv_path, *, cwd, declared_paths, request_gpu=False):
+            entered.set()
+            assert release.wait(timeout=10)
+            return super().spawn(
+                venv_path,
+                cwd=cwd,
+                declared_paths=declared_paths,
+                request_gpu=request_gpu,
+            )
+
+    spawner = _GatedSpawner(root)
+    orchestrator_bridge.set_spawner(spawner)
+    ctx = _InMemoryContext()
+    result: dict[str, cuvis_ai_pb2.LoadPipelineResponse] = {}
+
+    def load():
+        result["resp"] = orchestrator_bridge.forward_load_pipeline(
+            sm, _load_request(sid, ["plugin_a"]), ctx
+        )
+
+    loader = threading.Thread(target=load, daemon=True)
+    loader.start()
+    assert entered.wait(timeout=5)
+    closer = threading.Thread(target=lambda: sm.close_session(sid), daemon=True)
+    closer.start()
+    closer.join(timeout=0.3)
+    assert closer.is_alive(), "close_session did not wait for the load's lock"
+
+    release.set()
+    loader.join(timeout=10)
+    closer.join(timeout=10)
+    assert not loader.is_alive() and not closer.is_alive()
+    assert result["resp"].success is True
+    assert ctx.code() is None
+    handle = spawner.handles[0]
+    assert handle.returncode is not None
+    assert handle.retired_by_parent is True
+    assert leases_mod.read_leases(root) == []
+    assert not sm.has_session(sid)
+    assert not _scratch_tree(sid).exists()
+
+
+class _HungLoadHandle(_InMemoryChildHandle):
+    """A child whose LoadPipeline never answers until the parent stops it."""
+
+    def __init__(self, servicer) -> None:
+        super().__init__(servicer)
+        self.entered = threading.Event()
+        self.released = threading.Event()
+
+    def stub(self):
+        outer = self
+
+        class _HungStub(_InMemoryStub):
+            def LoadPipeline(self, request, timeout=None):
+                outer.entered.set()
+                outer.released.wait(timeout=10)
+                raise _InMemoryRpcError(
+                    grpc.StatusCode.UNAVAILABLE, "connection refused"
+                )
+
+        return _HungStub(self._servicer)
+
+    def terminate(self, grace_s: float = 5.0):
+        self.released.set()
+        return super().terminate(grace_s)
+
+
+def test_close_session_breaks_a_hung_forwarded_load(two_plugins, monkeypatch):
+    """The forwarded LoadPipeline has no deadline. A child that hangs inside it holds
+    the session's lock; after the grace the close stops the child, the load unwinds
+    with a replacement answer, and the teardown proceeds."""
+    sm, sid, _spawner = two_plugins
+    monkeypatch.setattr(session_manager_mod, "CLOSE_LOCK_GRACE_SECONDS", 0.2)
+
+    class _HungSpawner(_RecordingSpawner):
+        def spawn(self, venv_path, *, cwd, declared_paths, request_gpu=False):
+            from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+            handle = _HungLoadHandle(RunRuntimeServicer())
+            self.handles.append(handle)
+            return handle  # type: ignore[return-value]
+
+    spawner = _HungSpawner()
+    orchestrator_bridge.set_spawner(spawner)
+    ctx = _InMemoryContext()
+    result: dict[str, cuvis_ai_pb2.LoadPipelineResponse] = {}
+
+    def load():
+        result["resp"] = orchestrator_bridge.forward_load_pipeline(
+            sm, _load_request(sid, ["plugin_a"]), ctx
+        )
+
+    loader = threading.Thread(target=load, daemon=True)
+    loader.start()
+    deadline = time.monotonic() + 5
+    while not spawner.handles and time.monotonic() < deadline:
+        time.sleep(0.01)
+    hung = spawner.handles[0]
+    assert hung.entered.wait(timeout=5)
+
+    started = time.monotonic()
+    closer = threading.Thread(target=lambda: sm.close_session(sid), daemon=True)
+    closer.start()
+    closer.join(timeout=5)
+    assert not closer.is_alive(), "close_session hung behind the forwarded load"
+    loader.join(timeout=5)
+    assert not loader.is_alive()
+    assert time.monotonic() - started < 4
+
+    assert hung.returncode is not None
+    assert hung.retired_by_parent is True
+    assert result["resp"].success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "stopped by the server" in ctx.details()
+    assert ctx.trailing_metadata() == ()
+    assert not sm.has_session(sid)
+
+
+# ---------------------------------------------------------------------------
+# Spawn-window failures are the server's answer
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_session_rpc_error_maps_to_failed_precondition(two_plugins):
+    """A plugin import failure inside the child's InitializeSession arrives as an
+    RpcError (the child servicer is undecorated). It is a spawn failure: one
+    FAILED_PRECONDITION with the cause, the child stopped, the scratch tree recorded."""
+    sm, sid, _spawner = two_plugins
+
+    class _RefusingInitHandle(_InMemoryChildHandle):
+        def stub(self):
+            class _Stub(_InMemoryStub):
+                def InitializeSession(self, request, timeout=None):
+                    raise _InMemoryRpcError(
+                        grpc.StatusCode.UNKNOWN,
+                        "Exception calling application: No module named 'cuvis_ai_sam3'",
+                    )
+
+            return _Stub(self._servicer)
+
+    class _RefusingSpawner(_RecordingSpawner):
+        def spawn(self, venv_path, *, cwd, declared_paths, request_gpu=False):
+            from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+            handle = _RefusingInitHandle(RunRuntimeServicer())
+            self.handles.append(handle)
+            return handle  # type: ignore[return-value]
+
+    spawner = _RefusingSpawner()
+    orchestrator_bridge.set_spawner(spawner)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), ctx
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "InitializeSession" in ctx.details()
+    assert "No module named" in ctx.details()
+    assert spawner.handles[0].returncode is not None
+    session = sm.get_session(sid)
+    assert session.child_handle is None
+    assert session.runtime_base_dir == _scratch_tree(sid)
+    assert session.runtime_base_dir.exists()
+
+    sm.close_session(sid)
+    assert not _scratch_tree(sid).exists()
+
+
+def test_os_error_from_spawn_maps_to_failed_precondition(two_plugins):
+    """Popen / mkdtemp failures below the spawner's own SpawnError are spawn failures too."""
+    sm, sid, _spawner = two_plugins
+
+    class _OsErrorSpawner(_RecordingSpawner):
+        def spawn(self, *args, **kwargs):
+            raise PermissionError("[WinError 5] Access is denied: child.stderr.log")
+
+    orchestrator_bridge.set_spawner(_OsErrorSpawner())
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), ctx
+    )
+    assert resp.success is False
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "Could not start the child runtime" in ctx.details()
+    assert "Access is denied" in ctx.details()
+    assert sm.get_session(sid).child_handle is None
+    with pytest.raises(SpawnError):
+        orchestrator_bridge.ensure_child_for_session(
+            sm, sid, _pipeline(["plugin_a"], [NODE_A])
+        )
