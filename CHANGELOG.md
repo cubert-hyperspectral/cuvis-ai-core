@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `scripts/audit_plugin_deps.py` compares a dependency floor with the lock entry that installs on the current platform. uv writes one entry per marker fork (torch from the cu128 and the cu130 index, torchcodec in two version ranges), and the audit took whichever entry the lock listed last, so the cuvis-ai aarch64 fork made the cu128-side `torchcodec>=0.11.1,<0.12` floor look stale against the aarch64 entry 0.16.0. A list-form `[tool.uv.sources]` entry now counts as a local sibling only when one of its entries carries a `path`, `workspace`, `git` or `url` key; an index-only fork is audited like any other package, where it was skipped before.
+
 ## 0.17.3 - 2026-09-16
 
 - Security: raised the `pytorch-lightning` floor and lock to `>=2.6.6` (was 2.6.0) for PYSEC-2026-3967, a remote-code-execution vulnerability in the checkpoint `_load_state` path that imports and executes attacker-controlled module names from a crafted checkpoint's `_instantiator` hyperparameters, bypassing `weights_only=True` when `LightningModule.load_from_checkpoint` runs. Only `pytorch-lightning` moved; the torch and torchvision cu128 pins are unchanged. Downstream plugins that floor their own `pytorch-lightning>=2.6.6` against core's lock (the `--strict` core-lock audit) inherit the fix from this release.
