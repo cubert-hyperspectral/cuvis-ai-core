@@ -21,6 +21,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
 from cuvis_ai_core.orchestrator import leases as leases_mod
+from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
 from cuvis_ai_core.grpc.orchestrator_bridge import (
     _InMemoryChildHandle,
     _InMemoryContext,
@@ -1168,7 +1169,7 @@ def test_forward_restore_train_run_compose_failure_is_failed_precondition(
     monkeypatch.setattr(
         orchestrator_bridge,
         "ensure_child_for_session",
-        MagicMock(side_effect=RuntimeError("compose failed")),
+        MagicMock(side_effect=UvRunnerError("compose failed")),
     )
     ctx = _InMemoryContext()
     resp = orchestrator_bridge.forward_restore_train_run(

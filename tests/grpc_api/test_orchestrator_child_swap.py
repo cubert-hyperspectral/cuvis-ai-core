@@ -37,6 +37,7 @@ from cuvis_ai_core.grpc.orchestrator_bridge import (
 from cuvis_ai_core.grpc.session_manager import ChildStillRunning, SessionManager
 from cuvis_ai_core.orchestrator import leases as leases_mod
 from cuvis_ai_core.orchestrator.spawner import SpawnError
+from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
 
 
 def _scratch_tree(sid: str) -> Path:
@@ -150,6 +151,15 @@ def test_child_can_serve_table(two_plugins):
     changed = _resolved(sm, sid, ["plugin_a"], [NODE_A])
     assert not orchestrator_bridge.child_can_serve(session, changed, None)
 
+    # The same source with regenerated metadata (tags, an icon, another capability
+    # order) is the same install: the venv does not change, so the warm child stays.
+    _register(sm, sid, "plugin_a", class_name=NODE_A)
+    catalog = sm.get_session(sid).registered_plugins
+    catalog["plugin_a"]["capabilities"][0]["tags"] = ["regenerated"]
+    regenerated = _resolved(sm, sid, ["plugin_a"], [NODE_A])
+    assert regenerated["plugin_a"].model_dump() != child_set["plugin_a"].model_dump()
+    assert orchestrator_bridge.child_can_serve(session, regenerated, None)
+
     # A data module the child was not composed for needs a new env even when
     # the plugin set is unchanged; a child composed WITH it serves both.
     assert not orchestrator_bridge.child_can_serve(session, same, "cu3s")
@@ -238,7 +248,7 @@ def test_compose_failure_on_swap_keeps_the_old_child_and_lease(two_plugins, tmp_
         calls["n"] += 1
         if calls["n"] == 1:
             return root / "digest0001" / ".venv"
-        raise RuntimeError("uv lock failed: no network")
+        raise UvRunnerError("uv lock failed: no network")
 
     orchestrator_bridge.set_composer(composer)
     lease_spawner = _LeaseAwareRecordingSpawner(root)
@@ -471,7 +481,8 @@ def test_retire_child_refuses_a_survivor(two_plugins):
     assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
     assert "could not be stopped" in ctx.details()
 
-    # A request that still reaches the stopping child is a replacement, not a crash.
+    # A request that still reaches the stopping child is a replacement (ABORTED,
+    # repeat it once the stop went through), not a crash.
     ctx = _InMemoryContext()
     orchestrator_bridge._propagate_child_failure(
         survivor,
@@ -479,7 +490,7 @@ def test_retire_child_refuses_a_survivor(two_plugins):
         ctx,
         session=session,
     )
-    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert ctx.code() is grpc.StatusCode.ABORTED
     assert ctx.trailing_metadata() == ()
 
     # The kill lands late. The next load sees an exited child the parent had
@@ -524,7 +535,9 @@ def test_inference_racing_a_swap_reports_replacement_not_crash(two_plugins):
     )
 
     assert resp == cuvis_ai_pb2.InferenceResponse()
-    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    # ABORTED, not FAILED_PRECONDITION: the answer means "repeat the request",
+    # and the client shows precondition failures once without retrying.
+    assert ctx.code() is grpc.StatusCode.ABORTED
     assert "replaced" in ctx.details()
     assert ctx.trailing_metadata() == ()
     assert sm.get_session(sid).crash_log_dir is None
@@ -590,7 +603,7 @@ def test_retired_child_never_preserves_crash_logs(two_plugins, monkeypatch):
         ctx,
         session=None,
     )
-    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert ctx.code() is grpc.StatusCode.ABORTED
 
 
 # ---------------------------------------------------------------------------
@@ -615,16 +628,19 @@ def test_compose_failure_maps_to_failed_precondition(two_plugins):
     assert "could not resolve torch" in ctx.details()
 
 
-def test_unclassified_compose_exception_propagates_to_the_servicer(two_plugins):
+@pytest.mark.parametrize("bug", [KeyError, NotImplementedError, RecursionError])
+def test_unclassified_compose_exception_propagates_to_the_servicer(two_plugins, bug):
     """A bug is not mapped: it escapes the bridge (the undecorated servicer
-    reports it as UNKNOWN) instead of being dressed up as a precondition."""
+    reports it as UNKNOWN) instead of being dressed up as a precondition.
+    NotImplementedError and RecursionError are RuntimeErrors, so the mapping
+    has to name the compose / spawn failure classes, not the base class."""
     sm, sid, _spawner = two_plugins
 
     def composer(plugins, *, core_source, active_data_module=None):
-        raise KeyError("a bug, not a compose failure")
+        raise bug("a bug, not a compose failure")
 
     orchestrator_bridge.set_composer(composer)
-    with pytest.raises(KeyError):
+    with pytest.raises(bug):
         orchestrator_bridge.forward_load_pipeline(
             sm, _load_request(sid, ["plugin_a"]), _InMemoryContext()
         )
@@ -731,8 +747,9 @@ def test_close_during_spawn_leaves_no_orphan(two_plugins, tmp_path):
 def test_close_from_another_thread_waits_for_the_load_then_tears_down(
     two_plugins, tmp_path, monkeypatch
 ):
-    """A CloseSession on another thread blocks on the session's lock until the load has
-    attached its child, then finds that child to tear down: no orphan, no lease."""
+    """A CloseSession on another thread blocks on the session's lock while the load is
+    spawning; the load then finds the session closing and disposes of the child it
+    spawned: no orphan, no lease, and no child attached to a closed session."""
     sm, sid, _spawner = two_plugins
     root = _lease_root(tmp_path)
     orchestrator_bridge.set_composer(_counting_composer(root))
@@ -776,11 +793,13 @@ def test_close_from_another_thread_waits_for_the_load_then_tears_down(
     loader.join(timeout=10)
     closer.join(timeout=10)
     assert not loader.is_alive() and not closer.is_alive()
-    assert result["resp"].success is True
-    assert ctx.code() is None
+    # The close had marked the session before it waited; the load, back from the
+    # spawn, finds the mark, stops the fresh child itself and answers NOT_FOUND
+    # instead of attaching a child to a session that is going away.
+    assert result["resp"].success is False
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
     handle = spawner.handles[0]
     assert handle.returncode is not None
-    assert handle.retired_by_parent is True
     assert leases_mod.read_leases(root) == []
     assert not sm.has_session(sid)
     assert not _scratch_tree(sid).exists()
@@ -857,10 +876,158 @@ def test_close_session_breaks_a_hung_forwarded_load(two_plugins, monkeypatch):
     assert hung.returncode is not None
     assert hung.retired_by_parent is True
     assert result["resp"].success is False
-    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert ctx.code() is grpc.StatusCode.ABORTED
     assert "stopped by the server" in ctx.details()
     assert ctx.trailing_metadata() == ()
     assert not sm.has_session(sid)
+
+
+# ---------------------------------------------------------------------------
+# A close that races a compose or a spawn does not wait for them
+# ---------------------------------------------------------------------------
+
+
+def _gated_composer(inner, entered: threading.Event, release: threading.Event):
+    """A composer that blocks like a cold ``uv sync`` until the test releases it."""
+
+    def composer(plugins, *, core_source, active_data_module=None):
+        entered.set()
+        assert release.wait(timeout=10)
+        return inner(
+            plugins, core_source=core_source, active_data_module=active_data_module
+        )
+
+    return composer
+
+
+def _short_close_grace(monkeypatch) -> None:
+    monkeypatch.setattr(session_manager_mod, "CLOSE_LOCK_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(session_manager_mod, "CLOSE_LOCK_RETRY_SECONDS", 0.1)
+
+
+def test_close_during_a_slow_compose_returns_within_the_grace(
+    two_plugins, tmp_path, monkeypatch
+):
+    """A CloseSession while the load is still inside the composer (a cold build takes
+    minutes) must not wait for it: after the grace the close tears down without the lock,
+    and the load, back from the compose, finds the session closed and spawns nothing."""
+    sm, sid, _spawner = two_plugins
+    _short_close_grace(monkeypatch)
+    root = _lease_root(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    orchestrator_bridge.set_composer(
+        _gated_composer(_counting_composer(root), entered, release)
+    )
+    spawner = _LeaseAwareRecordingSpawner(root)
+    orchestrator_bridge.set_spawner(spawner)
+    ctx = _InMemoryContext()
+    result: dict[str, cuvis_ai_pb2.LoadPipelineResponse] = {}
+
+    def load():
+        result["resp"] = orchestrator_bridge.forward_load_pipeline(
+            sm, _load_request(sid, ["plugin_a"]), ctx
+        )
+
+    loader = threading.Thread(target=load, daemon=True)
+    loader.start()
+    assert entered.wait(timeout=5)
+
+    started = time.monotonic()
+    closer = threading.Thread(target=lambda: sm.close_session(sid), daemon=True)
+    closer.start()
+    closer.join(timeout=5)
+    assert not closer.is_alive(), "close_session waited for the compose"
+    assert time.monotonic() - started < 2
+    assert not sm.has_session(sid)
+
+    release.set()
+    loader.join(timeout=10)
+    assert not loader.is_alive()
+    assert result["resp"].success is False
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert spawner.handles == [], "a child was spawned for a closed session"
+    assert leases_mod.read_leases(root) == []
+    assert not _scratch_tree(sid).exists()
+
+
+def test_close_during_a_spawn_stops_the_child_before_anything_is_forwarded(
+    two_plugins, monkeypatch
+):
+    """The close hits while the load is spawning (health poll, InitializeSession); the
+    grace finds no child to stop. The load must notice the close once the spawn returns
+    and stop the fresh child before forwarding into it: a LoadPipeline that hangs there
+    would otherwise hold the lock, and the session, forever."""
+    sm, sid, _spawner = two_plugins
+    _short_close_grace(monkeypatch)
+    entered, release = threading.Event(), threading.Event()
+
+    class _GatedHungSpawner(_RecordingSpawner):
+        def spawn(self, venv_path, *, cwd, declared_paths, request_gpu=False):
+            from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+            entered.set()
+            assert release.wait(timeout=10)
+            handle = _HungLoadHandle(RunRuntimeServicer())
+            self.handles.append(handle)
+            return handle  # type: ignore[return-value]
+
+    spawner = _GatedHungSpawner()
+    orchestrator_bridge.set_spawner(spawner)
+    ctx = _InMemoryContext()
+    result: dict[str, cuvis_ai_pb2.LoadPipelineResponse] = {}
+
+    def load():
+        result["resp"] = orchestrator_bridge.forward_load_pipeline(
+            sm, _load_request(sid, ["plugin_a"]), ctx
+        )
+
+    loader = threading.Thread(target=load, daemon=True)
+    loader.start()
+    assert entered.wait(timeout=5)
+
+    started = time.monotonic()
+    closer = threading.Thread(target=lambda: sm.close_session(sid), daemon=True)
+    closer.start()
+    closer.join(timeout=5)
+    assert not closer.is_alive(), "close_session waited for the spawn"
+    assert time.monotonic() - started < 2
+    assert not sm.has_session(sid)
+
+    release.set()
+    loader.join(timeout=10)
+    assert not loader.is_alive()
+    hung = spawner.handles[0]
+    assert not hung.entered.is_set(), "LoadPipeline was forwarded into a closed session"
+    assert hung.returncode is not None
+    assert result["resp"].success is False
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert not _scratch_tree(sid).exists()
+
+
+def test_no_child_during_a_load_is_aborted_not_a_precondition(two_plugins):
+    """Inference that finds no child while a load owns the session is racing a switch:
+    ABORTED, repeat the request. Without a load in flight the same answer is a real
+    precondition failure: no pipeline was ever loaded."""
+    sm, sid, _spawner = two_plugins
+    session = sm.get_session(sid)
+    request = cuvis_ai_pb2.InferenceRequest(session_id=sid)
+
+    ctx = _InMemoryContext()
+    orchestrator_bridge.forward_inference(sm, request, ctx)
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+
+    session.load_in_flight = True
+    ctx = _InMemoryContext()
+    orchestrator_bridge.forward_inference(sm, request, ctx)
+    assert ctx.code() is grpc.StatusCode.ABORTED
+    assert "load" in ctx.details().lower()
+    session.load_in_flight = False
+
+    # The flag is the load's own: set for the whole forwarded operation, clear after.
+    orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), _InMemoryContext()
+    )
+    assert session.load_in_flight is False
 
 
 # ---------------------------------------------------------------------------

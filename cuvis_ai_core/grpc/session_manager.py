@@ -42,6 +42,11 @@ class ChildStillRunning(RuntimeError):
 # LoadPipeline has no deadline, so a child that hangs inside it would otherwise
 # hold the close, and the server's shutdown, for as long as it hangs.
 CLOSE_LOCK_GRACE_SECONDS = 5.0
+# After the grace stopped the attached child, how much longer a close waits for
+# the load to release the lock before tearing down without it. A load inside
+# the composer, the spawn or the health poll holds the lock for minutes, and
+# nothing the parent stops shortens that.
+CLOSE_LOCK_RETRY_SECONDS = 1.0
 
 
 @dataclass
@@ -95,6 +100,16 @@ class SessionState:
     child_lock: threading.RLock = field(
         default_factory=threading.RLock, repr=False, compare=False
     )
+    # Set by close_session before it waits for the lock, so a load that holds
+    # the lock (composing, spawning, polling the child's health) learns of the
+    # close at its next check and disposes of whatever it created since.
+    closing: threading.Event = field(
+        default_factory=threading.Event, repr=False, compare=False
+    )
+    # True while forward_load_pipeline / forward_restore_train_run own the
+    # child. A request that finds no child then is racing a switch (ABORTED:
+    # repeat it), not asking before any pipeline was loaded (FAILED_PRECONDITION).
+    load_in_flight: bool = False
     # Per-session scratch root the orchestrator created for the child runtime
     # (HOME / TEMP / output redirect). Removed on close so child logs and
     # HF/torch caches don't accumulate under the system temp dir.
@@ -283,16 +298,27 @@ class SessionManager:
         Takes the session's ``child_lock`` first: a LoadPipeline in flight on
         another thread finishes (and attaches its child) before the teardown
         runs, so no child or lease outlives its session. The load holds that
-        lock across its forwarded call, which has no deadline, so a child
-        that hangs inside LoadPipeline would hold the close (and the server's
-        shutdown) with it. After ``CLOSE_LOCK_GRACE_SECONDS`` the attached
-        child is therefore stopped without the lock: its forwarded call fails,
-        the load unwinds and releases the lock, and the teardown proceeds.
+        lock across the compose, the spawn and its forwarded call, none of
+        which has a deadline, so the wait is bounded twice over:
+
+        * after ``CLOSE_LOCK_GRACE_SECONDS`` the attached child is stopped
+          without the lock: a forwarded call that hangs inside it fails, the
+          load unwinds and releases the lock;
+        * after ``CLOSE_LOCK_RETRY_SECONDS`` more the load is inside the
+          composer, the spawn or the health poll, where nothing the parent
+          stops shortens the wait, and the teardown runs without the lock.
+
+        ``state.closing`` is set before either wait: the load re-checks it
+        after the compose, after the spawn and before forwarding, and disposes
+        of whatever it created (child, lease, scratch tree) itself. The server's
+        shutdown closes sessions one after another, so a close bounded this way
+        keeps the shutdown bounded too.
         """
         state = self._sessions.get(session_id)
         if state is None:
             raise ValueError(f"Session {session_id} not found")
 
+        state.closing.set()
         if not state.child_lock.acquire(timeout=CLOSE_LOCK_GRACE_SECONDS):
             child = state.child_handle
             if child is not None:
@@ -309,14 +335,30 @@ class SessionManager:
                     child.terminate(grace_s=2.0)
                 except Exception as exc:  # pragma: no cover - best effort
                     logger.warning(f"Child terminate while unblocking a close: {exc}")
-            state.child_lock.acquire()
+            if not state.child_lock.acquire(timeout=CLOSE_LOCK_RETRY_SECONDS):
+                logger.warning(
+                    f"Session {session_id}: the load still holds the child lock "
+                    f"(composing or spawning); closing without it. The load tears "
+                    f"down what it creates from here."
+                )
+                # The scratch tree is the load's: it is writing the fresh
+                # child's logs into it, or drops the old child's tree itself
+                # when it sees the close after the compose.
+                self._close_locked(session_id, state, remove_tree=False)
+                return
         try:
             self._close_locked(session_id, state)
         finally:
             state.child_lock.release()
 
-    def _close_locked(self, session_id: str, state: SessionState) -> None:
-        """The teardown of ``close_session``; the caller holds ``state.child_lock``."""
+    def _close_locked(
+        self, session_id: str, state: SessionState, *, remove_tree: bool = True
+    ) -> None:
+        """The teardown of ``close_session``.
+
+        The caller holds ``state.child_lock``, or gave up on it after both waits
+        (``remove_tree=False``: the load that holds it owns the scratch tree).
+        """
         if self._sessions.get(session_id) is not state:
             # A racing close won while this one waited for the lock.
             return
@@ -352,10 +394,11 @@ class SessionManager:
         # handles are released). Best-effort: a failure here must not block
         # session teardown. Done after termination so the child isn't still
         # writing into the tree.
-        runtime_base_dir = state.runtime_base_dir
-        state.runtime_base_dir = None
-        if runtime_base_dir is not None:
-            shutil.rmtree(runtime_base_dir, ignore_errors=True)
+        if remove_tree:
+            runtime_base_dir = state.runtime_base_dir
+            state.runtime_base_dir = None
+            if runtime_base_dir is not None:
+                shutil.rmtree(runtime_base_dir, ignore_errors=True)
 
         logger.info(f"Closed session: {session_id}")
 
