@@ -357,6 +357,24 @@ under `<cache root>/.crash_logs/<timestamp>-<session-id>/` (override the locatio
 `CUVIS_RUNTIME_CRASH_DIR`; the store keeps the newest five crashes) together with a
 `crash_info.txt` naming the exit code — the session's scratch tree itself is still deleted.
 
+**A pipeline whose plugins the session's child was not composed for replaces the child.** A
+`LoadPipeline` (or `RestoreTrainRun`) whose plugins are a subset of the child's, manifest for
+manifest, and whose data module is none or the one the env was composed with reuses the warm
+child; anything else composes the new env first, stops the old child, then spawns the replacement.
+A switch across plugin families therefore costs a compose (cache hit about a second, cold build
+minutes) plus a child start. Loads on one session run one at a time.
+
+**Status codes the orchestrator answers itself.** A request that still reaches a child the server
+stopped (a pipeline switch replaced it, or the session closed), or that finds no child while a
+`LoadPipeline` is replacing it, is answered `ABORTED` with details saying so: repeat the request,
+it lands on the session's current runtime (or on `NOT_FOUND` once the session is gone). A request
+with no child and no load in flight stays `FAILED_PRECONDITION` (load a pipeline first). Compose
+and spawn failures (uv or git failing, a plugin source that does not resolve, a child that exits
+before reporting its endpoint or refuses `InitializeSession`) fail `LoadPipeline` /
+`RestoreTrainRun` with `FAILED_PRECONDITION` and the cause; a fresh session would fail the same
+way, so show the message once instead of retrying. A compose failure leaves the previous child
+and its pipeline serving. A session closed while its child was being prepared answers `NOT_FOUND`.
+
 ## Best practices
 
 - **Pin Git plugins by tag.** Branches/commits are not supported; a tag is reproducible.

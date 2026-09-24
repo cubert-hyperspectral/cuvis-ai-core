@@ -35,8 +35,9 @@ Lifecycle per session:
    a load is replacing it, is answered ABORTED (repeat the request), not
    as a crash and not as a precondition failure. A close that finds the
    lock held gives up on it after a bounded wait; the load re-checks
-   ``SessionState.closing`` after the compose, after the spawn and before
-   forwarding, and disposes of what it created.
+   ``SessionState.closing`` after the compose, after the retire, after the
+   spawn and before forwarding, answers NOT_FOUND whatever else went wrong
+   meanwhile, and disposes of what it created.
 """
 
 from __future__ import annotations
@@ -50,10 +51,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 import grpc
+import psutil
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 from loguru import logger
 
 from cuvis_ai_core.grpc.session_manager import (
+    CHILD_STOP_GRACE_SECONDS,
     ChildStillRunning,
     SessionManager,
     SessionState,
@@ -126,12 +129,20 @@ def _answer_no_child(session: SessionState, context: grpc.ServicerContext) -> No
 
 
 @contextmanager
-def _owning_child(session: SessionState) -> Iterator[None]:
+def _owning_child(
+    session_manager: SessionManager, session_id: str, session: SessionState
+) -> Iterator[None]:
     """Hold the session's child lock for a whole load and mark the load in flight.
 
     The flag is what :func:`_answer_no_child` reads: for the duration of the
     reuse-or-replace decision, the compose, the spawn and the forwarded call,
     a request that finds no child is racing this load.
+
+    On the way out, a session that a close popped without the lock (it gave
+    up after its grace while this load was composing, retiring or spawning)
+    has left its scratch tree to this load: it goes here, whatever path the
+    load took, so a compose or spawn that failed after the close leaves no
+    tree behind either.
     """
     with session.child_lock:
         session.load_in_flight = True
@@ -139,6 +150,8 @@ def _owning_child(session: SessionState) -> Iterator[None]:
             yield
         finally:
             session.load_in_flight = False
+            if not session_manager.has_session(session_id):
+                _discard_runtime_tree(session)
 
 
 def _discard_runtime_tree(session: SessionState) -> None:
@@ -147,6 +160,23 @@ def _discard_runtime_tree(session: SessionState) -> None:
     session.runtime_base_dir = None
     if tree is not None:
         shutil.rmtree(tree, ignore_errors=True)
+
+
+def _abandon_if_closing(
+    session_manager: SessionManager, session_id: str, session: SessionState
+) -> None:
+    """Raise :class:`SessionClosedDuringLoad` when a close overtook this load.
+
+    Called between the load's slow steps, before anything new is created. A
+    close still waiting for the lock tears the attached child and its tree
+    down as soon as the load releases it; a close that gave up after its grace
+    has already stopped the attached child and left its tree to this thread.
+    """
+    if not session_manager.has_session(session_id):
+        _discard_runtime_tree(session)
+        raise SessionClosedDuringLoad(session_id)
+    if session.closing.is_set():
+        raise SessionClosedDuringLoad(session_id)
 
 
 # gRPC trailing-metadata keys carrying a dead child's postmortem. These three
@@ -292,6 +322,65 @@ class SessionClosedDuringLoad(Exception):
         )
 
 
+def _load_failure_status(
+    exc: Exception,
+    *,
+    subject: str,
+    session_manager: SessionManager,
+    session_id: str,
+    session: SessionState,
+) -> tuple[grpc.StatusCode, str] | None:
+    """Status and details for an exception out of :func:`ensure_child_for_session`.
+
+    Returns ``None`` for anything that is not a load failure: a bug, which the
+    caller re-raises so the undecorated servicer reports it as UNKNOWN.
+
+    * :class:`SessionClosedDuringLoad`: NOT_FOUND, as for any request on a
+      closed session, so the client replays on a fresh one.
+    * :class:`PluginsNotRegisteredError`: FAILED_PRECONDITION, not a malformed
+      request; the fix is to call LoadPlugin for each plugin first.
+    * ``ValueError``: INVALID_ARGUMENT, ``resolve_against_catalog``'s contract
+      (missing plugins block, ambiguous class, coverage gap, duplicate with
+      diverging refs).
+    * :class:`ChildStillRunning`: FAILED_PRECONDITION, not INTERNAL. The old
+      child would not die and the pipeline was not replaced; the old handle
+      stays attached and marked, so the next load retries the stop. A client
+      that treats INTERNAL as a transport fault would close the session and
+      spawn a fresh runtime beside the survivor, the very thing the confirmed
+      exit refused.
+    * The compose and spawn failures in ``_RUNTIME_SETUP_ERRORS`` (uv, git, the
+      plugin source resolver, the scratch tree, the lease, the child's
+      endpoint, health check or InitializeSession): FAILED_PRECONDITION with
+      the cause. The server answered, and a fresh session would run into the
+      same failure, so the client shows it once instead of retrying on a new
+      session. A compose failure leaves the old child and its pipeline intact;
+      a spawn failure after the retire leaves the session childless until the
+      next load recovers.
+
+    A failure on a session that a close overtook meanwhile (the flag is set or
+    the session is gone) is NOT_FOUND regardless: the client closed it and must
+    not read a verdict about it.
+    """
+    if isinstance(exc, SessionClosedDuringLoad):
+        return grpc.StatusCode.NOT_FOUND, str(exc)
+    if isinstance(exc, PluginsNotRegisteredError):
+        answer = (grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+    elif isinstance(exc, ValueError):
+        answer = (grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+    elif isinstance(exc, ChildStillRunning):
+        answer = (grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+    elif isinstance(exc, _RUNTIME_SETUP_ERRORS):
+        answer = (
+            grpc.StatusCode.FAILED_PRECONDITION,
+            f"Preparing the {subject}'s runtime failed: {exc}",
+        )
+    else:
+        return None
+    if session.closing.is_set() or not session_manager.has_session(session_id):
+        return grpc.StatusCode.NOT_FOUND, f"Session {session_id} was closed"
+    return answer
+
+
 def child_can_serve(
     session: SessionState,
     resolved: Mapping[str, PluginManifest],
@@ -311,10 +400,9 @@ def child_can_serve(
     """
     if getattr(session.child_handle, "retired_by_parent", False) is True:
         return False
-    current = session.resolved_plugins or {}
+    current = session.child_install or {}
     for name, manifest in resolved.items():
-        have = current.get(name)
-        if have is None or _install_identity(have) != _install_identity(manifest):
+        if current.get(name) != _install_identity(manifest):
             return False
     return data_module is None or data_module == session.child_data_module
 
@@ -322,11 +410,14 @@ def child_can_serve(
 def _install_identity(manifest: PluginManifest) -> tuple:
     """What decides a plugin's installation in the child's venv.
 
-    The source (repo and tag, or path), the installable name and the pip extras
-    of its data-module capabilities. Capability lists, tags, icons and port
-    specs are metadata the client may regenerate between two LoadPlugin calls
-    (``emit_metadata``, another capability order); they do not change the venv,
-    so they must not replace a warm child.
+    The source (repo and tag, or path plus the hash of the local project's
+    ``pyproject.toml``, the one file of a local plugin whose content shapes the
+    venv), the installable name and the pip extras of its data-module
+    capabilities. Capability lists, tags, icons and port specs are metadata the
+    client may regenerate between two LoadPlugin calls (``emit_metadata``,
+    another capability order); they do not change the venv, so they must not
+    replace a warm child. A git tag is taken as immutable, as the composer's
+    cache key takes it: a tag moved to another commit is not detected here.
     """
     extras = tuple(
         sorted(
@@ -335,12 +426,14 @@ def _install_identity(manifest: PluginManifest) -> tuple:
             if cap.kind == "data_module"
         )
     )
+    path = getattr(manifest, "path", None)
     return (
         type(manifest).__name__,
         manifest.package_name,
         getattr(manifest, "repo", None),
         getattr(manifest, "tag", None),
-        getattr(manifest, "path", None),
+        path,
+        pyproject_sha256_of(Path(path)) if path else None,
         extras,
     )
 
@@ -405,23 +498,48 @@ def ensure_child_for_session(
     # A failure here (uv, git, network) raises before the old child is touched.
     venv = _composer(resolved, core_source=core_source, active_data_module=data_module)
 
-    if session.closing.is_set() or not session_manager.has_session(session_id):
-        # The session closed while the env was composing: close_session gave
-        # up on the lock after its grace, stopped the child that was attached
-        # and tore the rest down without the lock, leaving that child's
-        # scratch tree to this thread. Nothing was spawned; the composed entry
-        # stays in the cache for the next session that needs it.
-        _discard_runtime_tree(session)
-        raise SessionClosedDuringLoad(session_id)
+    # The session may have closed while the env was composing. Nothing was
+    # spawned; the composed entry stays in the cache for the next session that
+    # needs it. The old child, if any, is the close's to stop: it is either
+    # waiting for this lock or has stopped it already.
+    _abandon_if_closing(session_manager, session_id, session)
 
     if replacing:
         # The new env exists; only now stop the old child. terminate() waits
-        # for the exit, so its GPU memory is back before the replacement starts.
-        session_manager.retire_child(
-            session, reason="pipeline switch", require_exit=True
-        )
+        # for the exit, so the driver can hand its GPU memory back before the
+        # replacement starts loading.
+        try:
+            session_manager.retire_child(
+                session, reason="pipeline switch", require_exit=True
+            )
+        except ChildStillRunning:
+            if session.closing.is_set() or not session_manager.has_session(session_id):
+                # The session went away while the old child refused to stop.
+                # Nothing may put the survivor back on it: log it, drop its
+                # lease, and answer as for any load a close overtook.
+                session_manager.retire_child(
+                    session, reason="session close", require_exit=False
+                )
+                _abandon_if_closing(session_manager, session_id, session)
+            raise
+        # A close that arrived while the old child was being stopped found no
+        # handle to stop (the retire detaches it first) and tore down without
+        # the lock. Spawning now would give a closed session a child.
+        _abandon_if_closing(session_manager, session_id, session)
 
-    declared = _default_declared_paths(session_id)
+    # The previous child is gone (retired just now, or the dead one retired
+    # before the compose) and its scratch tree goes with it, so what it left in
+    # its TEMP and HOME does not accumulate switch after switch. The
+    # replacement gets the same path, freshly created, and the tree's age
+    # restarts with it.
+    _discard_runtime_tree(session)
+    try:
+        declared = _default_declared_paths(session_id)
+    except OSError as exc:
+        raise SpawnError(
+            f"Could not create the runtime scratch tree for session {session_id!r}: "
+            f"{exc}"
+        ) from exc
     # Record the child's scratch root (output/scratch share this parent) right
     # away, so close_session removes it whether or not the spawn below
     # succeeds: the spawner writes the child's logs into it before anything
@@ -445,7 +563,12 @@ def ensure_child_for_session(
         # failure fails the whole spawn — an unprotected child is worse than a
         # clean error.
         try:
-            leases.write_intent_lease(lease_root, session_id, entry_digest)
+            leases.write_intent_lease(
+                lease_root,
+                session_id,
+                entry_digest,
+                session_root=declared.output_dir.parent,
+            )
         except OSError as exc:
             raise SpawnError(
                 f"Could not write the runtime lease for session {session_id!r}: {exc}"
@@ -467,7 +590,7 @@ def ensure_child_for_session(
         if lease_root is not None:
             leases.remove_lease(lease_root, session_id)
             session.lease_cache_root = None
-        if isinstance(exc, OSError) and not isinstance(exc, RuntimeError):
+        if isinstance(exc, OSError):
             # Popen, mkdtemp or a log file open failed below the spawner's own
             # SpawnError: still a spawn failure the caller can be told about.
             raise SpawnError(
@@ -478,20 +601,29 @@ def ensure_child_for_session(
     try:
         _initialize_child_session(handle, session_id, session, resolved, declared)
         if lease_root is not None:
-            leases.finalize_lease(
-                lease_root,
-                session_id,
-                entry_digest,
-                child_pid=handle.process.pid,
-                session_root=declared.output_dir.parent,
-            )
+            try:
+                leases.finalize_lease(
+                    lease_root,
+                    session_id,
+                    entry_digest,
+                    child_pid=handle.process.pid,
+                    session_root=declared.output_dir.parent,
+                )
+            except (OSError, psutil.Error) as exc:
+                # The child died between its health check and this line (psutil
+                # finds no process), or the lease could not be rewritten: a
+                # spawn failure like any other, told to the caller as such.
+                raise SpawnError(
+                    f"Could not finalize the runtime lease for session {session_id!r} "
+                    f"(the child may have exited): {exc}"
+                ) from exc
     except Exception:
         # The handshake helper already terminated the child on rejection;
         # a finalize failure leaves it running — stop it before dropping
         # the lease so no unprotected child survives (terminate is
         # idempotent on a dead process).
         try:
-            handle.terminate(grace_s=2.0)
+            handle.terminate(grace_s=CHILD_STOP_GRACE_SECONDS)
         except Exception as exc:  # pragma: no cover - best effort
             logger.warning(f"Child terminate during spawn-failure cleanup: {exc}")
         if lease_root is not None:
@@ -506,21 +638,32 @@ def ensure_child_for_session(
         # health poll ran. Nothing may own the fresh child: stop it, drop its
         # lease and the scratch tree recreated for it.
         try:
-            handle.terminate(grace_s=2.0)
+            handle.terminate(grace_s=CHILD_STOP_GRACE_SECONDS)
         except Exception as exc:  # pragma: no cover - best effort
             logger.warning(
                 f"Child terminate after a session close raced the spawn: {exc}"
             )
+        if getattr(handle, "returncode", None) is None:
+            # kill() gave up after its wait. No session owns this child any
+            # more; nothing retries the stop, so say so where a support bundle
+            # shows it.
+            logger.error(
+                f"Child runtime spawned for the closed session {session_id} did not "
+                f"stop (pid {getattr(getattr(handle, 'process', None), 'pid', '?')}); "
+                f"it may still hold its GPU memory."
+            )
         if lease_root is not None:
             leases.remove_lease(lease_root, session_id)
             session.lease_cache_root = None
-        session.runtime_base_dir = None
-        shutil.rmtree(declared.output_dir.parent, ignore_errors=True)
+        _discard_runtime_tree(session)
         raise SessionClosedDuringLoad(session_id)
 
     session.child_handle = handle
     session.resolved_plugins = dict(resolved)
     session.child_data_module = data_module
+    session.child_install = {
+        name: _install_identity(manifest) for name, manifest in resolved.items()
+    }
     return handle
 
 
@@ -555,7 +698,7 @@ def _initialize_child_session(
     try:
         init_response = handle.stub().InitializeSession(request)
     except grpc.RpcError as exc:
-        handle.terminate(grace_s=2.0)
+        handle.terminate(grace_s=CHILD_STOP_GRACE_SECONDS)
         code = exc.code().name if hasattr(exc, "code") else "UNKNOWN"
         details = exc.details() if hasattr(exc, "details") else str(exc)
         raise SpawnError(
@@ -563,7 +706,7 @@ def _initialize_child_session(
             f"({len(resolved)} plugins: {sorted(resolved)}): {code}: {details}"
         ) from exc
     if not init_response.ok:
-        handle.terminate(grace_s=2.0)
+        handle.terminate(grace_s=CHILD_STOP_GRACE_SECONDS)
         raise SpawnError(
             f"Child runtime rejected InitializeSession for session "
             f"{session_id!r} ({len(resolved)} plugins: {sorted(resolved)})."
@@ -619,7 +762,7 @@ def forward_load_pipeline(
 
     # One load at a time per session, for the whole operation: a second load
     # must not retire the child while the first one is still loading into it.
-    with _owning_child(session):
+    with _owning_child(session_manager, request.session_id, session):
         if session.closing.is_set() or not session_manager.has_session(
             request.session_id
         ):
@@ -633,45 +776,20 @@ def forward_load_pipeline(
                 pipeline_config,
                 data_module=data_module,
             )
-        except PluginsNotRegisteredError as exc:
-            # The pipeline names plugins the client never registered. This is a
-            # precondition failure, not a malformed request: the fix is to call
-            # LoadPlugin for each before LoadPipeline.
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        except ValueError as exc:
-            # resolve_against_catalog's contract: missing plugins block,
-            # ambiguous class, coverage gap, duplicate with diverging refs
-            # all raise ValueError. Surface as INVALID_ARGUMENT.
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        except SessionClosedDuringLoad as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        except ChildStillRunning as exc:
-            # The old child would not die; the pipeline was not replaced. The
-            # old handle stays attached and marked, so the caller's next load
-            # retries the stop. FAILED_PRECONDITION, not INTERNAL: a client
-            # that treats INTERNAL as a transport fault would close the
-            # session and spawn a fresh runtime beside the survivor, the very
-            # thing the confirmed exit refused.
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        except _RUNTIME_SETUP_ERRORS as exc:
-            # Compose and spawn failures (uv, git, the plugin source resolver,
-            # the child's endpoint, health check or InitializeSession): the
-            # server answered, and a fresh session would run into the same
-            # failure, so the client shows it once instead of retrying on a
-            # new session. A compose failure leaves the old child and its
-            # pipeline intact; a spawn failure after the retire leaves the
-            # session childless (inference answers FAILED_PRECONDITION, no
-            # child) until the next load recovers.
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"Preparing the pipeline's runtime failed: {exc}")
+        except Exception as exc:
+            answer = _load_failure_status(
+                exc,
+                subject="pipeline",
+                session_manager=session_manager,
+                session_id=request.session_id,
+                session=session,
+            )
+            if answer is None:
+                # A bug, not a load failure: the undecorated servicer reports
+                # it as UNKNOWN.
+                raise
+            context.set_code(answer[0])
+            context.set_details(answer[1])
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
         if session.closing.is_set():
             # A close gave up on the lock between the child's return and this
@@ -816,7 +934,7 @@ def forward_restore_train_run(
     # Same lock scope as forward_load_pipeline: the restore owns the child
     # from the reuse-or-replace decision through the forwarded call. The lock
     # is re-entrant, so _drop_owned_session may close the session from here.
-    with _owning_child(parent_session):
+    with _owning_child(session_manager, parent_session_id, parent_session):
         if parent_session.closing.is_set() or not session_manager.has_session(
             parent_session_id
         ):
@@ -835,43 +953,26 @@ def forward_restore_train_run(
                 pipeline_config,
                 data_module=trainrun_data_module,
             )
-        except PluginsNotRegisteredError as exc:
-            # The trainrun's pipeline needs plugins the client never registered.
-            # Surface as FAILED_PRECONDITION (call LoadPlugin first).
-            _drop_owned_session()
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(exc))
+        except Exception as exc:
+            # The status is decided before the owned session is dropped: the
+            # drop closes it, and a closed session must not turn every
+            # failure into NOT_FOUND.
+            answer = _load_failure_status(
+                exc,
+                subject="trainrun",
+                session_manager=session_manager,
+                session_id=parent_session_id,
+                session=parent_session,
+            )
+            if not isinstance(exc, SessionClosedDuringLoad):
+                _drop_owned_session()
+            if answer is None:
+                # A bug, not a load failure: the undecorated servicer reports
+                # it as UNKNOWN.
+                raise
+            context.set_code(answer[0])
+            context.set_details(answer[1])
             return cuvis_ai_pb2.RestoreTrainRunResponse()
-        except ValueError as exc:
-            # Surface resolver errors as INVALID_ARGUMENT so callers don't have
-            # to dig through "UNKNOWN" wrapping.
-            _drop_owned_session()
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-        except SessionClosedDuringLoad as exc:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-        except ChildStillRunning as exc:
-            # See forward_load_pipeline: the old child stays attached and
-            # marked; the next load retries the stop.
-            _drop_owned_session()
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(str(exc))
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-        except _RUNTIME_SETUP_ERRORS as exc:
-            # Compose / spawn failed: the server answered, a fresh session would
-            # fail the same way. See forward_load_pipeline.
-            _drop_owned_session()
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"Preparing the trainrun's runtime failed: {exc}")
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-        except Exception:
-            # Anything else is a bug, not a compose / spawn failure; re-raise.
-            # The parent servicer is undecorated, so grpc reports it as UNKNOWN.
-            _drop_owned_session()
-            raise
 
         if parent_session.closing.is_set():
             # See forward_load_pipeline: a close gave up on the lock meanwhile.
@@ -996,8 +1097,9 @@ def _preserve_crash_logs(child, session: SessionState | None) -> Path | None:
 
     Returns the crash-log directory, or ``None`` when there is no session
     to attribute the crash to or nothing could be preserved.
-    ``preserve_child_logs`` is idempotent per session id, so the later
-    ``close_session`` teardown reports this same directory.
+    ``preserve_child_logs`` is idempotent per child (session id plus
+    endpoint), so the later retire or ``close_session`` teardown reports this
+    same directory.
     """
     if session is None:
         return None

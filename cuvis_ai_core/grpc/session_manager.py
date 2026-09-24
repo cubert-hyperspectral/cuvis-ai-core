@@ -47,6 +47,12 @@ CLOSE_LOCK_GRACE_SECONDS = 5.0
 # the composer, the spawn or the health poll holds the lock for minutes, and
 # nothing the parent stops shortens that.
 CLOSE_LOCK_RETRY_SECONDS = 1.0
+# Grace for the short stops the parent issues on its own account: a child a
+# load still holds when a close gives up on the lock, a fresh child whose
+# session closed while it was being prepared, a child that failed its init
+# handshake. Shorter than retire_child's 5 s: none of these children serves a
+# request anyone waits for.
+CHILD_STOP_GRACE_SECONDS = 2.0
 
 
 @dataclass
@@ -92,6 +98,12 @@ class SessionState:
     child_handle: Any | None = None
     resolved_plugins: dict[str, Any] | None = None
     child_data_module: str | None = None
+    # Per plugin, the install identity the child's venv was built from (source,
+    # package name, a local plugin's pyproject hash, data-module extras), taken
+    # when the child was attached. ``child_can_serve`` compares a later
+    # pipeline's plugins against these, not against ``resolved_plugins``: a
+    # local plugin's pyproject may have changed on disk since the compose.
+    child_install: dict[str, tuple] | None = None
     # Serialises everything that decides over or replaces the child: a
     # LoadPipeline / RestoreTrainRun holds it from the reuse-or-replace
     # decision through the forwarded call, close_session holds it while it
@@ -321,7 +333,11 @@ class SessionManager:
         state.closing.set()
         if not state.child_lock.acquire(timeout=CLOSE_LOCK_GRACE_SECONDS):
             child = state.child_handle
-            if child is not None:
+            # Only a LIVE child is ours to stop and mark. One that already died
+            # inside the forwarded call keeps its crash status: the load's
+            # failing RPC reports the crash and the teardown below preserves
+            # its logs.
+            if child is not None and getattr(child, "returncode", None) is None:
                 logger.warning(
                     f"Session {session_id}: a load has held the child lock for "
                     f"{CLOSE_LOCK_GRACE_SECONDS:g}s; stopping the child so the "
@@ -332,7 +348,7 @@ class SessionManager:
                 except AttributeError:  # pragma: no cover - foreign handle types
                     pass
                 try:
-                    child.terminate(grace_s=2.0)
+                    child.terminate(grace_s=CHILD_STOP_GRACE_SECONDS)
                 except Exception as exc:  # pragma: no cover - best effort
                     logger.warning(f"Child terminate while unblocking a close: {exc}")
             if not state.child_lock.acquire(timeout=CLOSE_LOCK_RETRY_SECONDS):
@@ -342,8 +358,8 @@ class SessionManager:
                     f"down what it creates from here."
                 )
                 # The scratch tree is the load's: it is writing the fresh
-                # child's logs into it, or drops the old child's tree itself
-                # when it sees the close after the compose.
+                # child's logs into it, or holds the old child's tree, and it
+                # drops the tree on its way out once it sees the session gone.
                 self._close_locked(session_id, state, remove_tree=False)
                 return
         try:
@@ -406,9 +422,13 @@ class SessionManager:
     def retire_child(state: SessionState, *, reason: str, require_exit: bool) -> None:
         """Stop the session's child runtime and forget the env it was composed for.
 
-        The one teardown path for a child the parent no longer wants: session
-        close, the dead-child recovery in the bridge, and the pipeline switch
-        that replaces a child whose env cannot serve the new pipeline. Marks the
+        The teardown path for an attached child the parent no longer wants:
+        session close, the dead-child recovery in the bridge, and the pipeline
+        switch that replaces a child whose env cannot serve the new pipeline.
+        Two stops happen elsewhere on purpose: ``close_session`` stops a child a
+        load still holds when it gives up on the lock, and the bridge stops a
+        fresh child it spawned for a session that closed meanwhile (never
+        attached, so nothing here applies to it). Marks the
         handle ``retired_by_parent`` before stopping it, so a request that still
         reaches the old child is answered as a replacement rather than a crash,
         then terminates (graceful, then kill), preserves the logs of a child that
@@ -427,13 +447,19 @@ class SessionManager:
         if child is None:
             state.resolved_plugins = None
             state.child_data_module = None
+            state.child_install = None
             return
 
         session_id = state.session_id
-        previous = (state.resolved_plugins, state.child_data_module)
+        previous = (
+            state.resolved_plugins,
+            state.child_data_module,
+            state.child_install,
+        )
         state.child_handle = None
         state.resolved_plugins = None
         state.child_data_module = None
+        state.child_install = None
 
         # Poll BEFORE terminate(): parent-initiated termination exits nonzero
         # too (TerminateProcess reports 1), so only a child that was already
@@ -441,7 +467,10 @@ class SessionManager:
         # already told to stop (an earlier retire that hit a survivor) and that
         # exited since is the parent's doing as well, not a crash.
         already_stopping = getattr(child, "retired_by_parent", False) is True
-        alive = getattr(child, "returncode", None) is None
+        # An int exit code means the process is gone; None (or anything a test
+        # double answers instead) counts as alive.
+        returncode = getattr(child, "returncode", None)
+        alive = not isinstance(returncode, int)
         died_on_its_own = not alive and not already_stopping
         if alive:
             # Only a child the parent stops on purpose carries the marker: a
@@ -452,14 +481,24 @@ class SessionManager:
             except AttributeError:  # pragma: no cover - foreign handle types
                 pass
         exit_code: int | None = None
-        try:
-            exit_code = child.terminate(grace_s=5.0)
-        except Exception as exc:
-            logger.warning(f"Child runtime termination raised ({reason}): {exc}")
+        if alive:
             try:
-                exit_code = child.kill()
-            except Exception as kill_exc:
-                logger.warning(f"Child runtime kill also raised: {kill_exc}")
+                exit_code = child.terminate(grace_s=5.0)
+            except Exception as exc:
+                logger.warning(f"Child runtime termination raised ({reason}): {exc}")
+                try:
+                    exit_code = child.kill()
+                except Exception as kill_exc:
+                    logger.warning(f"Child runtime kill also raised: {kill_exc}")
+        else:
+            # Already gone: the exit code is known and nothing is left to stop.
+            # kill() on a dead process only closes the channel, without a stop
+            # attempt or a warning about a child that was "already dead".
+            exit_code = returncode
+            try:
+                child.kill()
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning(f"Child runtime kill raised ({reason}): {exc}")
 
         if getattr(child, "returncode", None) is None:
             # kill() gives up after its wait; the process may still be alive
@@ -477,7 +516,9 @@ class SessionManager:
                 # into it, and a request that still reaches it is answered as a
                 # replacement rather than as a crash.
                 state.child_handle = child
-                state.resolved_plugins, state.child_data_module = previous
+                state.resolved_plugins, state.child_data_module, state.child_install = (
+                    previous
+                )
                 raise ChildStillRunning(message)
             logger.error(message)
 
@@ -488,9 +529,9 @@ class SessionManager:
             from cuvis_ai_core.orchestrator.crash_logs import preserve_child_logs
             from cuvis_ai_core.orchestrator.spawner import format_exit_code
 
-            # Idempotent per session: when the failing RPC already preserved
-            # this child's logs, the same directory comes back and no second
-            # copy is made.
+            # Idempotent per child (session id plus endpoint): when the failing
+            # RPC already preserved this child's logs, the same directory comes
+            # back and no second copy is made.
             crash_dir = preserve_child_logs(
                 (
                     getattr(child, "stdout_log", None),

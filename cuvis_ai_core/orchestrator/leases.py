@@ -139,12 +139,21 @@ def _write_lease(cache_root: Path, lease: Lease) -> None:
     os.replace(tmp, final)
 
 
-def write_intent_lease(cache_root: Path, session_id: str, entry_digest: str) -> None:
+def write_intent_lease(
+    cache_root: Path,
+    session_id: str,
+    entry_digest: str,
+    *,
+    session_root: Path | None = None,
+) -> None:
     """Record that this server is about to spawn a child from ``entry_digest``.
 
     Written immediately after ``compose_env`` returns, before the spawn —
     the endpoint/health polling window can last minutes and the entry
-    must already be protected. Raises ``OSError`` on write failure.
+    must already be protected. ``session_root`` is the session's scratch
+    tree: named here too, so the lease-less scratch sweep keeps its hands
+    off it while a pipeline switch has removed the previous final lease and
+    not yet finalized the new one. Raises ``OSError`` on write failure.
     """
     me = psutil.Process()
     _write_lease(
@@ -156,6 +165,7 @@ def write_intent_lease(cache_root: Path, session_id: str, entry_digest: str) -> 
             parent_pid=me.pid,
             parent_create_time=me.create_time(),
             created_at=time.time(),
+            session_root=str(session_root) if session_root is not None else None,
         ),
     )
 

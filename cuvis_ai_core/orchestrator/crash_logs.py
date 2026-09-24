@@ -7,10 +7,11 @@ module copies those logs aside first, into ``.crash_logs/`` under the
 composer cache root (dot-prefixed, never a cache entry), so a crash can
 still be diagnosed after cleanup.
 
-Preservation is idempotent per session id: the failing RPC preserves the
-logs at the moment of death so the client learns where they are, and the
-later ``close_session`` teardown asks again and is handed the same
-directory instead of copying a second one.
+Preservation is idempotent per child (session id plus endpoint): the failing
+RPC preserves the logs at the moment of death so the client learns where they
+are, and the later retire or ``close_session`` teardown asks again and is
+handed the same directory instead of copying a second one. A later child of
+the same session (dead-child recovery, a pipeline switch) gets its own copy.
 
 The cache root comes from the stdlib-only ``cache_paths`` leaf, so importing
 this module never pays the composer's (and its transitive) import cost.
