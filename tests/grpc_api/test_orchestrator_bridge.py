@@ -21,6 +21,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
 from cuvis_ai_core.orchestrator import leases as leases_mod
+from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
 from cuvis_ai_core.grpc.orchestrator_bridge import (
     _InMemoryChildHandle,
     _InMemoryContext,
@@ -1152,7 +1153,14 @@ def test_forward_restore_train_run_bad_yaml_is_invalid_argument(monkeypatch, tmp
     assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
 
 
-def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_path):
+def test_forward_restore_train_run_compose_failure_is_failed_precondition(
+    monkeypatch, tmp_path
+):
+    """A compose / spawn failure is the server's answer, not a transport fault.
+
+    Surfaced as FAILED_PRECONDITION with the cause, so a client keeps whatever
+    it had instead of retrying the same failing compose on a fresh session.
+    """
     sm = SessionManager()
     fake_cfg = SimpleNamespace(pipeline="pl.yaml")
     pl = tmp_path / "pl.yaml"
@@ -1161,10 +1169,145 @@ def test_forward_restore_train_run_reraises_non_value_error(monkeypatch, tmp_pat
     monkeypatch.setattr(
         orchestrator_bridge,
         "ensure_child_for_session",
-        MagicMock(side_effect=RuntimeError("compose failed")),
+        MagicMock(side_effect=UvRunnerError("compose failed")),
     )
     ctx = _InMemoryContext()
-    with pytest.raises(RuntimeError, match="compose failed"):
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "compose failed" in ctx.details()
+    # The allocated parent session was dropped before answering.
+    assert sm._sessions == {}
+
+
+def test_forward_restore_train_run_survivor_is_failed_precondition(
+    monkeypatch, tmp_path
+):
+    """An old child that would not stop is the server's answer, shown once; a client
+    that retried it as a transport fault would spawn a runtime beside the survivor."""
+    from cuvis_ai_core.grpc.session_manager import ChildStillRunning
+
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=ChildStillRunning("previous child could not be stopped")),
+    )
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),
+        ctx,
+    )
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "could not be stopped" in ctx.details()
+    assert sm._sessions == {}
+
+
+def test_forward_restore_train_run_closed_during_load_is_not_found(
+    monkeypatch, tmp_path
+):
+    """A session closed while its child was being prepared answers NOT_FOUND, like
+    forward_load_pipeline, so the client replays on a fresh session."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=orchestrator_bridge.SessionClosedDuringLoad(sid)),
+    )
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "x.yaml"), session_id=sid
+        ),
+        ctx,
+    )
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+
+
+def test_forward_restore_train_run_rechecks_the_session_under_the_lock(
+    monkeypatch, tmp_path
+):
+    """A close that took the caller's session lock first answers NOT_FOUND, not
+    INVALID_ARGUMENT: the two forwarding paths agree on the same race."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    ensure = MagicMock(
+        side_effect=AssertionError("must not compose for a closed session")
+    )
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", ensure)
+    # The close won the lock first: entering the session's lock from the restore
+    # finds the session already popped (the lock is re-entrant, so the close runs
+    # inline here where another thread would have run it a moment earlier).
+    state = sm.get_session(sid)
+    real_lock = state.child_lock
+
+    class _ClosedFirst:
+        def __enter__(self):
+            real_lock.acquire()
+            if sm.has_session(sid):
+                sm.close_session(sid)
+            return self
+
+        def __exit__(self, *exc):
+            real_lock.release()
+            return False
+
+        def acquire(self, *args, **kwargs):
+            return real_lock.acquire(*args, **kwargs)
+
+        def release(self):
+            real_lock.release()
+
+    state.child_lock = _ClosedFirst()  # type: ignore[assignment]
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(tmp_path / "x.yaml"), session_id=sid
+        ),
+        ctx,
+    )
+    assert resp == cuvis_ai_pb2.RestoreTrainRunResponse()
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert not ensure.called
+    assert state.child_handle is None
+
+
+def test_forward_restore_train_run_reraises_unclassified_error(monkeypatch, tmp_path):
+    """Anything that is not a compose / spawn failure still surfaces as a bug."""
+    sm = SessionManager()
+    fake_cfg = SimpleNamespace(pipeline="pl.yaml")
+    pl = tmp_path / "pl.yaml"
+    pl.write_text("plugins: [p]\nnodes: []\nconnections: []\n", encoding="utf-8")
+    _patch_parse(monkeypatch, result=(fake_cfg, pl))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "ensure_child_for_session",
+        MagicMock(side_effect=KeyError("a bug")),
+    )
+    ctx = _InMemoryContext()
+    with pytest.raises(KeyError, match="a bug"):
         orchestrator_bridge.forward_restore_train_run(
             sm,
             cuvis_ai_pb2.RestoreTrainRunRequest(trainrun_path=str(tmp_path / "x.yaml")),

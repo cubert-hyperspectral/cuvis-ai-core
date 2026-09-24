@@ -7,10 +7,11 @@ module copies those logs aside first, into ``.crash_logs/`` under the
 composer cache root (dot-prefixed, never a cache entry), so a crash can
 still be diagnosed after cleanup.
 
-Preservation is idempotent per session id: the failing RPC preserves the
-logs at the moment of death so the client learns where they are, and the
-later ``close_session`` teardown asks again and is handed the same
-directory instead of copying a second one.
+Preservation is idempotent per child (session id plus endpoint): the failing
+RPC preserves the logs at the moment of death so the client learns where they
+are, and the later retire or ``close_session`` teardown asks again and is
+handed the same directory instead of copying a second one. A later child of
+the same session (dead-child recovery, a pipeline switch) gets its own copy.
 
 The cache root comes from the stdlib-only ``cache_paths`` leaf, so importing
 this module never pays the composer's (and its transitive) import cost.
@@ -39,15 +40,19 @@ CRASH_LOGS_DIRNAME = ".crash_logs"
 _MARKER_NAME = "crash_info.txt"
 _MAX_CRASH_DIRS = 5
 
-# One preserved directory per session id. Two callers race for a crashed
-# session (the failing RPC and the later close_session teardown, plus the
-# orphan reaper), and each would otherwise create its own timestamped copy.
-# The lock is held across the copy so the loser of the race waits and then
-# sees the winner's directory. Only successful preservations are recorded,
-# so a failed attempt can still be retried. One Path per crashed session
-# lives here for the life of the process.
+# One preserved directory per crashed child, keyed by session id and the
+# child's endpoint. Two callers race for a crashed child (the failing RPC
+# and the later retire or close_session teardown, plus the orphan reaper),
+# and each would otherwise create its own timestamped copy. The lock is held
+# across the copy so the loser of the race waits and then sees the winner's
+# directory. Only successful preservations are recorded, so a failed attempt
+# can still be retried. The endpoint is part of the key because a session
+# runs several children over its life (dead-child recovery, a pipeline
+# switch): the second crash in one session must get its own copy, not the
+# first crash's directory. One Path per crashed child lives here for the
+# life of the process.
 _preserve_lock = threading.Lock()
-_preserved: dict[str, Path] = {}
+_preserved: dict[tuple[str, str | None], Path] = {}
 
 
 def reset_for_tests() -> None:
@@ -78,21 +83,23 @@ def preserve_child_logs(
     """Copy a dead child's log files into the crash-log store.
 
     Returns the destination directory, or ``None`` when nothing could be
-    preserved. Idempotent per ``session_id``: a repeat call for a session
-    whose logs are already preserved returns the recorded directory
-    without copying anything a second time. Best-effort by design:
+    preserved. Idempotent per child (``session_id`` plus ``endpoint``): a
+    repeat call for a child whose logs are already preserved returns the
+    recorded directory without copying anything a second time, while the
+    next child of the same session gets its own copy. Best-effort by design:
     session teardown must never fail because a log file is missing, still
     locked (Windows), or the store is unwritable.
     """
+    key = (session_id, endpoint)
     with _preserve_lock:
-        recorded = _preserved.get(session_id)
+        recorded = _preserved.get(key)
         if recorded is not None:
             return recorded
         destination = _copy_child_logs(
             log_paths, session_id=session_id, exit_code=exit_code, endpoint=endpoint
         )
         if destination is not None:
-            _preserved[session_id] = destination
+            _preserved[key] = destination
         return destination
 
 
