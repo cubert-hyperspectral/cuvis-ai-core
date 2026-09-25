@@ -195,14 +195,12 @@ class PipelineVisualizer:
                 if show_execution_stage
                 else None
             )
-            label = self._escape_mermaid_label(
-                self._format_node_label(
-                    node,
-                    include_node_class,
-                    mermaid=True,
-                    stage_text=stage_text,
-                )
-            )
+            label = self._format_node_label(
+                node,
+                include_node_class,
+                mermaid=True,
+                stage_text=stage_text,
+            ).replace("]", ")")  # "]" would close the Mermaid node label
             node_defs[node] = f"{identifier}[{label}]"
 
             node_type = node_type_resolver(node)
@@ -241,7 +239,7 @@ class PipelineVisualizer:
                 mermaid=True,
             )
             if edge_label:
-                sanitized = self._sanitize_mermaid_pipe(edge_label)
+                sanitized = edge_label.replace("|", "/")  # "|" delimits the label
                 lines.append(f"    {src} -->|{sanitized}| {dst}")
             else:
                 lines.append(f"    {src} --> {dst}")
@@ -430,12 +428,6 @@ class PipelineVisualizer:
     def _escape_label(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    def _escape_mermaid_label(self, value: str) -> str:
-        return value.replace("]", ")")
-
-    def _sanitize_mermaid_pipe(self, value: str) -> str:
-        return value.replace("|", "/")
-
     def _group_nodes_by_stage(self) -> dict[str, list[Node]]:
         groups: dict[str, list[Node]] = defaultdict(list)
         for node in self._graph.nodes:
@@ -484,23 +476,18 @@ class PipelineVisualizer:
 
     def _format_execution_stage_text(
         self, node: Node, stage_labels: Mapping[str, str]
-    ) -> str | None:
+    ) -> str:
+        """Stage label(s) of ``node``, sorted and joined with ``" / "``."""
         stages = self._node_stage_values(node)
-        if not stages:
-            return None
         labels = sorted({stage_labels.get(stage, stage.title()) for stage in stages})
-        if not labels:
-            return None
-        if labels == [stage_labels.get(ExecutionStage.ALWAYS.value, "All Stages")]:
-            return labels[0]
         return " / ".join(labels)
 
     def _node_stage_values(self, node: Node) -> set[str]:
+        """Normalized stage values of ``node``; ``{"always"}`` when unrestricted."""
         raw_stages = getattr(node, "execution_stages", None)
         if not raw_stages:
             return {ExecutionStage.ALWAYS.value}
         normalized = {self._normalize_stage(stage) for stage in raw_stages if stage}
-        normalized.discard(None)
         if not normalized or ExecutionStage.ALWAYS.value in normalized:
             return {ExecutionStage.ALWAYS.value}
         return normalized
