@@ -1273,13 +1273,9 @@ class ModelWeights:
         path.unlink()
         freed = size
         if blob is not None and blob.is_file() and (repo_dir / "blobs") in blob.parents:
-            still_referenced = (
-                any(
-                    other.is_symlink() and other.resolve() == blob
-                    for other in (repo_dir / "snapshots").rglob("*")
-                )
-                if (repo_dir / "snapshots").is_dir()
-                else False
+            still_referenced = any(
+                other.is_symlink() and other.resolve() == blob
+                for other in (repo_dir / "snapshots").rglob("*")
             )
             if not still_referenced:
                 freed += cls._file_size(blob) or 0
@@ -1495,11 +1491,6 @@ class ModelWeights:
             log(f"sha256 OK ({digest})")
         else:
             log(f"sha256 {digest} (no pinned value; record it in the registry)")
-
-    @staticmethod
-    def _log(message: str) -> None:
-        """Kept for callers of the 0.16 name; see :func:`_provisioning.log`."""
-        log(message)
 
 
 ModelWeights.reset()
