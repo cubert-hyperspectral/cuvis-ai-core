@@ -1435,44 +1435,6 @@ class CuvisPipeline:
 
         return node_inputs
 
-    def _has_required_inputs(self, node: Node, node_inputs: dict) -> bool:
-        """Check if all required inputs are present.
-
-        Parameters
-        ----------
-        node : Node
-            Node to check inputs for
-        node_inputs : dict
-            Gathered inputs for the node
-
-        Returns
-        -------
-        bool
-            True if all required inputs are present
-        """
-        for port_name, spec in getattr(node, "INPUT_SPECS", {}).items():
-            if not getattr(spec, "optional", False) and port_name not in node_inputs:
-                return False
-        return True
-
-    def _is_optional_port(self, node: Node, port_name: str) -> bool:
-        """Check if a port is optional.
-
-        Parameters
-        ----------
-        node : Node
-            Node to check
-        port_name : str
-            Name of the port
-
-        Returns
-        -------
-        bool
-            True if port is optional
-        """
-        spec = getattr(node, "INPUT_SPECS", {}).get(port_name)
-        return getattr(spec, "optional", False)
-
     def _validate_runtime_inputs(self, node: Node, inputs: dict[str, Any]) -> None:
         """Validate input values match INPUT_SPECS at runtime.
 
@@ -1673,23 +1635,6 @@ class CuvisPipeline:
         self.torch_layers.cpu()
         return self
 
-    def _iter_all_parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]:
-        """
-        Yield parameters from all layers (optionally recursing into submodules),
-        de-duplicated across shared modules/parameters.
-        """
-        seen_params: set[int] = set()
-        for layer in self.torch_layers:
-            # nn.Module.parameters already includes submodules if recurse=True
-            iterator = (
-                layer.parameters() if recurse else layer.parameters(recurse=False)
-            )
-            for p in iterator:
-                pid = id(p)
-                if pid not in seen_params:
-                    seen_params.add(pid)
-                    yield p
-
     def parameters(
         self, *, recurse: bool = True, require_grad: bool | None = None
     ) -> Iterator[nn.Parameter]:
@@ -1700,9 +1645,15 @@ class CuvisPipeline:
             recurse: include parameters from child modules of each layer.
             require_grad: if set, filter by p.requires_grad == require_grad.
         """
-        for p in self._iter_all_parameters(recurse=recurse):
-            if require_grad is None or p.requires_grad is require_grad:
-                yield p
+        seen_params: set[int] = set()
+        for layer in self.torch_layers:
+            for p in layer.parameters(recurse=recurse):
+                pid = id(p)
+                if pid in seen_params:
+                    continue
+                seen_params.add(pid)
+                if require_grad is None or p.requires_grad is require_grad:
+                    yield p
 
     def named_parameters(
         self, *, recurse: bool = True, require_grad: bool | None = None, sep: str = "."
