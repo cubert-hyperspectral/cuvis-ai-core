@@ -40,10 +40,6 @@ class SessionService:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(str(exc))
             return cuvis_ai_pb2.CloseSessionResponse(success=False)
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to close session: {exc}")
-            return cuvis_ai_pb2.CloseSessionResponse(success=False)
 
     @grpc_handler("Failed to update search paths")
     def set_session_search_paths(

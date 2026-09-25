@@ -69,7 +69,6 @@ class SessionState:
     search_paths: list[str] = field(
         default_factory=lambda: ["./configs", "./configs/pipeline"]
     )
-    is_training: bool = False
     trainer: Any | None = None
     # Cooperative-cancel flag for the session's training run. Set by StopTrain
     # (or a dropped Train stream); checked per batch / between statistical
