@@ -186,6 +186,12 @@ DTYPE_TORCH_TO_PROTO = {
     torch.uint16: cuvis_ai_pb2.D_TYPE_UINT16,
 }
 
+# The CUDA path never touches numpy, so it needs the torch dtype directly. Inverted
+# rather than spelled out again, so the two cannot drift.
+DTYPE_PROTO_TO_TORCH = {
+    proto: dtype for dtype, proto in DTYPE_TORCH_TO_PROTO.items()
+}
+
 # Processing-mode names as plain strings, so core imports no cuvis SDK. The cu3s
 # reader (in the cuvis-ai-dataloader plugin) coerces the string to the SDK enum
 # at its own boundary.
@@ -458,6 +464,12 @@ def proto_to_tensor(
         is closed on exit.** Writes to the tensor write through to the shared
         region.
 
+    ``cuda_ipc`` payload:
+      - The tensor is on the GPU and always shares the producer's device memory;
+        ``copy`` does not apply. **Do not store or use it after the ``with``
+        block** — the mapping is released on exit and the producer frees the
+        buffer once the RPC returns.
+
     Args:
         tensor_proto: Proto Tensor message
         copy: Passed through to ``proto_to_numpy``. Default: True
@@ -465,8 +477,41 @@ def proto_to_tensor(
     Yields:
         PyTorch tensor
     """
+    # Dispatch before delegating: numpy cannot represent device memory, so the CUDA
+    # path cannot pass through proto_to_numpy at all.
+    if tensor_proto.WhichOneof("payload") == "cuda_ipc":
+        with proto_to_cuda_tensor(tensor_proto) as tensor:
+            yield tensor
+        return
+
     with proto_to_numpy(tensor_proto, copy=copy) as arr:
         yield torch.from_numpy(arr)
+
+
+@contextmanager
+def proto_to_cuda_tensor(
+    tensor_proto: cuvis_ai_pb2.Tensor,
+) -> Generator[torch.Tensor, None, None]:
+    """Map a ``cuda_ipc`` payload as a zero-copy CUDA tensor.
+
+    A peer of ``proto_to_numpy`` rather than a branch inside it: the buffer lives in
+    device memory, which numpy has no way to describe.
+
+    The mapping is released when the block exits, so the tensor must not outlive it.
+    """
+    from . import cuda_ipc
+
+    if tensor_proto.WhichOneof("payload") != "cuda_ipc":
+        raise ValueError("Tensor does not carry a cuda_ipc payload")
+    if tensor_proto.dtype not in DTYPE_PROTO_TO_TORCH:
+        raise ValueError(f"Unsupported dtype: {tensor_proto.dtype}")
+
+    with cuda_ipc.open_ref(
+        tensor_proto.cuda_ipc,
+        tuple(tensor_proto.shape),
+        DTYPE_PROTO_TO_TORCH[tensor_proto.dtype],
+    ) as tensor:
+        yield tensor
 
 
 def tensor_to_proto(tensor: torch.Tensor) -> cuvis_ai_pb2.Tensor:
