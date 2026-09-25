@@ -225,15 +225,9 @@ STRING_TO_POINT_TYPE = {
 }
 
 
+# numpy dtype names ("float32", "bool", ...) of the DTYPE_NUMPY_TO_PROTO entries.
 _DTYPE_STR_TO_PROTO: dict[str, int] = {
-    "float32": cuvis_ai_pb2.D_TYPE_FLOAT32,
-    "float64": cuvis_ai_pb2.D_TYPE_FLOAT64,
-    "int32": cuvis_ai_pb2.D_TYPE_INT32,
-    "int64": cuvis_ai_pb2.D_TYPE_INT64,
-    "uint8": cuvis_ai_pb2.D_TYPE_UINT8,
-    "bool": cuvis_ai_pb2.D_TYPE_BOOL,
-    "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
-    "uint16": cuvis_ai_pb2.D_TYPE_UINT16,
+    str(np_dtype): proto for np_dtype, proto in DTYPE_NUMPY_TO_PROTO.items()
 }
 
 

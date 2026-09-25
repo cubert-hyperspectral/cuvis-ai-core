@@ -51,21 +51,17 @@ def safe_rmtree(path: Path) -> None:
         else:
             raise exc
 
-    last_error = None
     for attempt in range(3):
         try:
             shutil.rmtree(path, onerror=_handle_remove_readonly)
             return
-        except PermissionError as exc:
-            last_error = exc
+        except PermissionError:
             if attempt < 2:
                 time.sleep(0.2)
                 continue
             raise
         except FileNotFoundError:
             return
-    if last_error:
-        raise last_error
 
 
 def _import_from_path(import_path: str, clear_cache: bool = False) -> type:

@@ -44,18 +44,13 @@ class ProfilingService:
         if not require_pipeline(session, context):
             return cuvis_ai_pb2.SetProfilingResponse()
 
-        # Map optional proto fields → Python defaults for absent fields
-        synchronize_cuda = (
-            request.synchronize_cuda if request.HasField("synchronize_cuda") else False
-        )
-        reset = request.reset if request.HasField("reset") else False
-        skip_first_n = request.skip_first_n if request.HasField("skip_first_n") else 0
-
+        # Unset optional scalars read as proto3 defaults (False / 0), the same
+        # defaults CuvisPipeline.set_profiling applies.
         session.pipeline.set_profiling(
             enabled=request.enabled,
-            synchronize_cuda=synchronize_cuda,
-            reset=reset,
-            skip_first_n=skip_first_n,
+            synchronize_cuda=request.synchronize_cuda,
+            reset=request.reset,
+            skip_first_n=request.skip_first_n,
         )
 
         return cuvis_ai_pb2.SetProfilingResponse(
@@ -78,13 +73,9 @@ class ProfilingService:
         if not require_pipeline(session, context):
             return cuvis_ai_pb2.GetProfilingSummaryResponse()
 
-        # Map optional proto stage enum → Python ExecutionStage or None
-        stage = None
-        if request.HasField("stage"):
-            proto_stage = request.stage
-            stage_str = _STAGE_PROTO_TO_STR.get(proto_stage)
-            if stage_str is not None:
-                stage = ExecutionStage(stage_str)
+        # Unset or UNSPECIFIED stage reads as 0, which is not in the map: no filter.
+        stage_str = _STAGE_PROTO_TO_STR.get(request.stage)
+        stage = ExecutionStage(stage_str) if stage_str is not None else None
 
         stats = session.pipeline.get_profiling_summary(stage=stage)
 

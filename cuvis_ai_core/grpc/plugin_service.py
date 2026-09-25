@@ -515,14 +515,8 @@ class PluginService:
         # Count cleared before clearing
         cache_dir = NodeRegistry._cache_dir
 
-        if plugin_name:
-            cleared = (
-                len(list(cache_dir.glob(f"{plugin_name}@*")))
-                if cache_dir.exists()
-                else 0
-            )
-        else:
-            cleared = len(list(cache_dir.glob("*"))) if cache_dir.exists() else 0
+        pattern = f"{plugin_name}@*" if plugin_name else "*"
+        cleared = len(list(cache_dir.glob(pattern))) if cache_dir.exists() else 0
 
         # Clear cache
         NodeRegistry.clear_plugin_cache(plugin_name)

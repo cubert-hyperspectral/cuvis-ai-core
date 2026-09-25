@@ -209,33 +209,12 @@ def evaluate_constraints(
         if kind == ConstraintKind.NO_SPLIT_OVERLAP:
             leaks = _uid_overlaps(train, val, test)
             offending = tuple(sorted({uid for _, _, shared in leaks for uid in shared}))
-            if offending:
-                reason = "; ".join(
-                    f"{len(shared)} shared between {a} and {b}"
-                    for a, b, shared in leaks
-                )
-                results.append(
-                    ConstraintResult(
-                        kv, sev, "violated", len(offending), offending, reason
-                    )
-                )
-            else:
-                results.append(ConstraintResult(kv, sev, "satisfied"))
+            reason = "; ".join(
+                f"{len(shared)} shared between {a} and {b}" for a, b, shared in leaks
+            )
         elif kind == ConstraintKind.NO_SOURCE_OVERLAP:
             offending = tuple(_sources_spanning_stages(train, val, test))
-            if offending:
-                results.append(
-                    ConstraintResult(
-                        kv,
-                        sev,
-                        "violated",
-                        len(offending),
-                        offending,
-                        f"{len(offending)} source(s) span >1 of train/val/test",
-                    )
-                )
-            else:
-                results.append(ConstraintResult(kv, sev, "satisfied"))
+            reason = f"{len(offending)} source(s) span >1 of train/val/test"
         elif kind == ConstraintKind.NO_TRAIN_ANOMALOUS:
             if "category_ids" not in available_attrs:
                 results.append(
@@ -246,25 +225,20 @@ def evaluate_constraints(
                         reason="data module cannot supply category labels",
                     )
                 )
-            else:
-                offending = tuple(sorted({r.source for r in train if _is_anomalous(r)}))
-                if offending:
-                    results.append(
-                        ConstraintResult(
-                            kv,
-                            sev,
-                            "violated",
-                            len(offending),
-                            offending,
-                            f"{len(offending)} source(s) with an anomalous frame in train",
-                        )
-                    )
-                else:
-                    results.append(ConstraintResult(kv, sev, "satisfied"))
+                continue
+            offending = tuple(sorted({r.source for r in train if _is_anomalous(r)}))
+            reason = f"{len(offending)} source(s) with an anomalous frame in train"
         else:  # pragma: no cover - schema validates the kind set
             results.append(
                 ConstraintResult(kv, sev, "unavailable", reason=f"unknown kind {kv}")
             )
+            continue
+        if offending:
+            results.append(
+                ConstraintResult(kv, sev, "violated", len(offending), offending, reason)
+            )
+        else:
+            results.append(ConstraintResult(kv, sev, "satisfied"))
     return results
 
 
