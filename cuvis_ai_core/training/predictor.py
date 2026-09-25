@@ -160,29 +160,19 @@ class Predictor:
     def _iter_batches(dataloaders: Any) -> Iterable[dict[str, Any]]:
         """Yield batch dictionaries from one or more dataloaders."""
         if isinstance(dataloaders, DataLoader):
-            for batch in dataloaders:
-                yield batch
+            yield from dataloaders
             return
-
         if isinstance(dataloaders, Mapping):
-            for loader in dataloaders.values():
-                if loader is None:
-                    continue
-                for batch in loader:
-                    yield batch
-            return
-
-        if isinstance(dataloaders, Iterable):
-            for loader in dataloaders:
-                if loader is None:
-                    continue
-                for batch in loader:
-                    yield batch
-            return
-
-        raise TypeError(
-            "predict_dataloader() must return a DataLoader, mapping, or iterable of dataloaders."
-        )
+            loaders = dataloaders.values()
+        elif isinstance(dataloaders, Iterable):
+            loaders = dataloaders
+        else:
+            raise TypeError(
+                "predict_dataloader() must return a DataLoader, mapping, or iterable of dataloaders."
+            )
+        for loader in loaders:
+            if loader is not None:
+                yield from loader
 
     def _get_pipeline_device(self) -> torch.device:
         """Resolve the active pipeline device from parameters or buffers."""
