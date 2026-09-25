@@ -185,8 +185,7 @@ class ProductionServer:
             self.logger.info("Server listening on 0.0.0.0:%s (insecure)", bound_port)
 
         self.server.start()
-        if self.health_service:
-            self.health_service.set_serving()
+        self.health_service.set_serving()
 
         self.logger.info("Server started successfully")
         self._setup_signal_handlers()
