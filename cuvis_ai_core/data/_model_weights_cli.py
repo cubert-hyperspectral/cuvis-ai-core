@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,47 +26,37 @@ from cuvis_ai_core.data._provisioning import (
     schema_names,
 )
 
-_F = Callable[..., Any]
+_plugins_dir_option = click.option(
+    "--plugins-dir",
+    "plugins_dirs",
+    multiple=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help=(
+        "Directory of plugin manifests whose weights: blocks join the registry "
+        "(repeatable, earlier wins; default: cuvis-ai's packaged configs/plugins when "
+        "cuvis-ai is installed)."
+    ),
+)
 
+_cache_dir_option = click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Hugging Face cache root (default: the shared model cache the runtime reads).",
+)
 
-def _plugins_dir_option(fn: _F) -> _F:
-    return click.option(
-        "--plugins-dir",
-        "plugins_dirs",
-        multiple=True,
-        type=click.Path(path_type=Path, file_okay=False),
-        help=(
-            "Directory of plugin manifests whose weights: blocks join the registry "
-            "(repeatable, earlier wins; default: cuvis-ai's packaged configs/plugins when "
-            "cuvis-ai is installed)."
-        ),
-    )(fn)
+_json_option = click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit JSON (schema_version 1) instead of text.",
+)
 
-
-def _cache_dir_option(fn: _F) -> _F:
-    return click.option(
-        "--cache-dir",
-        type=click.Path(path_type=Path, file_okay=False),
-        default=None,
-        help="Hugging Face cache root (default: the shared model cache the runtime reads).",
-    )(fn)
-
-
-def _json_option(fn: _F) -> _F:
-    return click.option(
-        "--json",
-        "as_json",
-        is_flag=True,
-        help="Emit JSON (schema_version 1) instead of text.",
-    )(fn)
-
-
-def _progress_option(fn: _F) -> _F:
-    return click.option(
-        "--progress-json",
-        is_flag=True,
-        help="One JSON event per line on stdout while transferring (excludes --json).",
-    )(fn)
+_progress_option = click.option(
+    "--progress-json",
+    is_flag=True,
+    help="One JSON event per line on stdout while transferring (excludes --json).",
+)
 
 
 def _load_plugins(plugins_dirs: tuple[Path, ...]) -> None:
