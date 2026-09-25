@@ -136,7 +136,12 @@ jobs:
 
       - name: Run pip-audit
         run: |
-          uv run pip-audit --strict --desc on || true
+          # CVE-2025-3000 (torch): fixed in 2.13.0; the cu128 line stays on 2.11 until the next
+          # torch release is qualified for the ecosystem, so the advisory is ignored until then.
+          # PYSEC-2026-3447 (setuptools): fixed in 83.0.0, but the torch 2.11.0+cu128 wheel requires
+          # setuptools<82, so the cap lifts with the next torch line; the flaw only affects building
+          # sdists on macOS.
+          uv run pip-audit --desc on --skip-editable --ignore-vuln CVE-2025-3000 --ignore-vuln PYSEC-2026-3447
 
       - name: Run detect-secrets
         run: |
