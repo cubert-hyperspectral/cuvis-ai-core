@@ -52,35 +52,28 @@ __all__ = [
     "VideoIterator",
 ]
 
-_SUBMODULE_MAP: dict[str, tuple[str, str]] = {
-    "ModelDownloadError": ("cuvis_ai_core.data.model_weights", "ModelDownloadError"),
-    "ModelRegistryConflict": (
-        "cuvis_ai_core.data.model_weights",
-        "ModelRegistryConflict",
-    ),
-    "ModelStatus": ("cuvis_ai_core.data.model_weights", "ModelStatus"),
-    "ModelWeights": ("cuvis_ai_core.data.model_weights", "ModelWeights"),
-    "ModelWeightsMissingError": (
-        "cuvis_ai_core.data.model_weights",
-        "ModelWeightsMissingError",
-    ),
-    "RegisteredWeight": ("cuvis_ai_core.data.model_weights", "RegisteredWeight"),
-    "TRAINED_PIPELINES": ("cuvis_ai_core.data.model_weights", "TRAINED_PIPELINES"),
-    "PublicDatasets": ("cuvis_ai_core.data.public_datasets", "PublicDatasets"),
-    "coco_rle_area": ("cuvis_ai_core.data.rle", "coco_rle_area"),
-    "coco_rle_decode": ("cuvis_ai_core.data.rle", "coco_rle_decode"),
-    "coco_rle_encode": ("cuvis_ai_core.data.rle", "coco_rle_encode"),
-    "coco_rle_to_bbox": ("cuvis_ai_core.data.rle", "coco_rle_to_bbox"),
-    "rle_list_to_mask": ("cuvis_ai_core.data.rle", "rle_list_to_mask"),
-    "VideoFrameDataModule": ("cuvis_ai_core.data.video", "VideoFrameDataModule"),
-    "VideoFrameDataset": ("cuvis_ai_core.data.video", "VideoFrameDataset"),
-    "VideoIterator": ("cuvis_ai_core.data.video", "VideoIterator"),
+_SUBMODULE_MAP: dict[str, str] = {
+    "ModelDownloadError": "cuvis_ai_core.data.model_weights",
+    "ModelRegistryConflict": "cuvis_ai_core.data.model_weights",
+    "ModelStatus": "cuvis_ai_core.data.model_weights",
+    "ModelWeights": "cuvis_ai_core.data.model_weights",
+    "ModelWeightsMissingError": "cuvis_ai_core.data.model_weights",
+    "RegisteredWeight": "cuvis_ai_core.data.model_weights",
+    "TRAINED_PIPELINES": "cuvis_ai_core.data.model_weights",
+    "PublicDatasets": "cuvis_ai_core.data.public_datasets",
+    "coco_rle_area": "cuvis_ai_core.data.rle",
+    "coco_rle_decode": "cuvis_ai_core.data.rle",
+    "coco_rle_encode": "cuvis_ai_core.data.rle",
+    "coco_rle_to_bbox": "cuvis_ai_core.data.rle",
+    "rle_list_to_mask": "cuvis_ai_core.data.rle",
+    "VideoFrameDataModule": "cuvis_ai_core.data.video",
+    "VideoFrameDataset": "cuvis_ai_core.data.video",
+    "VideoIterator": "cuvis_ai_core.data.video",
 }
 
 
 def __getattr__(name: str):
+    """Import the submodule that defines ``name`` on first access."""
     if name in _SUBMODULE_MAP:
-        module_path, attr = _SUBMODULE_MAP[name]
-        mod = importlib.import_module(module_path)
-        return getattr(mod, attr)
+        return getattr(importlib.import_module(_SUBMODULE_MAP[name]), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
