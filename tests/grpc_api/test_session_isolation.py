@@ -1,6 +1,6 @@
 import pytest
 
-from cuvis_ai_core.grpc.session_manager import SessionManager
+from cuvis_ai_core.grpc.session_manager import DEFAULT_SEARCH_PATHS, SessionManager
 
 
 def test_multiple_sessions_independent():
@@ -15,8 +15,8 @@ def test_multiple_sessions_independent():
     session1 = manager.get_session(session1_id)
     session2 = manager.get_session(session2_id)
 
-    assert session1.search_paths == ["./configs"]
-    assert session2.search_paths == ["./configs"]
+    assert session1.search_paths == list(DEFAULT_SEARCH_PATHS)
+    assert session2.search_paths == list(DEFAULT_SEARCH_PATHS)
     assert session1.session_id != session2.session_id
 
 
