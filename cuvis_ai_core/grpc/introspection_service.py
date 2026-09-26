@@ -7,7 +7,7 @@ from pathlib import Path
 
 import grpc
 
-from .error_handling import get_session_or_error, grpc_handler
+from .error_handling import get_session_or_error, grpc_handler, require_pipeline
 from .helpers import spec_to_tensor_spec
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
@@ -30,6 +30,8 @@ class IntrospectionService:
             self.session_manager, request.session_id, context
         )
         if session is None:
+            return cuvis_ai_pb2.GetPipelineInputsResponse()
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.GetPipelineInputsResponse()
 
         input_specs_dict = session.pipeline.get_input_specs()
@@ -55,6 +57,8 @@ class IntrospectionService:
         )
         if session is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
+        if not require_pipeline(session, context):
+            return cuvis_ai_pb2.GetPipelineOutputsResponse()
 
         output_specs_dict = session.pipeline.get_output_specs()
         output_specs = {
@@ -78,6 +82,8 @@ class IntrospectionService:
             self.session_manager, request.session_id, context
         )
         if session is None:
+            return cuvis_ai_pb2.GetPipelineVisualizationResponse()
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer

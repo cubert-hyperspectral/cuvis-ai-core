@@ -123,3 +123,52 @@ def test_get_pipeline_visualization_oversize_config_is_invalid_argument(grpc_stu
             )
         )
     assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+class TestIntrospectionWithoutPipeline:
+    """Direct service calls on a session that has no pipeline, the child runtime's state
+    after a load that failed inside it: every introspection RPC answers FAILED_PRECONDITION
+    naming the missing pipeline, as the other pipeline-bound services do."""
+
+    def setup_method(self):
+        from unittest.mock import Mock
+
+        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
+        from cuvis_ai_core.grpc.session_manager import SessionManager
+
+        self.session_manager = SessionManager()
+        self.service = IntrospectionService(self.session_manager)
+        self.ctx = Mock()
+        self.session_id = self.session_manager.create_session()
+
+    def teardown_method(self):
+        for sid in list(self.session_manager._sessions.keys()):
+            self.session_manager.close_session(sid)
+
+    def _assert_failed_precondition(self):
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+        assert "pipeline" in self.ctx.set_details.call_args.args[0].lower()
+
+    def test_get_pipeline_inputs(self):
+        response = self.service.get_pipeline_inputs(
+            cuvis_ai_pb2.GetPipelineInputsRequest(session_id=self.session_id), self.ctx
+        )
+        assert not response.input_names
+        self._assert_failed_precondition()
+
+    def test_get_pipeline_outputs(self):
+        response = self.service.get_pipeline_outputs(
+            cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=self.session_id), self.ctx
+        )
+        assert not response.output_names
+        self._assert_failed_precondition()
+
+    def test_get_pipeline_visualization(self):
+        response = self.service.get_pipeline_visualization(
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(
+                session_id=self.session_id, format="dot"
+            ),
+            self.ctx,
+        )
+        assert not response.image_data
+        self._assert_failed_precondition()

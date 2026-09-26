@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `create_scheduler` accepts the `plateau` alias of `reduce_on_plateau`. The registry declared the alias, `get_supported_schedulers` listed it, `get_scheduler_info` resolved it, `ValidateConfig` accepted it and the `SchedulerConfig.name` docs list it, but a trainrun with `scheduler: {name: plateau}` failed in `configure_optimizers` with `Unsupported scheduler: plateau` because the factory checked the raw name against the registry keys. Names and aliases now resolve to their registry entry before the check, so the alias builds the same `ReduceLROnPlateau` with the same parameters as the full name, and the unsupported-name error lists the aliases too.
+- `GetPipelineInputs`, `GetPipelineOutputs` and `GetPipelineVisualization` on a session without a pipeline answer `FAILED_PRECONDITION` (`No pipeline is available for this session. Build pipeline first.`) like every other pipeline-bound RPC. The child runtime's copies of these handlers skipped the pipeline check, so after a `LoadPipeline` that failed inside the child they answered `INTERNAL` with `'NoneType' object has no attribute 'get_input_specs'`; the parent already stops the request when no child is attached.
 
 ## 0.17.5 - 2026-09-28
 
