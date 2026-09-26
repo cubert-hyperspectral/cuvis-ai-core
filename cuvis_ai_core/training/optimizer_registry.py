@@ -90,6 +90,15 @@ SUPPORTED_SCHEDULERS: dict[str, dict[str, Any]] = {
 }
 
 
+def _canonical_scheduler_name(name: str) -> str | None:
+    """Return the registry key for a scheduler name or one of its aliases."""
+    normalized = name.lower()
+    for scheduler_name, spec in SUPPORTED_SCHEDULERS.items():
+        if normalized == scheduler_name or normalized in spec.get("aliases", []):
+            return scheduler_name
+    return None
+
+
 # -----------------------------------------------------------------------------
 # Factories
 # -----------------------------------------------------------------------------
@@ -125,12 +134,12 @@ def create_scheduler(
     if config is None or not config.name:
         return None
 
-    scheduler_name = config.name.lower()
-    if scheduler_name in {"none", ""}:
+    if config.name.lower() in {"none", ""}:
         return None
 
-    if scheduler_name not in SUPPORTED_SCHEDULERS:
-        supported = ", ".join(sorted(SUPPORTED_SCHEDULERS.keys()))
+    scheduler_name = _canonical_scheduler_name(config.name)
+    if scheduler_name is None:
+        supported = ", ".join(sorted(get_supported_schedulers()))
         raise ValueError(
             f"Unsupported scheduler: {config.name}. Supported schedulers: {supported}"
         )
@@ -216,11 +225,10 @@ def get_optimizer_info(name: str) -> dict[str, Any]:
 
 def get_scheduler_info(name: str) -> dict[str, Any]:
     """Return scheduler specification by name, resolving aliases."""
-    normalized = name.lower()
-    for scheduler_name, spec in SUPPORTED_SCHEDULERS.items():
-        if normalized == scheduler_name or normalized in spec.get("aliases", []):
-            return spec
-    raise ValueError(f"Unknown scheduler: {name}")
+    scheduler_name = _canonical_scheduler_name(name)
+    if scheduler_name is None:
+        raise ValueError(f"Unknown scheduler: {name}")
+    return SUPPORTED_SCHEDULERS[scheduler_name]
 
 
 __all__ = [
