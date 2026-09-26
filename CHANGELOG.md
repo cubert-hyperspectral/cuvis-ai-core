@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `create_scheduler` accepts the `plateau` alias of `reduce_on_plateau`. The registry declared the alias, `get_supported_schedulers` listed it, `get_scheduler_info` resolved it, `ValidateConfig` accepted it and the `SchedulerConfig.name` docs list it, but a trainrun with `scheduler: {name: plateau}` failed in `configure_optimizers` with `Unsupported scheduler: plateau` because the factory checked the raw name against the registry keys. Names and aliases now resolve to their registry entry before the check, so the alias builds the same `ReduceLROnPlateau` with the same parameters as the full name, and the unsupported-name error lists the aliases too.
+
 ## 0.17.5 - 2026-09-28
 
 - Security: the pip-audit step now fails the build (it ran behind `|| true`) and the locked environment is refreshed for the open advisories: aiohttp 3.14.3, anyio 4.14.2, bleach 6.4.0, cryptography 50.0.1, gitpython 3.1.62, hydra-core 1.3.7, jupyter-server 2.21.1, jupyterlab 4.6.4, mistune 3.3.4, msgpack 1.2.2, nbconvert 7.17.1, pip 26.2.1, pygments 2.21.0, pytest 9.1.1, requests 2.34.2, setuptools 81.0.0, soupsieve 2.10, tornado 6.5.10. The floors follow the lock: `gitpython>=3.1.62`, `aiohttp>=3.14.3`, `hydra-core>=1.3.7`. Ignored with a comment in CI: torch CVE-2025-3000 (fixed in 2.13.0, the cu128 line stays on 2.11) and setuptools PYSEC-2026-3447 (fixed in 83.0.0, but the torch 2.11.0+cu128 wheel requires setuptools<82; macOS sdist builds only).
