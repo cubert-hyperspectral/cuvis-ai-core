@@ -53,6 +53,10 @@ CLOSE_LOCK_RETRY_SECONDS = 1.0
 # handshake. Shorter than retire_child's 5 s: none of these children serves a
 # request anyone waits for.
 CHILD_STOP_GRACE_SECONDS = 2.0
+# Where a session resolves relative config and weights paths until the client
+# sets its own: relative to the server's working directory, which the child
+# runtime shares. Paths a client appends come after both entries.
+DEFAULT_SEARCH_PATHS: tuple[str, ...] = ("./configs", "./configs/pipeline")
 
 
 @dataclass
@@ -66,9 +70,7 @@ class SessionState:
     data_config: DataConfig | None = None
     training_config: TrainingConfig | None = None
     trainrun_config: TrainRunConfig | None = None
-    search_paths: list[str] = field(
-        default_factory=lambda: ["./configs", "./configs/pipeline"]
-    )
+    search_paths: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_PATHS))
     trainer: Any | None = None
     # Cooperative-cancel flag for the session's training run. Set by StopTrain
     # (or a dropped Train stream); checked per batch / between statistical
@@ -191,7 +193,7 @@ class SessionManager:
             data_config=data_config,
             training_config=training_config,
             trainrun_config=trainrun_config,
-            search_paths=search_paths or ["./configs"],
+            search_paths=search_paths or list(DEFAULT_SEARCH_PATHS),
         )
         self._sessions[session_id] = state
         logger.info(f"Created session: {session_id}")
@@ -282,9 +284,7 @@ class SessionManager:
                 if path not in session.search_paths:
                     session.search_paths.append(path)
         else:
-            session.search_paths = (
-                valid_paths if valid_paths else ["./configs", "./configs/pipeline"]
-            )
+            session.search_paths = valid_paths or list(DEFAULT_SEARCH_PATHS)
 
         logger.info(f"Session {session_id} search paths: {session.search_paths}")
         return session.search_paths, rejected_paths
@@ -571,4 +571,4 @@ class SessionManager:
         return len(expired)
 
 
-__all__ = ["SessionManager", "SessionState"]
+__all__ = ["DEFAULT_SEARCH_PATHS", "SessionManager", "SessionState"]

@@ -463,3 +463,75 @@ def test_close_session_records_the_crash_dir_on_the_session(monkeypatch, tmp_pat
 
     assert state.crash_log_dir is not None
     assert state.crash_log_dir.name.endswith(sid)
+
+
+# ---------------------------------------------------------------------------
+# default search paths
+# ---------------------------------------------------------------------------
+
+
+def _write(path, text="nodes: []\n"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path.resolve()
+
+
+def test_default_search_paths_agree_at_every_entry_point(tmp_path):
+    from cuvis_ai_core.grpc.session_manager import DEFAULT_SEARCH_PATHS
+    from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+    expected = list(DEFAULT_SEARCH_PATHS)
+    state = SessionState(session_id="s", node_registry=NodeRegistry())
+    assert state.search_paths == expected
+
+    manager = SessionManager()
+    sid = manager.create_session()
+    assert manager.get_session(sid).search_paths == expected
+
+    missing = str(tmp_path / "missing")
+    paths, rejected = manager.set_search_paths(sid, [missing], append=False)
+    assert rejected == [missing]
+    assert paths == expected
+
+
+def test_new_session_resolves_bare_and_prefixed_pipeline_names(tmp_path, monkeypatch):
+    from cuvis_ai_core.utils.config_helpers import _find_config_file
+
+    demo = _write(tmp_path / "configs" / "pipeline" / "demo.yaml")
+    monkeypatch.chdir(tmp_path)
+    manager = SessionManager()
+    paths = manager.get_session(manager.create_session()).search_paths
+
+    assert _find_config_file("pipeline/demo", paths) == demo
+    assert _find_config_file("demo", paths) == demo
+
+
+def test_new_session_composes_the_same_pipeline_from_either_name_form():
+    from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
+
+    manager = SessionManager()
+    paths = manager.get_session(manager.create_session()).search_paths
+
+    bare = resolve_config_with_hydra("pipeline", "gradient_based", paths)
+    prefixed = resolve_config_with_hydra("pipeline", "pipeline/gradient_based", paths)
+
+    assert bare == prefixed
+    assert bare["metadata"]["name"] == "gradient_based"
+
+
+def test_default_search_paths_precede_appended_directories(tmp_path, monkeypatch):
+    from cuvis_ai_core.grpc.helpers import find_weights_file
+    from cuvis_ai_core.utils.config_helpers import _find_config_file
+
+    bundled = _write(tmp_path / "configs" / "pipeline" / "demo.yaml")
+    _write(tmp_path / "custom" / "demo.yaml")
+    bundled_weights = _write(tmp_path / "configs" / "pipeline" / "w.pt", "x")
+    _write(tmp_path / "custom" / "w.pt", "y")
+    monkeypatch.chdir(tmp_path)
+    manager = SessionManager()
+    sid = manager.create_session()
+    manager.set_search_paths(sid, [str(tmp_path / "custom")], append=True)
+    paths = manager.get_session(sid).search_paths
+
+    assert _find_config_file("demo", paths) == bundled
+    assert find_weights_file("w", paths) == bundled_weights
