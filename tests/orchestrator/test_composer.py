@@ -14,6 +14,7 @@ import os
 import queue
 import threading
 import time
+import tomllib
 from pathlib import Path
 from typing import Iterator
 from unittest.mock import MagicMock, patch
@@ -26,6 +27,7 @@ from cuvis_ai_core.orchestrator import composer as composer_mod
 from cuvis_ai_core.orchestrator import leases as leases_mod
 from cuvis_ai_core.orchestrator.cache_key import COMPOSER_SCHEMA_VERSION, CoreSource
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
+from cuvis_ai_core.orchestrator.runtime_project import RuntimeProjectError
 from cuvis_ai_core.orchestrator.uv_runner import UvCacheBusyError, UvRunnerError
 from cuvis_ai_schemas.plugin import GitPluginSource
 
@@ -1039,3 +1041,78 @@ def test_sweep_failed_dirs_skips_remnant_that_vanishes_under_stat(
     )
     assert recorded.get_nowait() == ("rmtree", remnant)
     assert recorded.empty()
+
+
+# ---------------------------------------------------------------------------
+# Manifest-level extras through compose_env
+# ---------------------------------------------------------------------------
+
+
+def _trt_plugins() -> dict:
+    base = dict(
+        repo="https://example.com/rfdetr.git",
+        tag="v0.5.1",
+        package_name="cuvis-ai-rfdetr",
+    )
+    return {
+        "rfdetr": GitPluginSource(
+            name="rfdetr", capabilities=[{"class_name": "rfdetr.Node"}], **base
+        ),
+        "rfdetr_seg_trt": GitPluginSource(
+            name="rfdetr_seg_trt",
+            extras=["tensorrt"],
+            capabilities=[{"class_name": "rfdetr.Node"}],
+            **base,
+        ),
+    }
+
+
+def _lock_writer(*extras: str):
+    """A uv_lock stand-in that writes a lock listing ``extras`` for cuvis-ai-rfdetr."""
+
+    def fake_lock(project_dir: Path):
+        table = "".join(f"{e} = []\n" for e in extras)
+        (project_dir / "uv.lock").write_text(
+            'version = 1\n\n[[package]]\nname = "cuvis-ai-rfdetr"\nversion = "0.5.1"\n'
+            'source = { git = "https://example.com/rfdetr.git?rev='
+            + FAKE_SHA
+            + "#"
+            + FAKE_SHA
+            + '" }\n'
+            + ("\n[package.optional-dependencies]\n" + table if table else ""),
+            encoding="utf-8",
+        )
+
+    return fake_lock
+
+
+def test_compose_env_pyproject_carries_manifest_extras_once_per_package(tmp_path: Path):
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
+        lock_mock.side_effect = _lock_writer("tensorrt", "train")
+        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        venv = compose_env(_trt_plugins(), core_source=PYPI_CORE, cache_root=tmp_path)
+
+    doc = tomllib.loads((venv.parent / "pyproject.toml").read_text(encoding="utf-8"))
+    assert [d for d in doc["project"]["dependencies"] if "rfdetr" in d] == [
+        "cuvis-ai-rfdetr[tensorrt]"
+    ]
+    assert list(doc["tool"]["uv"]["sources"]).count("cuvis-ai-rfdetr") == 1
+    # The cache key keeps one entry per manifest, so the pair is its own env.
+    payload = json.loads((venv.parent / "key.json").read_text())
+    assert [p["name"] for p in payload["plugins"]] == ["rfdetr", "rfdetr_seg_trt"]
+
+
+def test_compose_env_unknown_extra_fails_after_lock_and_before_sync(tmp_path: Path):
+    plugins = _trt_plugins()
+    plugins["rfdetr_seg_trt"] = plugins["rfdetr_seg_trt"].model_copy(
+        update={"extras": ["tensort"]}
+    )
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
+        lock_mock.side_effect = _lock_writer("tensorrt", "train")
+        with pytest.raises(RuntimeProjectError, match="'tensort'"):
+            compose_env(plugins, core_source=PYPI_CORE, cache_root=tmp_path)
+    assert lock_mock.call_count == 1
+    assert sync_mock.call_count == 0
+    assert not list(tmp_path.rglob(".ready"))

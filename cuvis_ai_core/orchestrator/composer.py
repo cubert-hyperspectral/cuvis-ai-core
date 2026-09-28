@@ -29,6 +29,7 @@ from cuvis_ai_core.orchestrator.cache_key import (
     COMPOSER_SCHEMA_VERSION,
     CacheKey,
     CoreSource,
+    ResolvedPlugin,
     compute_cache_key,
     spec_hash_of,
 )
@@ -39,7 +40,10 @@ from cuvis_ai_core.orchestrator.cache_paths import (
 from cuvis_ai_core.orchestrator.env_config import number_from_env
 from cuvis_ai_core.orchestrator.runtime_project import (
     PluginManifest,
+    _plugin_source_entry,
     build_runtime_pyproject,
+    check_locked_extras,
+    merge_by_package,
     resolve_plugin_sources,
 )
 from cuvis_ai_core.orchestrator.uv_runner import (
@@ -68,6 +72,7 @@ _STALE_PARTIAL_AGE_SECONDS = 6 * 60 * 60  # sweep half-built dirs older than 6h
 _LOCKS_DIRNAME = ".locks"
 _READY_MARKER = ".ready"
 _PYPROJECT_NAME = "pyproject.toml"
+_UV_LOCK_NAME = "uv.lock"
 _KEY_JSON_NAME = "key.json"
 _MANIFEST_NAME = "env_desc.md"
 _BUILDING_TAG = ".building."
@@ -151,16 +156,23 @@ def compose_env(
 
     Returns the path to the ``.venv`` directory inside the published
     cache entry. The caller spawns ``venv_python(...)`` against this
-    path. ``active_data_module`` scopes which plugin's data-module pip
-    extras are installed (a tiff_paired run never pulls a cu3s module's
-    ``cuvis`` extra).
+    path. Every manifest's own pip extras are installed; ``active_data_module``
+    adds the selected data module's (a tiff_paired run never pulls a cu3s
+    module's ``cuvis`` extra). Manifests that install one package share one
+    requirement with the union of their extras, while the cache key keeps one
+    entry per manifest.
     """
     resolved = resolve_plugin_sources(
         plugin_configs, active_data_module=active_data_module
     )
+    merged = merge_by_package(resolved)
+    logger.info(
+        "Composing for "
+        + (", ".join(_plugin_source_entry(p)[0] for p in merged) or "no plugins")
+    )
     pyproject_content = build_runtime_pyproject(
         core_source=core_source,
-        plugins=resolved,
+        plugins=merged,
         python_requires=_PARENT_PYTHON_REQUIRES,
     )
     spec_hash = spec_hash_of(pyproject_content)
@@ -188,6 +200,7 @@ def compose_env(
             root=root,
             key=key,
             pyproject_content=pyproject_content,
+            plugins=resolved,
         )
     if built:
         # A publish is when the entry count can have grown. Run the pass
@@ -206,8 +219,13 @@ def _build_or_reuse(
     root: Path,
     key: CacheKey,
     pyproject_content: str,
+    plugins: tuple[ResolvedPlugin, ...] = (),
 ) -> tuple[Path, bool]:
-    """Return ``(venv_dir, built)`` — ``built`` is False on a cache hit."""
+    """Return ``(venv_dir, built)`` — ``built`` is False on a cache hit.
+
+    ``plugins`` are the resolved manifests whose requested extras are checked
+    against the lock before anything is installed.
+    """
     ready = final_dir / _READY_MARKER
     if ready.exists():
         # The .ready mtime is the entry's last-used timestamp — eviction
@@ -245,12 +263,11 @@ def _build_or_reuse(
     try:
         logger.info(f"Building cache entry {key.digest} in {build_dir.name}")
         uv_lock(build_dir)
+        check_locked_extras(build_dir / _UV_LOCK_NAME, plugins)
         uv_sync(build_dir)
         (build_dir / _READY_MARKER).write_text("ok", encoding="utf-8")
     except Exception:
-        logger.exception(
-            f"uv lock/sync failed for {build_dir.name}; leaving for sweep."
-        )
+        logger.exception(f"Composing {build_dir.name} failed; leaving for sweep.")
         raise
 
     os.replace(build_dir, final_dir)

@@ -4,6 +4,10 @@ Translates the resolved plugin set into a single uv-resolvable
 project file. Git plugins go through ``git ls-remote --tags`` so the
 user-supplied tag becomes a commit sha at composer time — the cache
 key is then immutable even if the upstream tag is force-pushed.
+Manifests that install one package fold into one requirement
+(:func:`merge_by_package`), and the extras a manifest requests are
+checked against the lock before anything is installed
+(:func:`check_locked_extras`).
 """
 
 from __future__ import annotations
@@ -13,12 +17,14 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Mapping
+from dataclasses import replace as dataclass_replace
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import tomli_w
 from loguru import logger
+from packaging.utils import canonicalize_name
 
 from cuvis_ai_core.orchestrator.cache_key import (
     CoreSource,
@@ -150,24 +156,27 @@ def _sha_from_ls_remote(lines: list[str]) -> str:
     return lines[0].split(maxsplit=1)[0]
 
 
-def _active_extras(
+def _plugin_extras(
     cfg: PluginManifest, active_data_module: str | None
 ) -> tuple[str, ...]:
-    """pip extras to install for this plugin: the activated data module's extras.
+    """pip extras to install for this plugin: its own plus the activated data module's.
 
-    Node entries carry no extras (schema invariant); a data-module entry's extras
-    apply only when that module is the one a run selected, so a tiff_paired run
-    never pulls a cu3s module's ``cuvis`` extra.
+    A manifest's ``extras`` apply whenever the manifest is in the plugin set (an
+    optional backend such as TensorRT). A data-module entry's extras apply only
+    when that module is the one a run selected, so a tiff_paired run never pulls
+    a cu3s module's ``cuvis`` extra. Sorted and de-duplicated, so the dependency
+    string, and with it the cache key, is canonical.
     """
-    if not active_data_module:
-        return ()
-    for entry in cfg.capabilities:
-        if (
-            getattr(entry, "kind", "node") == "data_module"
-            and getattr(entry, "data_module_name", "") == active_data_module
-        ):
-            return tuple(sorted(getattr(entry, "extras", []) or []))
-    return ()
+    extras = set(cfg.extras)
+    if active_data_module:
+        for entry in cfg.capabilities:
+            if (
+                getattr(entry, "kind", "node") == "data_module"
+                and getattr(entry, "data_module_name", "") == active_data_module
+            ):
+                extras.update(getattr(entry, "extras", []) or [])
+                break
+    return tuple(sorted(extras))
 
 
 def resolve_plugin_sources(
@@ -177,13 +186,15 @@ def resolve_plugin_sources(
     """Resolve git tags to SHAs and stamp local plugins with content provenance.
 
     Returns plugins sorted by name so the resulting tuple is
-    canonical (cache-key inputs must be order-stable). ``active_data_module``
-    scopes which (if any) plugin gets its data-module extras installed.
+    canonical (cache-key inputs must be order-stable). Each plugin carries the
+    extras it requests: its manifest's own plus, when ``active_data_module``
+    names one of its data modules, that module's. One entry per manifest;
+    :func:`merge_by_package` folds manifests that install one package.
     """
     resolved: list[ResolvedPlugin] = []
     for name in sorted(plugin_configs):
         cfg = plugin_configs[name]
-        extras = _active_extras(cfg, active_data_module)
+        extras = _plugin_extras(cfg, active_data_module)
         if isinstance(cfg, GitPluginSource):
             sha = resolve_git_tag(cfg.repo, cfg.tag)
             # Prefer the explicit override; otherwise trust the
@@ -227,6 +238,105 @@ def resolve_plugin_sources(
     return tuple(resolved)
 
 
+def merge_by_package(plugins: tuple[ResolvedPlugin, ...]) -> tuple[ResolvedPlugin, ...]:
+    """Fold manifests that install one package into one resolved plugin.
+
+    Two manifests may name the same package (``rfdetr`` and ``rfdetr_seg_trt``,
+    both ``package_name: cuvis-ai-rfdetr``) so a pipeline opts into an optional
+    backend by listing the second one. uv takes one requirement per package, so
+    they merge into the first manifest in name order with the union of their
+    extras. The package must come from one source: the same commit of the same
+    repo URL, or the same checkout; anything else is a conflict this raises
+    instead of letting the last manifest's source win silently. Package names
+    compare canonically (PEP 503), so ``cuvis_ai_rfdetr`` and ``cuvis-ai-rfdetr``
+    are one package.
+    """
+    groups: dict[str, list[ResolvedPlugin]] = {}
+    for p in plugins:
+        groups.setdefault(canonicalize_name(p.package_name or p.name), []).append(p)
+    merged: list[ResolvedPlugin] = []
+    for members in groups.values():
+        first = members[0]
+        for other in members[1:]:
+            if _source_identity(other) != _source_identity(first):
+                raise RuntimeProjectError(
+                    f"Manifests '{first.name}' and '{other.name}' install package "
+                    f"'{first.package_name or first.name}' from different sources "
+                    f"({_describe_source(first)} vs {_describe_source(other)}). Give "
+                    "both manifests the same repo and tag, or the same path."
+                )
+        extras = tuple(sorted({extra for m in members for extra in m.extras}))
+        merged.append(dataclass_replace(first, extras=extras))
+    return tuple(merged)
+
+
+def _source_identity(p: ResolvedPlugin) -> tuple[str, str]:
+    """What makes two manifests the same source: the commit of a repo URL, or a path."""
+    if isinstance(p, ResolvedGitPlugin):
+        return (_ssh_to_url(p.repo), p.sha)
+    return ("local", str(p.path))
+
+
+def _describe_source(p: ResolvedPlugin) -> str:
+    """A plugin's source as a manifest author wrote it, for error messages."""
+    if isinstance(p, ResolvedGitPlugin):
+        return f"{p.repo}@{p.tag}"
+    return str(p.path)
+
+
+def check_locked_extras(lock_path: Path, plugins: tuple[ResolvedPlugin, ...]) -> None:
+    """Refuse extras that the locked packages do not declare.
+
+    uv only warns when a requirement names an extra the package lacks, and the
+    composed env then silently lacks it: the pipeline fails at the first frame
+    with an import error, minutes later. The lock lists, per package, the
+    requested extras that exist, so a requested extra missing there is unknown
+    to the package (an extra the manifest did not request is not listed either,
+    which is why the message names what the lock resolved, not what the package
+    declares). Runs after ``uv lock`` and before ``uv sync``, and only when a
+    plugin requests extras. A package absent from the lock cannot be checked
+    and is logged, not rejected.
+    """
+    requested = [p for p in plugins if p.extras]
+    if not requested:
+        return
+    if not lock_path.is_file():
+        raise RuntimeProjectError(
+            f"uv lock produced no {lock_path.name} in {lock_path.parent}; the requested "
+            "extras cannot be verified."
+        )
+    declared: dict[str, set[str]] = {}
+    for entry in tomllib.loads(lock_path.read_text(encoding="utf-8")).get(
+        "package", []
+    ):
+        declared.setdefault(canonicalize_name(entry["name"]), set()).update(
+            entry.get("optional-dependencies", {})
+        )
+    for p in requested:
+        package = p.package_name or p.name
+        known = declared.get(canonicalize_name(package))
+        if known is None:
+            logger.warning(
+                f"Package '{package}' is not in {lock_path.name}; the extras {p.extras} "
+                f"of plugin '{p.name}' were not verified."
+            )
+            continue
+        canonical_known = {canonicalize_name(extra) for extra in known}
+        for extra in p.extras:
+            if canonicalize_name(extra) not in canonical_known:
+                resolved = (
+                    f"the lock resolved its extras {', '.join(sorted(known))}"
+                    if known
+                    else "the lock resolved none of its extras"
+                )
+                raise RuntimeProjectError(
+                    f"Plugin '{p.name}' requests extra '{extra}' that package '{package}' "
+                    f"({_describe_source(p)}) does not declare ({resolved}). Fix the "
+                    "manifest's extras: or add the extra to the plugin's "
+                    "[project.optional-dependencies]."
+                )
+
+
 def build_runtime_pyproject(
     *,
     core_source: CoreSource,
@@ -239,7 +349,9 @@ def build_runtime_pyproject(
     resolves against this single file and writes ``uv.lock`` next to it.
     The output is host-aware (``required-environments`` names the platform), so
     a Windows cache entry is distinct from a Linux one, which is correct:
-    a venv built for one platform can't be reused on the other.
+    a venv built for one platform can't be reused on the other. ``plugins``
+    holds one entry per package (:func:`merge_by_package`): a second entry
+    for one package would silently overwrite its source, so it is refused.
     """
     # Core: the pinned PEP 508 spec for PyPI (e.g. "cuvis-ai-core==0.7.3"),
     # else the bare name.
@@ -254,6 +366,10 @@ def build_runtime_pyproject(
 
     for p in plugins:
         dependency_string, source_key, source_entry = _plugin_source_entry(p)
+        if source_key in sources:
+            raise RuntimeProjectError(
+                f"Two plugins install '{source_key}'; fold them with merge_by_package first."
+            )
         dependencies.append(dependency_string)
         sources[source_key] = source_entry
 

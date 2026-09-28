@@ -503,3 +503,20 @@ def test_local_plugin_provenance_clean_and_dirty(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(cache_key_mod, "_git", _git_dirty)
     _sha, _head, dirty2 = cache_key_mod.local_plugin_provenance(tmp_path)
     assert dirty2 is True
+
+
+def test_plugin_to_dict_excludes_extras():
+    """Extras land in the runtime pyproject that spec_hash covers; key.json must not
+    double-count them."""
+    from cuvis_ai_core.orchestrator.cache_key import ResolvedGitPlugin, _plugin_to_dict
+
+    p = ResolvedGitPlugin(
+        name="rfdetr",
+        repo="https://example.com/r.git",
+        sha="a" * 40,
+        tag="v1",
+        package_name="cuvis-ai-rfdetr",
+        extras=("tensorrt",),
+    )
+    assert "extras" not in _plugin_to_dict(p)
+    assert "extras" not in _plugin_to_dict(p, forensics=False)

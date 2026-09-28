@@ -22,7 +22,11 @@ def main() -> None:
     """Parse the CLI arguments and print, install or write the resolved plugin specs."""
     parser = argparse.ArgumentParser(
         prog="provision",
-        description="Provision the plugins a pipeline needs (import-only world).",
+        description=(
+            "Provision the plugins a pipeline needs (import-only world). Each spec "
+            "carries the manifest's own pip extras plus the selected data module's; "
+            "a plugin that requests extras is never treated as already satisfied."
+        ),
     )
     parser.add_argument(
         "--pipeline-path",
@@ -61,7 +65,8 @@ def main() -> None:
     parser.add_argument(
         "--include-satisfied",
         action="store_true",
-        help="Include plugins already importable in the active environment.",
+        help="Include plugins already importable in the active environment "
+        "(a plugin with extras is always included).",
     )
     args = parser.parse_args()
 
