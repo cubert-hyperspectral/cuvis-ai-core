@@ -1561,3 +1561,68 @@ def test_inmemory_stub_lifecycle_methods():
     # StopRun signals the servicer's shutdown event and returns ok.
     stop_resp = stub.StopRun(cuvis_ai_pb2.StopRunRequest())
     assert stop_resp.ok is True
+
+
+# ---------------------------------------------------------------------------
+# forward_load_pipeline_weights: the parent resolves a relative weights path
+# against its own, current search paths before the child sees the request
+# ---------------------------------------------------------------------------
+
+
+def _forward_weights(sm, sid, ctx, **fields):
+    handle = _attach_fake_child(sm, sid)
+    stub = handle.stub.return_value
+    stub.LoadPipelineWeights.return_value = cuvis_ai_pb2.LoadPipelineWeightsResponse(
+        success=True
+    )
+    request = cuvis_ai_pb2.LoadPipelineWeightsRequest(session_id=sid, **fields)
+    resp = orchestrator_bridge.forward_load_pipeline_weights(sm, request, ctx)
+    return resp, stub.LoadPipelineWeights.call_args.args[0], request
+
+
+def test_forward_load_pipeline_weights_resolves_against_the_parents_paths(tmp_path):
+    """Search paths set after the child spawned live in the parent only."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    weights = tmp_path / "late" / "model.pt"
+    weights.parent.mkdir()
+    weights.write_bytes(b"w")
+    sm.get_session(sid).search_paths = [str(weights.parent)]
+
+    resp, forwarded, original = _forward_weights(
+        sm, sid, _InMemoryContext(), weights_path="model", strict=False
+    )
+
+    assert resp.success is True
+    assert forwarded.weights_path == str(weights.resolve())
+    assert forwarded.strict is False and forwarded.session_id == sid
+    assert original.weights_path == "model"
+
+
+def test_forward_load_pipeline_weights_forwards_a_miss_unchanged():
+    """A path the parent cannot resolve reaches the child as sent; its code comes back."""
+    sm = SessionManager()
+    sid = sm.create_session()
+    ctx = _InMemoryContext()
+    handle = _attach_fake_child(sm, sid)
+    handle.stub.return_value.LoadPipelineWeights.side_effect = _InMemoryRpcError(
+        grpc.StatusCode.NOT_FOUND, "Weights file 'missing' not found"
+    )
+    request = cuvis_ai_pb2.LoadPipelineWeightsRequest(
+        session_id=sid, weights_path="missing"
+    )
+
+    resp = orchestrator_bridge.forward_load_pipeline_weights(sm, request, ctx)
+
+    assert handle.stub.return_value.LoadPipelineWeights.call_args.args[0] == request
+    assert ctx.code() is grpc.StatusCode.NOT_FOUND
+    assert resp == cuvis_ai_pb2.LoadPipelineWeightsResponse()
+
+
+def test_forward_load_pipeline_weights_leaves_a_bytes_request_alone():
+    sm = SessionManager()
+    sid = sm.create_session()
+    _, forwarded, original = _forward_weights(
+        sm, sid, _InMemoryContext(), weights_bytes=b"blob"
+    )
+    assert forwarded == original
