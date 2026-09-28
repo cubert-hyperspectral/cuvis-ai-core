@@ -96,4 +96,43 @@
   the handle, so it is naturally dropped, but the close path must not read it.
 - **Context:** `grpc/orchestrator_bridge.py` (`_answer_no_child`, `_forward_pipeline_op`,
   `_propagate_child_failure`), `grpc/session_manager.py` (`retire_child`, `ChildStillRunning`).
+
+## Attribute a class to its package, not to the last manifest that lists it
+
+- **What:** cuvis-next's weights gate and core's `ModelWeights.load_manifests` attribute a node
+  class to the manifest that lists it; with two manifests of one package (a plain manifest and a
+  minimal variant requesting an extra, the pattern manifest-level `extras` introduces) the later
+  manifest wins. Harmless while the variant carries no `weights:`; wrong as soon as a
+  weights-bearing plugin gets a variant manifest.
+- **Why:** A pipeline that lists both manifests would resolve its weights through whichever
+  manifest sorts last, not through the package that ships them.
+- **Pros:** Weights attribution follows `package_name`, the identity the composer already merges on.
+- **Cons:** Both readers (cuvis-next `model_weights_registry`, core `model_weights`) change together.
+- **Context:** `cuvis_ai_core/data/model_weights.py` (`load_manifests`), cuvis-next
+  `libs/pilot_utility/include/pilot_utility/model_weights_registry.hpp`; `merge_by_package` in
+  `orchestrator/runtime_project.py` is the rule to mirror.
+- **Depends on / blocked by:** a weights-bearing plugin with a variant manifest (none today).
+
+## Resolve a git tag once per compose, not once per manifest
+
+- **What:** `resolve_git_tag` runs `git ls-remote` for every manifest; two manifests of one repo
+  (the plain manifest and the extras variant) cost two network round trips per compose.
+- **Why:** Each round trip is a second or more on a slow link, on the load path.
+- **Pros:** One `ls-remote` per (repo, tag) pair, memoised for the compose.
+- **Cons:** A memo must not outlive the compose: a tag moved between two loads must still be seen.
+- **Context:** `orchestrator/runtime_project.py` (`resolve_git_tag`, `resolve_plugin_sources`).
+- **Depends on / blocked by:** nothing.
+
+## Name the real conflict when a plugin's package is `cuvis-ai-core`
+
+- **What:** `build_runtime_pyproject` refuses two plugins that share a `[tool.uv.sources]` key with
+  "fold them with merge_by_package first". With a git or local core source the table already holds
+  `cuvis-ai-core`, so a manifest whose `package_name` is `cuvis-ai-core` gets that message although
+  the conflict is with the core entry, not with another plugin (before the guard the plugin silently
+  overwrote core's source, which was worse).
+- **Why:** Nothing hits it today (only an emit_metadata test uses that package name); the message
+  would mislead if a manifest ever does.
+- **Pros:** One clear sentence: a plugin may not install `cuvis-ai-core`.
+- **Cons:** Two lines and a test for a case no catalog produces.
+- **Context:** `orchestrator/runtime_project.py` (`build_runtime_pyproject`, `CORE_PACKAGE_NAME`).
 - **Depends on / blocked by:** nothing.
