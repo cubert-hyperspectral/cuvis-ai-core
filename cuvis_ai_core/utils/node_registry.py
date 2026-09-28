@@ -281,9 +281,7 @@ class NodeRegistry:
         return cls._builtin_registry[class_name]
 
     @classmethod
-    def auto_register_package(
-        cls, package_name: str, base_class_path: str = "cuvis_ai_core.node.node.Node"
-    ) -> int:
+    def auto_register_package(cls, package_name: str) -> int:
         """
         Auto-register all Node classes from a package.
 
@@ -292,7 +290,6 @@ class NodeRegistry:
 
         Args:
             package_name: Full package name (e.g., "cuvis_ai.node")
-            base_class_path: Full import path to the base Node class
 
         Returns:
             Number of classes registered
@@ -300,6 +297,8 @@ class NodeRegistry:
         Example:
             NodeRegistry.auto_register_package("cuvis_ai.node")
         """
+        from cuvis_ai_core.node.node import Node
+
         try:
             package = importlib.import_module(package_name)
         except ImportError as e:
@@ -308,14 +307,6 @@ class NodeRegistry:
         # Get the package directory
         if not hasattr(package, "__path__"):
             raise ValueError(f"'{package_name}' is not a package (has no __path__)")
-
-        # Import the base Node class first, outside the loop
-        try:
-            Node = cls._import_from_path(base_class_path)
-        except Exception as e:
-            raise ImportError(
-                f"Failed to import base class '{base_class_path}': {e}"
-            ) from e
 
         registered_count = 0
 

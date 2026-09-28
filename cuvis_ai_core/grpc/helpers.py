@@ -38,10 +38,6 @@ class ShmBufferOwner:
     file_obj: Any | None = None
     closed: bool = False
 
-    @property
-    def buffer(self) -> mmap.mmap:
-        return self.mmap_obj
-
     def close(self) -> None:
         if self.closed:
             return
@@ -144,7 +140,7 @@ def _map_shm(name: str, byte_size: int) -> ShmBufferOwner:
         longer needed. Prefer using it as a context manager::
 
             with _map_shm(name, size) as owner:
-                arr = np.frombuffer(owner.buffer, ...)
+                arr = np.frombuffer(owner.mmap_obj, ...)
     """
     _validate_shm_name(name)
     if sys.platform == "win32":
@@ -196,32 +192,11 @@ PROCESSING_MODE_MAP = {
     cuvis_ai_pb2.PROCESSING_MODE_SPECTRAL_RADIANCE: "SpectralRadiance",
 }
 
-TRAIN_STATUS_TO_STRING = {
-    cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED: "unspecified",
-    cuvis_ai_pb2.TRAIN_STATUS_RUNNING: "running",
-    cuvis_ai_pb2.TRAIN_STATUS_COMPLETE: "complete",
-    cuvis_ai_pb2.TRAIN_STATUS_ERROR: "error",
-}
-
-STRING_TO_TRAIN_STATUS = {
-    "unspecified": cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED,
-    "running": cuvis_ai_pb2.TRAIN_STATUS_RUNNING,
-    "complete": cuvis_ai_pb2.TRAIN_STATUS_COMPLETE,
-    "error": cuvis_ai_pb2.TRAIN_STATUS_ERROR,
-}
-
 POINT_TYPE_TO_STRING = {
     cuvis_ai_pb2.POINT_TYPE_UNSPECIFIED: "unspecified",
     cuvis_ai_pb2.POINT_TYPE_POSITIVE: "positive",
     cuvis_ai_pb2.POINT_TYPE_NEGATIVE: "negative",
     cuvis_ai_pb2.POINT_TYPE_NEUTRAL: "neutral",
-}
-
-STRING_TO_POINT_TYPE = {
-    "unspecified": cuvis_ai_pb2.POINT_TYPE_UNSPECIFIED,
-    "positive": cuvis_ai_pb2.POINT_TYPE_POSITIVE,
-    "negative": cuvis_ai_pb2.POINT_TYPE_NEGATIVE,
-    "neutral": cuvis_ai_pb2.POINT_TYPE_NEUTRAL,
 }
 
 
@@ -386,7 +361,7 @@ def proto_to_numpy(
         try:
             count = ref.byte_size // itemsize
             arr = np.frombuffer(
-                owner.buffer,
+                owner.mmap_obj,
                 dtype=dtype,
                 count=count,
                 offset=ref.byte_offset,
@@ -523,42 +498,6 @@ def proto_to_processing_mode(mode: int) -> str:
     return PROCESSING_MODE_MAP[mode]
 
 
-def train_status_to_string(status: int) -> str:
-    """Convert proto TrainStatus enum to string.
-
-    Args:
-        status: Proto TrainStatus enum value
-
-    Returns:
-        String representation of the status
-
-    Raises:
-        ValueError: If status is not supported
-    """
-    if status not in TRAIN_STATUS_TO_STRING:
-        raise ValueError(f"Unsupported TrainStatus: {status}")
-
-    return TRAIN_STATUS_TO_STRING[status]
-
-
-def string_to_train_status(status: str) -> int:
-    """Convert string to proto TrainStatus enum.
-
-    Args:
-        status: String representation of status
-
-    Returns:
-        Proto TrainStatus enum value
-
-    Raises:
-        ValueError: If status string is not supported
-    """
-    if status not in STRING_TO_TRAIN_STATUS:
-        raise ValueError(f"Unsupported status string: {status}")
-
-    return STRING_TO_TRAIN_STATUS[status]
-
-
 def point_type_to_string(point_type: int) -> str:
     """Convert proto PointType enum to string.
 
@@ -575,24 +514,6 @@ def point_type_to_string(point_type: int) -> str:
         raise ValueError(f"Unsupported PointType: {point_type}")
 
     return POINT_TYPE_TO_STRING[point_type]
-
-
-def string_to_point_type(point_type: str) -> int:
-    """Convert string to proto PointType enum.
-
-    Args:
-        point_type: String representation of point type
-
-    Returns:
-        Proto PointType enum value
-
-    Raises:
-        ValueError: If point type string is not supported
-    """
-    if point_type not in STRING_TO_POINT_TYPE:
-        raise ValueError(f"Unsupported point type string: {point_type}")
-
-    return STRING_TO_POINT_TYPE[point_type]
 
 
 # ------------------------------------------------------------------

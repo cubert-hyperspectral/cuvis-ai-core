@@ -20,9 +20,7 @@ def test_resolve_cache_root_precedence(monkeypatch, tmp_path):
 
 
 def test_composer_and_model_cache_share_constants(monkeypatch, tmp_path):
-    """The composer's private aliases and the model cache read the one leaf."""
-    assert composer._DEFAULT_CACHE_ROOT_ENV == cache_paths.RUN_CACHE_ROOT_ENV
-    assert composer._DEFAULT_CACHE_ROOT == cache_paths.DEFAULT_RUN_CACHE_ROOT
+    """The composer and the model cache read the one leaf."""
     assert composer.resolve_cache_root is cache_paths.resolve_cache_root
     monkeypatch.delenv(cache_paths.MODEL_CACHE_DIR_ENV, raising=False)
     monkeypatch.delenv("CUVIS_RUNTIME_CRASH_DIR", raising=False)

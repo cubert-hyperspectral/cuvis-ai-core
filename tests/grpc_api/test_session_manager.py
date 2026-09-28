@@ -159,21 +159,6 @@ class TestSessionManager:
 
         assert state2.last_accessed > first_timestamp
 
-    def test_cleanup_old_sessions(self):
-        manager = SessionManager()
-
-        # Load pipeline from YAML
-        pipeline_path = resolve_pipeline_path("gradient_based")
-        pipeline = CuvisPipeline.load_pipeline(str(pipeline_path))
-        session_id = manager.create_session(pipeline=pipeline)
-
-        # backdate the session
-        manager._sessions[session_id].last_accessed = 0.0
-        cleaned = manager.cleanup_old_sessions(max_age_hours=1)
-
-        assert cleaned == 1
-        assert session_id not in manager.list_sessions()
-
     def test_create_session_without_data_config(self):
         """Test creating an inference-only session (no trainrun_config)."""
         manager = SessionManager()

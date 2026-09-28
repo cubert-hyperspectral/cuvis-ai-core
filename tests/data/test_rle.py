@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pytest
 
 from cuvis_ai_core.data.rle import (
-    RLE2mask,
     coco_rle_area,
     coco_rle_decode,
     coco_rle_encode,
@@ -222,13 +219,3 @@ class TestDecodeRleMaskForCanvas:
         assert mask.shape == (2, 2)
         assert mask.sum() == 1
         assert "<missing or invalid>" in caplog.text
-
-
-class TestDeprecatedAlias:
-    def test_rle2mask_emits_warning(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            RLE2mask([5, 2, 3], mask_width=5, mask_height=2)
-            assert len(w) == 1
-            assert issubclass(w[0].category, DeprecationWarning)
-            assert "rle_list_to_mask" in str(w[0].message)

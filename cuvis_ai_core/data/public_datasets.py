@@ -45,6 +45,7 @@ from cuvis_ai_core.data._provisioning import (
     SCHEMA_VERSION,
     CacheBusyError,
     ProgressEmitter,
+    format_bytes,
     log,
     root_lock,
 )
@@ -314,14 +315,6 @@ class PublicDatasets:
             "datasets": [spec.to_json_dict() for spec in cls.DATASETS],
         }
 
-    @classmethod
-    def get_target_dir(cls, dataset_name: str) -> str:
-        """Directory name a dataset downloads into (raises ``KeyError`` when unknown)."""
-        try:
-            return cls.get_spec(dataset_name).target_dir
-        except DatasetError as exc:
-            raise KeyError(dataset_name) from exc
-
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
@@ -563,8 +556,6 @@ class PublicDatasets:
         print(f"{'Name':<30s} {'Camera':<8s} {'Size':>10s}  Summary")
         print("-" * 100)
         for spec in cls.DATASETS:
-            from cuvis_ai_core.data._provisioning import format_bytes
-
             alias_str = f"  (alias: {', '.join(spec.aliases)})" if spec.aliases else ""
             print(
                 f"  {spec.name:<28s} {spec.camera:<8s} {format_bytes(spec.size_bytes):>10s}  "

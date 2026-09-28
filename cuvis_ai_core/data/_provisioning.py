@@ -41,9 +41,6 @@ LOCK_FILENAME = ".cuvis-cache.lock"
 EXIT_ERROR = 1
 """Exit code for an operation that failed (message on stderr)."""
 
-EXIT_USAGE = 2
-"""Exit code click uses for a usage error (mutually exclusive flags, bad args)."""
-
 _SHA_READ_CHUNK = 1 << 20  # 1 MiB
 _STDOUT_LOCK = threading.Lock()
 _SCHEMAS_DIR = Path(__file__).with_name("schemas")

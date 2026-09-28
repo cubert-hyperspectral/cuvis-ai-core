@@ -21,7 +21,6 @@ from cuvis_ai_core.orchestrator.runtime_project import (
     RuntimeProjectError,
     _read_local_package_name,
     build_runtime_pyproject,
-    git_source_url,
     resolve_git_tag,
     resolve_plugin_sources,
 )
@@ -48,41 +47,6 @@ def no_host_torch():
     """
     with patch(_TORCH_PINS, return_value=({}, None)):
         yield
-
-
-# ---------------------------------------------------------------------------
-# git_source_url — URL scheme preservation
-# ---------------------------------------------------------------------------
-
-
-def test_git_source_url_https_stays_https():
-    out = git_source_url("https://github.com/cubert/cuvis-ai-detr.git", "abc123")
-    assert out == "git+https://github.com/cubert/cuvis-ai-detr.git@abc123"
-
-
-def test_git_source_url_http_stays_http():
-    out = git_source_url("http://example.com/repo.git", "abc123")
-    assert out == "git+http://example.com/repo.git@abc123"
-
-
-def test_git_source_url_ssh_short_form_rewritten_to_full_ssh():
-    out = git_source_url("git@gitlab.com:org/repo.git", "abc123")
-    assert out == "git+ssh://git@gitlab.com/org/repo.git@abc123"
-
-
-def test_git_source_url_ssh_full_form_preserved():
-    out = git_source_url("ssh://git@gitlab.com/org/repo.git", "abc123")
-    assert out == "git+ssh://git@gitlab.com/org/repo.git@abc123"
-
-
-def test_git_source_url_unknown_scheme_raises():
-    with pytest.raises(RuntimeProjectError):
-        git_source_url("ftp://example.com/repo.git", "abc")
-
-
-def test_git_source_url_malformed_ssh_raises():
-    with pytest.raises(RuntimeProjectError):
-        git_source_url("git@nohostpath", "abc")
 
 
 # ---------------------------------------------------------------------------

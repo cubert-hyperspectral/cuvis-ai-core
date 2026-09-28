@@ -46,16 +46,16 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
+def config_to_dot(config: PipelineConfig) -> str:
     """Build a Graphviz DOT graph of a pipeline config's nodes and connections.
 
     Each node is a rounded box labelled with its name and short class; each connection is a
-    port-labelled edge. The layout is structural only (no port dtypes or category colours,
-    which would need the plugin catalog), which is enough to preview a pipeline's shape.
+    port-labelled edge, laid out left to right. The layout is structural only (no port
+    dtypes or category colours, which would need the plugin catalog), which is enough to
+    preview a pipeline's shape.
 
     Args:
         config: Parsed pipeline configuration.
-        rankdir: Graphviz layout direction ("LR" left-to-right, "TB" top-to-bottom).
 
     Returns:
         A DOT source string.
@@ -64,7 +64,7 @@ def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
         config.metadata.name if config.metadata and config.metadata.name else "pipeline"
     )
     lines: list[str] = [f'digraph "{_escape(graph_name)}" {{']
-    lines.append(f"    rankdir={rankdir};")
+    lines.append("    rankdir=LR;")
     lines.append('    bgcolor="transparent";')
     lines.append(
         '    node [shape=box, style="rounded,filled", fillcolor="#2b2b2b", '
@@ -110,15 +110,12 @@ def config_to_dot(config: PipelineConfig, *, rankdir: str = "LR") -> str:
     return "\n".join(lines)
 
 
-def render_pipeline_config(
-    yaml_content: str, fmt: str = "png", *, rankdir: str = "LR"
-) -> tuple[bytes, str]:
+def render_pipeline_config(yaml_content: str, fmt: str = "png") -> tuple[bytes, str]:
     """Render a pipeline YAML config to an image (or DOT) without building the pipeline.
 
     Args:
         yaml_content: The pipeline configuration YAML text.
         fmt: Output format, one of "png", "svg", "dot"/"graphviz".
-        rankdir: Graphviz layout direction passed through to :func:`config_to_dot`.
 
     Returns:
         ``(data, actual_format)`` where ``data`` is the encoded image bytes for an image
@@ -147,7 +144,7 @@ def render_pipeline_config(
             f"{_MAX_GRAPH_ELEMENTS} render cap"
         )
 
-    dot = config_to_dot(config, rankdir=rankdir)
+    dot = config_to_dot(config)
 
     if requested in _DOT_FORMATS:
         return dot.encode("utf-8"), "dot"

@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from loguru import logger
 
+from cuvis_ai_core.orchestrator import cache_paths
 from cuvis_ai_core.orchestrator import composer as composer_mod
 from cuvis_ai_core.orchestrator import leases as leases_mod
 from cuvis_ai_core.orchestrator.cache_key import COMPOSER_SCHEMA_VERSION, CoreSource
@@ -416,7 +417,7 @@ def test_build_lock_times_out_raises_composer_error(tmp_path: Path, monkeypatch)
 
 def test_resolve_cache_root_defaults_without_override_or_env(monkeypatch):
     monkeypatch.delenv("CUVIS_RUN_CACHE_DIR", raising=False)
-    assert composer_mod.resolve_cache_root(None) == composer_mod._DEFAULT_CACHE_ROOT
+    assert composer_mod.resolve_cache_root(None) == cache_paths.DEFAULT_RUN_CACHE_ROOT
 
 
 def test_sweep_stale_partials_noop_when_root_missing(tmp_path: Path):

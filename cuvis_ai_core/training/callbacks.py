@@ -41,19 +41,14 @@ class CudaMemoryLogCallback(Callback):
     ``reserved - allocated``: memory the caching allocator holds but is
     not using, which is what ``empty_cache`` can give back.
 
-    Parameters
-    ----------
-    memory_fraction : float, optional
-        Fraction of the device this process may allocate, applied at fit
-        start. ``None`` (the default) reads
-        ``$CUVIS_CUDA_MEMORY_FRACTION`` instead, so a run can be squeezed
-        into a smaller budget without touching the config.
+    ``$CUVIS_CUDA_MEMORY_FRACTION`` caps the fraction of the device this
+    process may allocate, applied at fit start, so a run can be squeezed
+    into a smaller budget without touching the config.
     """
 
-    def __init__(self, memory_fraction: float | None = None) -> None:
-        """Store the requested memory fraction (``None`` reads the env var)."""
+    def __init__(self) -> None:
+        """Start with nothing logged yet."""
         super().__init__()
-        self._memory_fraction = memory_fraction
         self._summary_logged = False
         self._logged_first_val_batch = False
 
@@ -138,9 +133,7 @@ class CudaMemoryLogCallback(Callback):
         )
 
     def _resolve_memory_fraction(self) -> float | None:
-        """Return the fraction to apply: the constructor's, the env's, or none."""
-        if self._memory_fraction is not None:
-            return self._validated_fraction(self._memory_fraction, "constructor")
+        """Return the fraction the environment asks for, or none."""
         raw = os.environ.get(CUDA_MEMORY_FRACTION_ENV)
         if raw is None or not raw.strip():
             return None

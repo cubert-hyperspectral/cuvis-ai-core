@@ -601,11 +601,6 @@ class ModelWeights:
         return hf_cache_dir(os.environ)
 
     @classmethod
-    def cache_repo_dir(cls, name: str, cache_dir: str | Path | None = None) -> Path:
-        """``<cache>/models--<org>--<repo>`` for a registry row."""
-        return cls.resolve_cache_dir(cache_dir) / cls.get(name).cache_dir_name
-
-    @classmethod
     def missing_guidance(cls, name: str, cache_dir: Path) -> str:
         """The sentence a consumer sees when a weight is not provisioned."""
         weight = cls._registry.get(cls._keys.get(name, ""), None)

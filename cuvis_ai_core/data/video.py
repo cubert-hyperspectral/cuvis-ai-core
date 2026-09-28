@@ -52,13 +52,6 @@ class VideoIterator:
             self.video_decoder = _SimpleVideoDecoder(source_path)
             self.num_frames: int = len(self.video_decoder)
             self.enable_random_access = True
-            if self.num_frames < 0:
-                logger.error(
-                    "Cannot determine number of frames. Random access is disabled: {}",
-                    source_path,
-                )
-                self.enable_random_access = False
-                self.num_frames = 0
             self.frame_rate: float = self.video_decoder.metadata.average_fps
             first_frame = self.video_decoder[0]
             self.image_width: int = first_frame.shape[2]

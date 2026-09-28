@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Collection, Iterator
-from copy import deepcopy
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
@@ -301,15 +300,6 @@ class CuvisPipeline:
             target_port.node,
         )
 
-    def custom_copy(self) -> CuvisPipeline:
-        # Create a new instance of the class
-        new_instance = self.__class__.__new__(self.__class__)
-
-        new_instance.name = deepcopy(self.name)
-        new_instance._graph = deepcopy(self._graph)  # Deep copy
-
-        return new_instance
-
     def __repr__(self) -> str:
         res = self.name + ":\n"
         for node in self._graph.nodes():
@@ -560,8 +550,6 @@ class CuvisPipeline:
         config_path: str | Path,
         validate_nodes: bool = True,
         save_weights: bool = True,
-        include_optimizer: bool = False,
-        include_scheduler: bool = False,
         metadata: PipelineMetadata | None = None,
     ) -> None:
         """
@@ -576,13 +564,10 @@ class CuvisPipeline:
             validate_nodes: If True, validate all nodes support serialization before saving
                 weights
             save_weights: Whether to save a co-located .pt weights file.
-            include_optimizer: Whether to save optimizer state
-            include_scheduler: Whether to save scheduler state
             metadata: Pipeline metadata (PipelineMetadata instance with description, tags, etc.)
 
         Raises:
             RuntimeError: If validate_nodes=True and any node doesn't support serialization
-            ValueError: If optimizer/scheduler saving is requested while save_weights=False
 
         Example:
             >>> from cuvis_ai_core.training.config import PipelineMetadata
@@ -596,11 +581,6 @@ class CuvisPipeline:
             ...     )
             ... )
         """
-        if not save_weights and (include_optimizer or include_scheduler):
-            raise ValueError(
-                "include_optimizer/include_scheduler require save_weights=True"
-            )
-
         # Validate nodes before saving weights
         if validate_nodes and save_weights:
             invalid_nodes = []
@@ -651,12 +631,6 @@ class CuvisPipeline:
                 "state_dict": state_dict,
                 "metadata": config_dict["metadata"],
             }
-
-            if include_optimizer and hasattr(self, "optimizer"):
-                checkpoint["optimizer_state"] = self.optimizer.state_dict()  # type: ignore[attr-defined]
-
-            if include_scheduler and hasattr(self, "scheduler"):
-                checkpoint["scheduler_state"] = self.scheduler.state_dict()  # type: ignore[attr-defined]
 
             weights_path = config_path.with_suffix(".pt")
             torch.save(checkpoint, weights_path)

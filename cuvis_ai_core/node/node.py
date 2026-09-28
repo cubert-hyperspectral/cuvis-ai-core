@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from abc import ABC, abstractmethod
 from types import SimpleNamespace
 from collections.abc import Iterable
@@ -243,22 +242,6 @@ class Node(nn.Module, ABC, Serializable):
     def statistical_initialization(self, input_stream: InputStream) -> None:
         """Statistical initialization from a port-based input stream."""
         return None
-
-    def fit(self, input_stream: InputStream) -> None:
-        """Backward-compatible alias for `statistical_initialization`."""
-        warnings.warn(
-            "Node.fit() is deprecated; use statistical_initialization() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        impl = getattr(self.__class__, "statistical_initialization", None)
-        if self.requires_initial_fit and (
-            impl is None or impl is Node.statistical_initialization
-        ):
-            raise NotImplementedError(
-                f"{self.__class__.__name__} requires statistical_initialization() implementation"
-            )
-        self.statistical_initialization(input_stream)
 
     def unfreeze(self) -> None:
         """Enable gradient computation for this node's parameters.

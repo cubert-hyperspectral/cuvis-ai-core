@@ -21,7 +21,6 @@ from cuvis_ai_core.training.calibration import (
 )
 from cuvis_ai_core.training.predictor import Predictor
 from cuvis_ai_core.training.trainers import GradientTrainer, StatisticalTrainer
-from cuvis_ai_schemas.execution import Context
 
 __all__ = [
     # Configuration
@@ -32,8 +31,6 @@ __all__ = [
     "DataConfig",
     "PipelineConfig",
     "TrainRunConfig",
-    # Context
-    "Context",
     # Inference
     "Predictor",
     # Trainers
