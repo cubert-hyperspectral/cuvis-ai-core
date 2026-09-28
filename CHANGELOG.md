@@ -12,6 +12,7 @@
   - training: `configure_optimizers` drops a conditional on `scheduler_config` that is always true at that point; `Predictor._iter_batches` collapses its Mapping and Iterable branches.
   - utils: `safe_rmtree` drops unreachable `last_error` bookkeeping; `provision_environment` drops an unreachable second `ValueError`; `NodeRegistry._import_from_path` drops the never-set `clear_cache` knob.
   - scripts: `emit_metadata.py` drops the unreferenced `_node_entry`.
+- `cuvis-ai-schemas[proto]` is capped below 0.13. A core of the 0.17 line does not know the manifest-level `extras` field that schemas 0.13 introduces: it would accept such a manifest at `LoadPlugin` and compose the child environment without the extras, failing only at the first frame. The cap makes the resolver refuse that pairing; 0.18.0 raises the floor to `>=0.13.0`.
 
 ## 0.17.4 - 2026-09-24
 
