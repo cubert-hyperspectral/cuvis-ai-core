@@ -568,3 +568,12 @@ def test_marker_write_is_atomic(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         PublicDatasets._write_marker(target, {"state": "downloading"})
     assert json.loads((target / MARKER_NAME).read_text())["state"] == "complete"
+
+
+def test_cli_data_dir_default_follows_the_cwd_at_invocation(tmp_path, monkeypatch):
+    """The default is resolved when the command runs, not when the CLI is built."""
+    cli = build_cli()
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["status", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data_dir"] == str(tmp_path / "data")

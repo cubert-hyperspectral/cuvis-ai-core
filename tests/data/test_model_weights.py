@@ -536,7 +536,8 @@ def test_resolve_returns_cached_primary_without_downloading(
 ):
     primary = _seed(tmp_path, registry["sam3"])
     assert ModelWeights.resolve("sam3", cache_dir=tmp_path) == primary
-    assert ModelWeights.resolve("efficienttam", cache_dir=tmp_path) if False else True
+    etam = _seed(tmp_path, registry["efficienttam_s"])
+    assert ModelWeights.resolve("efficienttam", cache_dir=tmp_path) == etam
 
 
 def test_resolve_offline_miss_names_the_provisioning_command(
