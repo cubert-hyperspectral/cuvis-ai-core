@@ -503,26 +503,5 @@ class PluginService:
         }
         return input_specs_map, output_specs_map
 
-    @grpc_handler("Failed to clear cache")
-    def clear_plugin_cache(
-        self,
-        request: cuvis_ai_pb2.ClearPluginCacheRequest,
-        context: grpc.ServicerContext,
-    ) -> cuvis_ai_pb2.ClearPluginCacheResponse:
-        """Clear Git plugin cache."""
-        plugin_name = request.plugin_name if request.plugin_name else None
-
-        # Count cleared before clearing
-        cache_dir = NodeRegistry._cache_dir
-
-        pattern = f"{plugin_name}@*" if plugin_name else "*"
-        cleared = len(list(cache_dir.glob(pattern))) if cache_dir.exists() else 0
-
-        # Clear cache
-        NodeRegistry.clear_plugin_cache(plugin_name)
-
-        logger.info(f"Cleared {cleared} cached plugin(s)")
-        return cuvis_ai_pb2.ClearPluginCacheResponse(cleared_count=cleared)
-
 
 __all__ = ["PluginService"]

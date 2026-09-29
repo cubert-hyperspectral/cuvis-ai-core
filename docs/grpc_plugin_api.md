@@ -247,21 +247,6 @@ for node in resp.nodes:
 
 ---
 
-### ClearPluginCache
-
-Clear cloned Git plugin repositories from the `NodeRegistry` clone cache.
-
-```protobuf
-message ClearPluginCacheRequest  { string plugin_name = 1; }  // empty = clear all
-message ClearPluginCacheResponse { int32 cleared_count = 1; }
-```
-
-> Scope: this clears the Git **clone** cache only. The isolated per-pipeline environments that
-> the orchestrator composes for `LoadPipeline` are managed separately and are not affected by
-> this RPC.
-
----
-
 ## Complete workflow
 
 ```python

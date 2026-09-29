@@ -678,21 +678,6 @@ class TestTrainingServiceStatus:
         assert response.latest_progress.message == "done"
 
 
-class TestPluginServiceClearCache:
-    """Test PluginService clear_plugin_cache path."""
-
-    def setup_method(self):
-        self.session_manager = SessionManager()
-        self.service = PluginService(self.session_manager)
-        self.ctx = Mock()
-
-    def test_clear_cache_with_plugin_name(self):
-        """Clear cache for specific plugin (line 355)."""
-        request = cuvis_ai_pb2.ClearPluginCacheRequest(plugin_name="test_plugin")
-        response = self.service.clear_plugin_cache(request, self.ctx)
-        assert response.cleared_count >= 0
-
-
 def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatch):
     """The gradient Train RPC seeds, derives callbacks from the config, and constructs
     the trainer before streaming. A mocked GradientTrainer makes fit() instant so the

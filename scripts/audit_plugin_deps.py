@@ -245,15 +245,20 @@ class PluginFinding:
 
 
 def _resolve_manifest_pyproject(
-    name: str, cfg: dict, plugins_dir: Path, cache_dir: Path
+    name: str, cfg: dict, plugins_dir: Path, pyproject_cache: Path | None
 ) -> Path | None:
-    """Locate a plugin's ``pyproject.toml`` from its manifest entry."""
+    """Locate a plugin's ``pyproject.toml`` from its manifest.
+
+    A local-``path`` plugin has it next to its checkout; a tag-pinned one has it
+    under ``<pyproject_cache>/<name>@<tag>/`` (what cuvis-ai's
+    ``fetch_plugin_pyprojects.py`` writes), so without a cache it is unavailable.
+    """
     if "path" in cfg:
         candidate = (plugins_dir / cfg["path"]).resolve() / "pyproject.toml"
         return candidate if candidate.exists() else None
     tag = cfg.get("tag")
-    if tag:
-        candidate = cache_dir / f"{name}@{tag}" / "pyproject.toml"
+    if tag and pyproject_cache is not None:
+        candidate = pyproject_cache / f"{name}@{tag}" / "pyproject.toml"
         return candidate if candidate.exists() else None
     return None
 
@@ -280,31 +285,37 @@ def _check_one_pyproject(
 
 
 def check_plugins(
-    plugins_dir: Path, core_lock: dict[str, Version]
+    plugins_dir: Path,
+    core_lock: dict[str, Version],
+    pyproject_cache: Path | None = None,
 ) -> tuple[list[PluginFinding], list[str]]:
-    """Compare each manifest's plugin requirements against the core lock."""
+    """Compare each manifest's plugin requirements against the core lock.
+
+    One manifest file is one plugin: its source lives in the top-level ``name``
+    and ``repo`` / ``tag`` (or ``path``) keys. Tag-pinned plugins are read from
+    ``pyproject_cache``; without one every tag-pinned plugin is skipped with a note.
+    """
     import yaml  # local import: only the plugin check needs PyYAML
 
-    cache_dir = Path.home() / ".cuvis_plugins"
     findings: list[PluginFinding] = []
     warnings: list[str] = []
     for manifest in sorted(plugins_dir.glob("*.yaml")):
-        data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
-        for name, cfg in (data.get("plugins") or {}).items():
-            # Local-path entries are dev checkouts or the built-in catalog
-            # (e.g. ``cuvis_ai_builtin`` → the host repo). They are host-checked
-            # in their own repo's --check host run, not against core's lock, so
-            # the registry check skips them and audits only tag-pinned externals.
-            if "path" in cfg:
-                warnings.append(
-                    f"{name}: local-path entry - skipped (host-checked separately)"
-                )
-                continue
-            pp_path = _resolve_manifest_pyproject(name, cfg, plugins_dir, cache_dir)
-            if pp_path is None:
-                warnings.append(f"{name}: pyproject not available locally - skipped")
-                continue
-            findings.extend(_check_one_pyproject(name, pp_path, core_lock))
+        cfg = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+        name = cfg.get("name") or manifest.stem
+        # Local-path entries are dev checkouts or the built-in catalog
+        # (e.g. ``cuvis_ai_builtin`` → the host repo). They are host-checked
+        # in their own repo's --check host run, not against core's lock, so
+        # the registry check skips them and audits only tag-pinned externals.
+        if "path" in cfg:
+            warnings.append(
+                f"{name}: local-path entry - skipped (host-checked separately)"
+            )
+            continue
+        pp_path = _resolve_manifest_pyproject(name, cfg, plugins_dir, pyproject_cache)
+        if pp_path is None:
+            warnings.append(f"{name}: pyproject not available locally - skipped")
+            continue
+        findings.extend(_check_one_pyproject(name, pp_path, core_lock))
     return findings, warnings
 
 
@@ -390,6 +401,15 @@ def _print_plugins(findings: list[PluginFinding], warnings: list[str]) -> None:
     "(per-plugin-repo CI; use instead of --plugins-dir).",
 )
 @click.option(
+    "--pyproject-cache",
+    "pyproject_cache",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory of fetched plugin pyprojects, keyed <name>@<tag>, for the "
+    "plugin check of a manifest catalog (cuvis-ai's fetch_plugin_pyprojects.py "
+    "writes it). Without it, tag-pinned plugins are reported as unavailable.",
+)
+@click.option(
     "--against-core",
     "against_core",
     default=None,
@@ -418,6 +438,7 @@ def main(
     lock_path: Path | None,
     plugins_dir: Path | None,
     plugin_pyproject: Path | None,
+    pyproject_cache: Path | None,
     against_core: str | None,
     strict: bool,
     output_format: str,
@@ -449,7 +470,9 @@ def main(
                     plugin_pyproject, core_lock
                 )
             else:
-                findings_p, warnings_p = check_plugins(plugins_dir, core_lock)
+                findings_p, warnings_p = check_plugins(
+                    plugins_dir, core_lock, pyproject_cache=pyproject_cache
+                )
             has_findings = has_findings or bool(findings_p)
             report["plugins"] = {
                 "findings": [asdict(f) for f in findings_p],

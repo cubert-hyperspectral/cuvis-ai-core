@@ -177,12 +177,6 @@ class CuvisAIServiceStub:
             response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailableNodesResponse.FromString,
             _registered_method=True,
         )
-        self.ClearPluginCache = channel.unary_unary(
-            "/cuvis_ai.v1.CuvisAIService/ClearPluginCache",
-            request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheRequest.SerializeToString,
-            response_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.FromString,
-            _registered_method=True,
-        )
         self.SetProfiling = channel.unary_unary(
             "/cuvis_ai.v1.CuvisAIService/SetProfiling",
             request_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.SetProfilingRequest.SerializeToString,
@@ -369,12 +363,6 @@ class CuvisAIServiceServicer:
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def ClearPluginCache(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
     def SetProfiling(self, request, context):
         """Profiling"""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -519,11 +507,6 @@ def add_CuvisAIServiceServicer_to_server(servicer, server):
             servicer.ListAvailableNodes,
             request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailableNodesRequest.FromString,
             response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailableNodesResponse.SerializeToString,
-        ),
-        "ClearPluginCache": grpc.unary_unary_rpc_method_handler(
-            servicer.ClearPluginCache,
-            request_deserializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheRequest.FromString,
-            response_serializer=cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.SerializeToString,
         ),
         "SetProfiling": grpc.unary_unary_rpc_method_handler(
             servicer.SetProfiling,
@@ -1322,36 +1305,6 @@ class CuvisAIService:
             "/cuvis_ai.v1.CuvisAIService/ListAvailableNodes",
             cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailableNodesRequest.SerializeToString,
             cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ListAvailableNodesResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ClearPluginCache(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/cuvis_ai.v1.CuvisAIService/ClearPluginCache",
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheRequest.SerializeToString,
-            cuvis__ai__core_dot_grpc_dot_v1_dot_cuvis__ai__core__pb2.ClearPluginCacheResponse.FromString,
             options,
             channel_credentials,
             insecure,

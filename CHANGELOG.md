@@ -20,6 +20,8 @@
 - `dataset` CLI: `--data-dir` defaults to `./data` of the directory the command runs in, not of the process that built the CLI.
 - `VideoIterator`: a frame the backend cannot read carries `basename` like a readable one.
 - Lock upgrade past the urllib3 advisories published 2026-10-01 (CVE-2026-97687, CVE-2026-97688, CVE-2026-97689): urllib3 2.8.0, and the floor follows the lock (`urllib3>=2.8.0`).
+- Removed, breaking: the `ClearPluginCache` RPC handler and `NodeRegistry.clear_plugin_cache`, `set_cache_dir` and `_cache_dir`, plus `utils.git_and_os.safe_rmtree`, whose only caller was the cache. They managed the clone-era plugin cache under `~/.cuvis_plugins`, which the orchestrator's composed environments replaced; the two tests that exercised the handler deleted the real `~/.cuvis_plugins` of whoever ran them. The server now answers `UNIMPLEMENTED` to the RPC and no longer dereferences its request and response messages, so cuvis-ai-schemas can drop the RPC and both messages in its next minor; that schemas release requires this core or later (older cores dereference the messages at import). CuvisNEXT's client wrapper has had no caller since 2026-09-07 and goes with its next proto sync.
+- `audit-plugin-deps --check plugins` audits the flat one-plugin manifests (top-level `name` / `repo` / `tag`): it iterated the old nested `plugins:` mapping, so on every catalog since the manifest split it audited nothing and passed. The directory of fetched plugin pyprojects, keyed `<name>@<tag>`, is the explicit `--pyproject-cache DIR` option instead of `~/.cuvis_plugins`; without it a tag-pinned plugin is reported as not available locally.
 
 ## 0.17.5 - 2026-09-29
 

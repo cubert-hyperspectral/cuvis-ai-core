@@ -375,7 +375,8 @@ def test_check_plugins_skips_local_path_entries(tmp_path: Path) -> None:
     builtin.mkdir()
     _write_plugin_pyproject(builtin, "cuvis-ai", ["pillow>=99.0.0"])  # would mismatch
     (plugins_dir / "cuvis_ai_builtin.yaml").write_text(
-        'plugins:\n  cuvis_ai_builtin:\n    path: "../host_repo"\n', encoding="utf-8"
+        'name: cuvis_ai_builtin\npath: "../host_repo"\ncapabilities: []\n',
+        encoding="utf-8",
     )
     findings, warnings = apd.check_plugins(plugins_dir, {"pillow": Version("12.2.0")})
     assert findings == []
@@ -403,3 +404,72 @@ def test_cli_plugin_check_accepts_pyproject_without_dir(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0
+
+
+def _write_flat_manifest(plugins_dir: Path, name: str, tag: str) -> None:
+    (plugins_dir / f"{name}.yaml").write_text(
+        f'name: {name}\nrepo: "https://github.com/cubert-hyperspectral/{name}.git"\n'
+        f'tag: "{tag}"\ncapabilities: []\n',
+        encoding="utf-8",
+    )
+
+
+def test_check_plugins_reads_flat_manifests_from_the_pyproject_cache(tmp_path: Path):
+    # One file = one plugin with top-level name/repo/tag; the fetched pyprojects live in
+    # the directory the caller names, keyed <name>@<tag>.
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    _write_flat_manifest(plugins_dir, "cuvis-ai-sam3", "v1.2.3")
+    cache = tmp_path / "pyprojects"
+    fetched = cache / "cuvis-ai-sam3@v1.2.3"
+    fetched.mkdir(parents=True)
+    _write_plugin_pyproject(fetched, "cuvis-ai-sam3", ["pillow>=99.0.0"])
+
+    findings, warnings = apd.check_plugins(
+        plugins_dir, {"pillow": Version("12.2.0")}, pyproject_cache=cache
+    )
+
+    assert [(f.plugin, f.name) for f in findings] == [("cuvis-ai-sam3", "pillow")]
+    assert warnings == []
+
+
+def test_check_plugins_without_a_pyproject_cache_reports_the_plugin_as_unavailable(
+    tmp_path: Path,
+):
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    _write_flat_manifest(plugins_dir, "cuvis-ai-sam3", "v1.2.3")
+
+    findings, warnings = apd.check_plugins(plugins_dir, {"pillow": Version("12.2.0")})
+
+    assert findings == []
+    assert warnings == ["cuvis-ai-sam3: pyproject not available locally - skipped"]
+
+
+def test_cli_plugin_check_takes_the_pyproject_cache_option(tmp_path: Path) -> None:
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    core = _make_repo(core_dir, [], {"pillow": "12.2.0"})
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    _write_flat_manifest(plugins_dir, "cuvis-ai-sam3", "v1.2.3")
+    cache = tmp_path / "pyprojects"
+    fetched = cache / "cuvis-ai-sam3@v1.2.3"
+    fetched.mkdir(parents=True)
+    _write_plugin_pyproject(fetched, "cuvis-ai-sam3", ["pillow>=99.0.0"])
+    result = CliRunner().invoke(
+        apd.main,
+        [
+            "--check",
+            "plugins",
+            "--plugins-dir",
+            str(plugins_dir),
+            "--pyproject-cache",
+            str(cache),
+            "--against-core",
+            str(core),
+            "--strict",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "MISMATCH" in result.output and "pillow" in result.output

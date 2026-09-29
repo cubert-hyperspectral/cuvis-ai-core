@@ -32,7 +32,6 @@ class NodeRegistry:
 
     # ========== CLASS-LEVEL: Built-in nodes (singleton) ==========
     _builtin_registry: Dict[str, type] = {}
-    _cache_dir: Path = Path.home() / ".cuvis_plugins"
 
     def __init__(self):
         """Create instance for plugin support."""
@@ -550,7 +549,6 @@ class NodeRegistry:
 
         Note:
             Does not remove the plugin from sys.path (Python limitation).
-            Cached Git repositories are NOT deleted (use clear_plugin_cache).
         """
         if not hasattr(self, "loaded_plugin_nodes"):
             raise RuntimeError(
@@ -602,35 +600,6 @@ class NodeRegistry:
         self.data_modules.clear()
         self.plugin_catalog.clear()
         logger.info("Cleared all plugins")
-
-    @classmethod
-    def clear_plugin_cache(cls, plugin_name: Optional[str] = None) -> None:
-        """
-        Clear cached Git repositories.
-
-        Args:
-            plugin_name: If provided, clear only this plugin's cache.
-                        If None, clear all cached plugins.
-        """
-        if plugin_name:
-            for cache_entry in cls._cache_dir.glob(f"{plugin_name}@*"):
-                logger.info(f"Removing cache: {cache_entry}")
-                git_os.safe_rmtree(cache_entry)
-        else:
-            if cls._cache_dir.exists():
-                logger.info(f"Clearing all plugin caches in {cls._cache_dir}")
-                git_os.safe_rmtree(cls._cache_dir)
-
-    @classmethod
-    def set_cache_dir(cls, path: Union[str, Path]) -> None:
-        """
-        Set the cache directory for Git plugins.
-
-        Args:
-            path: Directory path for caching cloned repositories
-        """
-        cls._cache_dir = Path(path)
-        logger.debug(f"Plugin cache directory set to: {cls._cache_dir}")
 
     @classmethod
     def clear(cls):
