@@ -76,6 +76,7 @@ from cuvis_ai_core.orchestrator.spawner import (
     dead_child_details,
     format_exit_code,
 )
+from cuvis_ai_schemas.pipeline import PipelineConfig
 from cuvis_ai_schemas.plugin import PluginManifest, parse_plugin_manifest
 from cuvis_ai_core.utils.plugin_resolver import resolve_against_catalog
 
@@ -738,8 +739,6 @@ def forward_load_pipeline(
     """Parent's LoadPipeline path: ensure_child + forward unmodified."""
     from cuvis_ai_core.grpc.error_handling import get_session_or_error
 
-    from cuvis_ai_schemas.pipeline import PipelineConfig
-
     session = get_session_or_error(session_manager, request.session_id, context)
     if session is None:
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
@@ -892,8 +891,6 @@ def forward_restore_train_run(
     """
     from cuvis_ai_core.grpc.error_handling import get_session_or_error
     from cuvis_ai_core.grpc.trainrun_service import TrainRunService
-
-    from cuvis_ai_schemas.pipeline import PipelineConfig
 
     trainrun_path = Path(request.trainrun_path)
     try:
