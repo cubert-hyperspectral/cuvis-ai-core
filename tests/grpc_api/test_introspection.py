@@ -1,3 +1,5 @@
+import shutil
+
 import grpc
 import pytest
 
@@ -56,6 +58,18 @@ class TestGetPipelineOutputs:
         assert first_output.dtype != cuvis_ai_pb2.D_TYPE_UNSPECIFIED
 
 
+def _expect_rendered(response, requested):
+    """A host with Graphviz answers the requested image; one without it answers the
+    DOT source and says so. Both are correct; a mislabelled fallback is not."""
+    if shutil.which("dot"):
+        assert response.format == requested
+        signature = b"\x89PNG" if requested == "png" else b"<svg"
+        assert signature in response.image_data[:512]
+    else:
+        assert response.format == "dot"
+        assert b"digraph" in response.image_data
+
+
 class TestGetPipelineVisualization:
     def test_get_visualization_png(self, grpc_stub, session):
         session_id = session()
@@ -66,7 +80,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "png"
+        _expect_rendered(response, "png")
 
     def test_get_visualization_svg(self, grpc_stub, session):
         session_id = session()
@@ -77,7 +91,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "svg"
+        _expect_rendered(response, "svg")
 
     def test_default_format_png(self, grpc_stub, session):
         session_id = session()
@@ -86,7 +100,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "png"
+        _expect_rendered(response, "png")
 
 
 def test_get_pipeline_visualization_from_config_content(grpc_stub):
