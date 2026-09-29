@@ -329,8 +329,6 @@ class Node(nn.Module, ABC, Serializable):
         """Validate that node can be serialized.
 
         Checks:
-        - Has state_dict() method
-        - Has load_state_dict() method
         - state_dict() returns a dict
         - No exceptions during state_dict() call
 
@@ -345,14 +343,6 @@ class Node(nn.Module, ABC, Serializable):
         >>> is_valid, message = node.validate_serialization_support()
         >>> assert is_valid, message
         """
-        # Check if state_dict exists
-        if not hasattr(self, "state_dict"):
-            return False, f"Node {self.name} missing state_dict() method"
-
-        # Check if load_state_dict exists
-        if not hasattr(self, "load_state_dict"):
-            return False, f"Node {self.name} missing load_state_dict() method"
-
         # Try to call state_dict (should not raise)
         try:
             state = self.state_dict()
@@ -423,29 +413,6 @@ class Node(nn.Module, ABC, Serializable):
     def outputs(self) -> SimpleNamespace:
         """Access output ports: node.outputs.portname"""
         return SimpleNamespace(**self._output_ports)
-
-    # def __getattr__(self, name):
-    #     # Prevent infinite recursion during initialization
-    #     if name.startswith('_'):
-    #         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
-
-    #     # Check if it's a unique port name
-    #     in_inputs = name in self._input_ports
-    #     in_outputs = name in self._output_ports
-
-    #     if in_inputs and in_outputs:
-    #         # Conflict - require explicit namespace
-    #         raise AttributeError(
-    #             f"Port '{name}' exists in both inputs and outputs. "
-    #             f"Use {self.name}.inputs.{name} or {self.name}.outputs.{name}"
-    #         )
-    #     elif in_inputs:
-    #         return self._input_ports[name]
-    #     elif in_outputs:
-    #         return self._output_ports[name]
-    #     else:
-    #         # Not a port, let normal AttributeError propagate
-    #         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
     def __getattr__(self, name: str) -> Any:
         # First, let PyTorch's nn.Module handle its own attributes

@@ -54,10 +54,6 @@ COMPOSER_SCHEMA_VERSION = 5
 # long-lived shared caches.
 _DIR_HASH_LEN = 16
 
-# Cache-protocol kind tags written to key.json and the human manifest.
-_KIND_GIT = "git"
-_KIND_LOCAL = "local"
-
 
 @dataclass(frozen=True)
 class CoreSource:
@@ -254,14 +250,14 @@ def _plugin_to_dict(p: ResolvedPlugin, *, forensics: bool = True) -> dict:
     """
     if isinstance(p, ResolvedGitPlugin):
         return {
-            "kind": _KIND_GIT,
+            "kind": "git",
             "name": p.name,
             "repo": p.repo,
             "sha": p.sha,
             "tag": p.tag,
         }
     entry = {
-        "kind": _KIND_LOCAL,
+        "kind": "local",
         "name": p.name,
         "path": str(p.path),
         "pyproject_sha256": p.pyproject_sha256,

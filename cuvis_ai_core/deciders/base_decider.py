@@ -57,8 +57,6 @@ class BinaryDecider(Node):
             Dictionary with "decisions" key containing (B, H, W, 1) decision mask.
         """
 
-        pass
-
     def calibrate(self, scores: Tensor, targets: Tensor) -> dict[str, Any] | None:
         """Re-fit this decider's threshold(s) on a labelled split (no-op by default).
 

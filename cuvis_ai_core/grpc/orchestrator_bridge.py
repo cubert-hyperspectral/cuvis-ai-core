@@ -813,23 +813,12 @@ def forward_inference(
     context: grpc.ServicerContext,
 ) -> cuvis_ai_pb2.InferenceResponse:
     """Parent's Inference path: route to the session's child runtime."""
-    from cuvis_ai_core.grpc.error_handling import get_session_or_error
-
-    session = get_session_or_error(session_manager, request.session_id, context)
-    if session is None:
-        return cuvis_ai_pb2.InferenceResponse()
-
-    child = get_child(session)
-    if child is None:
-        _answer_no_child(session, context)
-        return cuvis_ai_pb2.InferenceResponse()
-    return _call_child_with_error_propagation(
-        child,
-        "Inference",
+    return _forward_pipeline_op(
+        session_manager,
         request,
         context,
-        cuvis_ai_pb2.InferenceResponse,
-        session=session,
+        stub_method="Inference",
+        empty_response_factory=cuvis_ai_pb2.InferenceResponse,
     )
 
 

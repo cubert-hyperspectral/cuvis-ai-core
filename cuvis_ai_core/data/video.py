@@ -96,8 +96,7 @@ class VideoIterator:
             logger.error("Error reading frame {}: {}", frame_id, e)
             return {"frame_id": frame_id, "image": np.zeros((1, 1, 3), dtype=np.uint8)}
 
-        if frame.dtype != np.uint8:
-            frame = frame.astype(np.uint8)
+        frame = frame.astype(np.uint8, copy=False)
 
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         return {"frame_id": frame_id, "image": frame_bgr, "basename": self.basename}

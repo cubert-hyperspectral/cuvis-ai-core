@@ -292,7 +292,6 @@ class BaseCuvisAIDataModule(pl.LightningDataModule, ABC):
         from cuvis_ai_core.data.splits_io import verify_universe
 
         splits = self._effective_splits()
-        assert splits is not None
         # Selector attrs are a hard requirement (enumerate raises if unmet); constraint
         # attrs are opportunistic (only those the module can supply, so an unsupported
         # attr yields an ``unavailable`` result instead of a crash).

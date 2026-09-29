@@ -9,7 +9,10 @@ import torch
 import yaml
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
-from cuvis_ai_core.utils.restore import _resolve_pipeline_reference
+from cuvis_ai_core.utils.restore import (
+    _resolve_pipeline_reference,
+    _resolve_splits_path_in_config,
+)
 
 from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
@@ -49,17 +52,22 @@ class TrainRunService:
             f"{trainrun_path.stem}_pipeline.yaml"
         )
 
-        written_pipeline: dict[str, str] = {}
-
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
             session.pipeline_config.save_to_file(sibling_pipeline_path)
-            written_pipeline["path"] = str(sibling_pipeline_path)
             return sibling_pipeline_path.name
 
         has_live_pipeline = (
             session.pipeline is not None or session._pipeline_config is not None
         )
+        if not has_live_pipeline and not (
+            session.trainrun_config is not None and session.trainrun_config.pipeline
+        ):
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(
+                "Pipeline configuration is required before saving a train run."
+            )
+            return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
 
         if session.trainrun_config is not None:
             trainrun_config = session.trainrun_config
@@ -73,20 +81,7 @@ class TrainRunService:
                 trainrun_config = trainrun_config.model_copy(
                     update={"pipeline": _write_pipeline_sibling()}
                 )
-            elif not trainrun_config.pipeline:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "Pipeline configuration is required before saving a train run."
-                )
-                return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
         else:
-            if not has_live_pipeline:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "Pipeline configuration is required before saving a train run."
-                )
-                return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
-
             trainrun_config = TrainRunConfig(
                 name=getattr(session.pipeline, "name", "trainrun"),
                 pipeline=_write_pipeline_sibling(),
@@ -135,8 +130,6 @@ class TrainRunService:
                     },
                 }
 
-                import torch
-
                 torch.save(checkpoint, weights_path_obj)
 
             except Exception as exc:
@@ -148,7 +141,7 @@ class TrainRunService:
         return cuvis_ai_pb2.SaveTrainRunResponse(
             success=True,
             trainrun_path=str(trainrun_path),
-            pipeline_path=written_pipeline.get("path", ""),
+            pipeline_path=str(sibling_pipeline_path) if has_live_pipeline else "",
             weights_path=weights_path,
         )
 
@@ -177,11 +170,8 @@ class TrainRunService:
 
         # Resolve a relative splits_path against the trainrun dir, so a restored
         # trainrun carries an absolute path — parity with the CLI restore path and
-        # with the pipeline-reference resolution below. Reuses the same helper the
-        # CLI uses (lazy import avoids a module-load cycle).
+        # with the pipeline-reference resolution below.
         if trainrun_config.data is not None:
-            from cuvis_ai_core.utils.restore import _resolve_splits_path_in_config
-
             resolved_data = _resolve_splits_path_in_config(
                 trainrun_config.data, trainrun_path.parent
             )
@@ -262,9 +252,6 @@ class TrainRunService:
             node_registry=node_registry,
         )
         pipeline_config = PipelineConfig.load_from_file(pipeline_config_path)
-
-        if torch.cuda.is_available():
-            pipeline = pipeline.to("cuda")
 
         if target_session_id is None:
             session_id = self.session_manager.create_session(

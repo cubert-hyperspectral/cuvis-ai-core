@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import grpc
 import torch
 
-from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_core import __version__
+from cuvis_ai_core.pipeline.factory import PipelineBuilder
+from cuvis_ai_core.training.config import (
+    PipelineConfig,
+    PipelineMetadata,
+    TrainRunConfig,
+)
 
 from . import helpers
 from .error_handling import get_session_or_error, grpc_handler, require_pipeline
@@ -148,44 +155,27 @@ class PipelineService:
             context.set_details("pipeline_path is required")
             return cuvis_ai_pb2.SavePipelineResponse(success=False)
 
-        from datetime import datetime
-
-        from cuvis_ai_core import __version__
-        from cuvis_ai_core.training.config import PipelineMetadata
-
         # Use resolve_pipeline_save_path for consistent path resolution
         pipeline_path = helpers.resolve_pipeline_save_path(request.pipeline_path)
         pipeline_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Build metadata from proto or defaults
         metadata = PipelineMetadata(
-            name=request.metadata.name if request.metadata.name else pipeline_path.stem,
-            description=request.metadata.description
-            if request.metadata.description
-            else "",
-            created=request.metadata.created
-            if request.metadata.created
-            else datetime.now().isoformat(),
-            cuvis_ai_version=request.metadata.cuvis_ai_version
-            if request.metadata.cuvis_ai_version
-            else __version__,
-            tags=list(request.metadata.tags) if request.metadata.tags else [],
-            author=request.metadata.author if request.metadata.author else "",
+            name=request.metadata.name or pipeline_path.stem,
+            description=request.metadata.description,
+            created=request.metadata.created or datetime.now().isoformat(),
+            cuvis_ai_version=request.metadata.cuvis_ai_version or __version__,
+            tags=list(request.metadata.tags),
+            author=request.metadata.author,
         )
 
-        # Save pipeline using CuvisPipeline.save_to_file
-        session.pipeline.save_to_file(
-            str(pipeline_path),
-            metadata=metadata,
-        )
+        session.pipeline.save_to_file(str(pipeline_path), metadata=metadata)
 
-        # Compute weights path (save_to_file creates it as pipeline_path.with_suffix('.pt'))
-        weights_path = pipeline_path.with_suffix(".pt")
-
+        # save_to_file writes the weights as pipeline_path.with_suffix('.pt')
         return cuvis_ai_pb2.SavePipelineResponse(
             success=True,
             pipeline_path=str(pipeline_path),
-            weights_path=str(weights_path),
+            weights_path=str(pipeline_path.with_suffix(".pt")),
         )
 
     @grpc_handler("Failed to load pipeline")
@@ -215,9 +205,6 @@ class PipelineService:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("pipeline.config_bytes is required")
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-
-        from cuvis_ai_core.pipeline.factory import PipelineBuilder
-        from cuvis_ai_core.training.config import PipelineConfig
 
         config_dict = json.loads(request.pipeline.config_bytes)
         # Some YAML sources include a top-level version field that is not part of the schema.

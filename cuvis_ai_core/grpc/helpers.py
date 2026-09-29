@@ -225,15 +225,9 @@ STRING_TO_POINT_TYPE = {
 }
 
 
+# numpy dtype names ("float32", "bool", ...) of the DTYPE_NUMPY_TO_PROTO entries.
 _DTYPE_STR_TO_PROTO: dict[str, int] = {
-    "float32": cuvis_ai_pb2.D_TYPE_FLOAT32,
-    "float64": cuvis_ai_pb2.D_TYPE_FLOAT64,
-    "int32": cuvis_ai_pb2.D_TYPE_INT32,
-    "int64": cuvis_ai_pb2.D_TYPE_INT64,
-    "uint8": cuvis_ai_pb2.D_TYPE_UINT8,
-    "bool": cuvis_ai_pb2.D_TYPE_BOOL,
-    "float16": cuvis_ai_pb2.D_TYPE_FLOAT16,
-    "uint16": cuvis_ai_pb2.D_TYPE_UINT16,
+    str(np_dtype): proto for np_dtype, proto in DTYPE_NUMPY_TO_PROTO.items()
 }
 
 
@@ -735,14 +729,10 @@ def extract_pipeline_metadata(yaml_path: Path) -> dict[str, Any]:
         yaml_path: Path to pipeline YAML file
 
     Returns:
-        Dictionary with metadata fields:
-        - name: str
-        - description: str
-        - created: str
-        - cuvis_ai_version: str
-        - metrics: dict[str, float]
-        - epoch: int
-        - tags: list[str]
+        Dictionary whose keys are exactly the ``PipelineMetadata`` proto fields
+        (``name``, ``description``, ``created``, ``cuvis_ai_version``, ``tags``,
+        ``author``). The discovery service unpacks it straight into the message
+        (``PipelineMetadata(**metadata)``), so a key the proto lacks fails there.
 
     Note:
         Returns empty/default values if metadata section is missing or invalid.

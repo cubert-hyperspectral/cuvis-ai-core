@@ -196,11 +196,6 @@ def _import_class(fqcn: str) -> type:
     return cls
 
 
-def _node_entry(fqcn: str) -> PluginCapabilityEntry:
-    """Introspect one node class into a PluginCapabilityEntry (class_name = FQCN)."""
-    return _entry_from_class(fqcn, _import_class(fqcn))
-
-
 def _entry_from_class(fqcn: str, node_class: type) -> PluginCapabilityEntry:
     """Introspect an already imported node class into its capability entry."""
     short_name = node_class.__name__

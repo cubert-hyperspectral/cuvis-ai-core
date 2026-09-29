@@ -552,9 +552,8 @@ class GradientTrainer(pl.LightningModule):
         if scheduler is None:
             return optimizer
 
-        monitor = self.scheduler_config.monitor if self.scheduler_config else None
+        monitor = self.scheduler_config.monitor
         wrapped_scheduler = wrap_scheduler_for_lightning(scheduler, monitor)
-
         return {"optimizer": optimizer, "lr_scheduler": wrapped_scheduler}
 
 

@@ -245,9 +245,9 @@ class NodeRegistry:
         return attr
 
     @classmethod
-    def _import_from_path(cls, import_path: str, clear_cache: bool = False) -> type:
+    def _import_from_path(cls, import_path: str) -> type:
         """Import a class from a full module path."""
-        return git_os._import_from_path(import_path, clear_cache=clear_cache)
+        return git_os._import_from_path(import_path)
 
     @classmethod
     def list_builtin_nodes(cls) -> list[str]:

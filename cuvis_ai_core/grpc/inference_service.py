@@ -181,27 +181,16 @@ class InferenceService:
                 return t.clone()
 
         # Parse tensor inputs (if provided)
-        if inputs.HasField("cube"):
-            batch["cube"] = parse_tensor(inputs.cube)
+        for field in ("cube", "wavelengths", "mask", "rgb_image"):
+            if inputs.HasField(field):
+                batch[field] = parse_tensor(getattr(inputs, field))
 
-        if inputs.HasField("wavelengths"):
-            batch["wavelengths"] = parse_tensor(inputs.wavelengths)
-
-        if inputs.HasField("mask"):
-            batch["mask"] = parse_tensor(inputs.mask)
-
-        if inputs.HasField("rgb_image"):
-            batch["rgb_image"] = parse_tensor(inputs.rgb_image)
-
-        if inputs.HasField("frame_id"):
-            frame_id = parse_tensor(inputs.frame_id)
-            if frame_id.numel() > 0:
-                batch["frame_id"] = frame_id
-
-        if inputs.HasField("mesu_index"):
-            mesu_index = parse_tensor(inputs.mesu_index)
-            if mesu_index.numel() > 0:
-                batch["mesu_index"] = mesu_index
+        # Index tensors: an empty tensor counts as "not provided".
+        for field in ("frame_id", "mesu_index"):
+            if inputs.HasField(field):
+                tensor = parse_tensor(getattr(inputs, field))
+                if tensor.numel() > 0:
+                    batch[field] = tensor
 
         # Parse structured inputs (if provided)
         if inputs.HasField("bboxes"):

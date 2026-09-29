@@ -182,8 +182,6 @@ def provision_environment(
         raise ValueError(
             "env_file cannot be combined with apply=True or notebook=True."
         )
-    if notebook and apply and env_file is not None:  # defensive, covered above
-        raise ValueError("notebook and env_file are mutually exclusive.")
 
     if notebook:
         return _provision_notebook(specs, apply=apply)

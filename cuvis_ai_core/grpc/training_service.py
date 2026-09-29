@@ -176,8 +176,12 @@ class TrainingService:
                     "trainrun via RestoreTrainRun"
                 )
 
-            # Create datamodule from data config via the registry dispatch
-            datamodule = self._create_data_module(session, data_config_py)
+            # The DataModule class named by ``data_config.data_module`` comes from a
+            # plugin registered into the session's ``node_registry.data_modules``;
+            # core imports no SDK and no concrete module here.
+            from cuvis_ai_core.data.datamodule import create_data_module
+
+            datamodule = create_data_module(session.node_registry, data_config_py)
             training_config_py: TrainingConfig | None = None
             inner: Iterator[cuvis_ai_pb2.TrainResponse]
 
@@ -257,7 +261,9 @@ class TrainingService:
             stream_finished.set()
             # Best-effort VRAM trim after a run ends (complete, cancelled, or
             # failed). The pipeline itself stays resident until CloseSession.
-            self._release_cuda_cache()
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     @grpc_handler("Failed to stop training")
     def stop_train(
@@ -522,21 +528,6 @@ class TrainingService:
             unfreeze_nodes=unfreeze_nodes,
         )
 
-    def _create_data_module(
-        self,
-        session: SessionState,
-        data_config: DataConfig,
-    ) -> "pl.LightningDataModule":
-        """Build the DataModule named by ``data_config.data_module`` via the registry.
-
-        The concrete DataModule class comes from a plugin (registered into the
-        session's ``node_registry.data_modules``), so core imports no SDK and no
-        concrete module here.
-        """
-        from cuvis_ai_core.data.datamodule import create_data_module
-
-        return create_data_module(session.node_registry, data_config)
-
     def _train_statistical(
         self,
         session: SessionState,
@@ -600,9 +591,7 @@ class TrainingService:
 
         pl.seed_everything(training_config.seed, workers=True)
 
-        loss_nodes, metric_nodes = self._configure_gradient_components(
-            session, data_config, training_config
-        )
+        loss_nodes, metric_nodes = self._configure_gradient_components(session)
 
         progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
 
@@ -719,10 +708,7 @@ class TrainingService:
             raise ValueError(f"Invalid training config: {exc}") from exc
 
     def _configure_gradient_components(
-        self,
-        session: SessionState,
-        data_config: DataConfig,
-        training_config: TrainingConfig,
+        self, session: SessionState
     ) -> tuple[list, list]:
         """Configure loss and metric nodes from trainrun config."""
         pipeline = session.pipeline
@@ -792,13 +778,6 @@ class TrainingService:
             status=cuvis_ai_pb2.TRAIN_STATUS_CANCELLED,
             message=message,
         )
-
-    @staticmethod
-    def _release_cuda_cache() -> None:
-        """Best-effort VRAM trim after a training run ends."""
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     def _create_progress_response(
         self,

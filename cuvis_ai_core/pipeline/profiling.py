@@ -17,6 +17,7 @@ median, purpose-built for profiling ``node.forward()`` durations.
 from __future__ import annotations
 
 import math
+import statistics
 import threading
 
 from cuvis_ai_schemas.pipeline.profiling import NodeProfilingStats
@@ -58,15 +59,9 @@ class _P2MedianEstimator:
 
     @property
     def median(self) -> float:
+        """Exact median during the warm-up buffer, P² estimate afterwards."""
         if not self._heights:
-            if not self._warmup:
-                return 0.0
-            s = sorted(self._warmup)
-            m = len(s)
-            mid = m // 2
-            if m % 2 == 1:
-                return s[mid]
-            return (s[mid - 1] + s[mid]) / 2.0
+            return statistics.median(self._warmup) if self._warmup else 0.0
         return self._q[2]
 
     # -- internal P² helpers ------------------------------------------------
@@ -204,12 +199,11 @@ class _ScalarAccumulator:
                 "total_ms": 0.0,
                 "last_ms": 0.0,
             }
-        std = math.sqrt(self.m2 / self.count) if self.count > 0 else 0.0
         return {
             "count": self.count,
             "mean_ms": self.mean,
             "median_ms": self._median.median,
-            "std_ms": std,
+            "std_ms": math.sqrt(self.m2 / self.count),
             "min_ms": self.min_val,
             "max_ms": self.max_val,
             "total_ms": self.total,

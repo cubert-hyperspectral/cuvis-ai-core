@@ -440,15 +440,11 @@ class PublicDatasets:
                     f"{target} exists and is not a Cubert download; pass --adopt to manage it "
                     "(Remove will then delete it)."
                 )
-            previous_files = (
-                {
-                    str(f.get("path"))
-                    for f in (current.marker or {}).get("files", [])
-                    if isinstance(f, dict)
-                }
-                if current.marker
-                else set()
-            )
+            previous_files = {
+                str(f.get("path"))
+                for f in (current.marker or {}).get("files", [])
+                if isinstance(f, dict)
+            }
             snapshot_download, hf_api = cls._require_hf_hub()
             target.mkdir(parents=True, exist_ok=True)
             cls._write_marker(
