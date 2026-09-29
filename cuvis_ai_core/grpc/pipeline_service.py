@@ -19,7 +19,11 @@ from cuvis_ai_core.training.config import (
 )
 
 from . import helpers
-from .error_handling import get_session_or_error, grpc_handler, require_pipeline
+from .error_handling import (
+    get_session_and_pipeline,
+    get_session_or_error,
+    grpc_handler,
+)
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -37,14 +41,12 @@ class PipelineService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
         """Load weights into an existing pipeline (path or raw bytes)."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
-
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
+        session, pipeline = resolved
 
         strict = request.strict if request.HasField("strict") else True
         resolved_path = ""
@@ -53,7 +55,7 @@ class PipelineService:
             resolved = helpers.find_weights_file(
                 request.weights_path, session.search_paths
             )
-            session.pipeline._restore_weights_from_checkpoint(
+            pipeline._restore_weights_from_checkpoint(
                 weights_path=str(resolved),
                 strict_weight_loading=strict,
             )
@@ -64,7 +66,7 @@ class PipelineService:
                 tmp_path = Path(tmp.name)
 
             try:
-                session.pipeline._restore_weights_from_checkpoint(
+                pipeline._restore_weights_from_checkpoint(
                     weights_path=str(tmp_path),
                     strict_weight_loading=strict,
                 )

@@ -4,8 +4,13 @@ from unittest.mock import Mock
 
 import grpc
 
-from cuvis_ai_core.grpc.error_handling import get_session_or_error, require_pipeline
+from cuvis_ai_core.grpc.error_handling import (
+    get_session_and_pipeline,
+    get_session_or_error,
+    require_pipeline,
+)
 from cuvis_ai_core.grpc.session_manager import SessionManager
+from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
 
 class TestGetSessionOrError:
@@ -58,3 +63,52 @@ class TestRequirePipeline:
         context.set_code.assert_called_once_with(grpc.StatusCode.FAILED_PRECONDITION)
         context.set_details.assert_called_once()
         assert "No pipeline" in context.set_details.call_args[0][0]
+
+
+class TestGetSessionAndPipeline:
+    """get_session_and_pipeline: both checks, the same statuses as the two steps."""
+
+    def setup_method(self):
+        self.session_manager = SessionManager()
+        self.context = Mock(spec=grpc.ServicerContext)
+
+    def teardown_method(self):
+        for sid in list(self.session_manager._sessions.keys()):
+            self.session_manager.close_session(sid)
+
+    def test_missing_session_is_not_found(self):
+        resolved = get_session_and_pipeline(
+            self.session_manager, "nonexistent", self.context
+        )
+
+        assert resolved is None
+        self.context.set_code.assert_called_once_with(grpc.StatusCode.NOT_FOUND)
+        assert "nonexistent" in self.context.set_details.call_args[0][0]
+
+    def test_session_without_pipeline_is_failed_precondition(self):
+        session_id = self.session_manager.create_session()
+
+        resolved = get_session_and_pipeline(
+            self.session_manager, session_id, self.context
+        )
+
+        assert resolved is None
+        self.context.set_code.assert_called_once_with(
+            grpc.StatusCode.FAILED_PRECONDITION
+        )
+        self.context.set_details.assert_called_once_with(
+            "No pipeline is available for this session. Build pipeline first."
+        )
+
+    def test_returns_the_session_and_its_pipeline(self):
+        session_id = self.session_manager.create_session()
+        session = self.session_manager.get_session(session_id)
+        session.pipeline = CuvisPipeline("guard")
+
+        resolved = get_session_and_pipeline(
+            self.session_manager, session_id, self.context
+        )
+
+        assert resolved == (session, session.pipeline)
+        self.context.set_code.assert_not_called()
+        self.context.set_details.assert_not_called()

@@ -6,7 +6,10 @@ import grpc
 
 from cuvis_ai_schemas.enums import ExecutionStage
 
-from .error_handling import get_session_or_error, grpc_handler, require_pipeline
+from .error_handling import (
+    get_session_and_pipeline,
+    grpc_handler,
+)
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -35,18 +38,16 @@ class ProfilingService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SetProfilingResponse:
         """Enable, disable, or reconfigure pipeline profiling."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.SetProfilingResponse()
-
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.SetProfilingResponse()
+        session, pipeline = resolved
 
         # Unset optional scalars read as proto3 defaults (False / 0), the same
         # defaults CuvisPipeline.set_profiling applies.
-        session.pipeline.set_profiling(
+        pipeline.set_profiling(
             enabled=request.enabled,
             synchronize_cuda=request.synchronize_cuda,
             reset=request.reset,
@@ -64,20 +65,18 @@ class ProfilingService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetProfilingSummaryResponse:
         """Retrieve accumulated per-node profiling statistics."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.GetProfilingSummaryResponse()
-
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.GetProfilingSummaryResponse()
+        session, pipeline = resolved
 
         # Unset or UNSPECIFIED stage reads as 0, which is not in the map: no filter.
         stage_str = _STAGE_PROTO_TO_STR.get(request.stage)
         stage = ExecutionStage(stage_str) if stage_str is not None else None
 
-        stats = session.pipeline.get_profiling_summary(stage=stage)
+        stats = pipeline.get_profiling_summary(stage=stage)
 
         # Map Python NodeProfilingStats → proto messages
         proto_stats = []
