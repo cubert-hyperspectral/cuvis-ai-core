@@ -289,6 +289,7 @@ def restore_pipeline(
         pipeline.set_profiling(enabled=True, synchronize_cuda=profile_sync)
 
         def to_device(batch: dict) -> dict:
+            """Move the batch's tensors to the requested device; other values pass."""
             return {
                 k: v.to(load_device) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()

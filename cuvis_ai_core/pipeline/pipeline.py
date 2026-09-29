@@ -657,6 +657,8 @@ class CuvisPipeline:
         self._structure_frozen_by = None
 
         self._profiler = None
+        self._data_profiler = None
+        self._first_batch_ms = {}
         self._profiling_enabled = False
         self._synchronize_cuda = False
         self._port_retention_requested = False
@@ -1205,6 +1207,12 @@ class CuvisPipeline:
         ----------
         stage : ExecutionStage or None
             If provided, only return stats for this execution stage.
+
+        Returns
+        -------
+        list[NodeProfilingStats]
+            One entry per recorded step and stage; empty when no batch loop was
+            profiled yet.
         """
         if self._data_profiler is None:
             return []
