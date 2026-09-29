@@ -202,7 +202,6 @@ def calibrate_pipeline_deciders(
         return skip_all(f"no {split} split")
     loader = getattr(datamodule, f"{split}_dataloader")()
 
-    device = pipeline.device
     for module in pipeline.torch_layers:
         module.eval()
     wanted = {port for (_, port) in sources.values()} | {"mask"}
@@ -210,12 +209,7 @@ def calibrate_pipeline_deciders(
     try:
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
-                moved = {
-                    key: (
-                        value.to(device) if isinstance(value, torch.Tensor) else value
-                    )
-                    for key, value in batch.items()
-                }
+                moved = pipeline.move_batch_to_device(batch)
                 outputs = pipeline.forward(
                     batch=moved,
                     context=Context(

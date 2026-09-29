@@ -220,9 +220,6 @@ class InferenceService:
         (e.g., via ``pipeline.to('cuda')``) and dataloader batches are produced on
         that device. Here, gRPC deserialization always yields CPU tensors, so we
         align them with the pipeline device before forwarding.
-
-        Uses the same robust device detection pattern as StatisticalTrainer,
-        iterating through all nodes to find one with parameters or buffers.
         """
         if pipeline is None:
             return batch
