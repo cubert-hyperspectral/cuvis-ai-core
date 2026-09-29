@@ -290,7 +290,6 @@ class PipelineProfiler:
 DATA_LOAD = "data_load"
 TO_DEVICE = "to_device"
 BATCH_LOOP = "batch_loop"
-DATA_STEPS = (DATA_LOAD, TO_DEVICE, BATCH_LOOP)
 
 
 def format_profiling_table(
@@ -412,7 +411,7 @@ def _data_block(
     col_header = _column_header("Step")
     separator = "-" * len(col_header)
     parts = ["", "Data loading (outside the nodes)", col_header, separator]
-    order = {name: i for i, name in enumerate(DATA_STEPS)}
+    order = {DATA_LOAD: 0, TO_DEVICE: 1, BATCH_LOOP: 2}
     stages = sorted({s.stage for s in rows} | set(first_batches))
     for stage in stages:
         stage_rows = sorted(
@@ -450,7 +449,6 @@ def _data_block(
 __all__ = [
     "BATCH_LOOP",
     "DATA_LOAD",
-    "DATA_STEPS",
     "PipelineProfiler",
     "TO_DEVICE",
     "format_profiling_table",
