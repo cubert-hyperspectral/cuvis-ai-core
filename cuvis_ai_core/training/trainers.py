@@ -435,15 +435,14 @@ class GradientTrainer(pl.LightningModule):
         batch_idx: int,
         *,
         stage: ExecutionStage,
-        split: str,
         collect_metrics: bool,
         monitor_key: str | None,
     ) -> torch.Tensor:
         """Run the graph for one batch of ``stage`` and collect what the split needs.
 
-        ``split`` names the loss bucket, ``collect_metrics`` adds the metric nodes
-        and ``monitor_key`` is the external monitors' key for the loss (``None``
-        logs nothing).
+        Losses land in the ``stage.value`` bucket, ``collect_metrics`` adds the
+        metric nodes and ``monitor_key`` is the external monitors' key for the
+        loss (``None`` logs nothing).
         """
         from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
 
@@ -467,7 +466,7 @@ class GradientTrainer(pl.LightningModule):
         node_outputs = restructure_output_to_node_dict(outputs)
 
         total_loss = self._collect_losses(
-            node_outputs, split, self.current_epoch, batch_idx
+            node_outputs, stage.value, self.current_epoch, batch_idx
         )
         if collect_metrics:
             self._collect_metrics(node_outputs)
@@ -484,7 +483,6 @@ class GradientTrainer(pl.LightningModule):
             batch,
             batch_idx,
             stage=ExecutionStage.TRAIN,
-            split="train",
             collect_metrics=False,
             monitor_key="train/loss",
         )
@@ -495,7 +493,6 @@ class GradientTrainer(pl.LightningModule):
             batch,
             batch_idx,
             stage=ExecutionStage.VAL,
-            split="val",
             collect_metrics=True,
             monitor_key="val/loss",
         )
@@ -506,7 +503,6 @@ class GradientTrainer(pl.LightningModule):
             batch,
             batch_idx,
             stage=ExecutionStage.TEST,
-            split="test",
             collect_metrics=True,
             monitor_key=None,
         )

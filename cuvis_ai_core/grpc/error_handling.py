@@ -153,4 +153,9 @@ def _extract_context(args: tuple, kwargs: dict) -> grpc.ServicerContext:
     return args[2]
 
 
-__all__ = ["get_session_or_error", "grpc_handler", "require_pipeline"]
+__all__ = [
+    "get_session_and_pipeline",
+    "get_session_or_error",
+    "grpc_handler",
+    "require_pipeline",
+]

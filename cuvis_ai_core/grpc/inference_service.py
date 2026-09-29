@@ -40,7 +40,7 @@ class InferenceService:
         )
         if resolved is None:
             return cuvis_ai_pb2.InferenceResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         with ExitStack() as stack:
             # copy_tensors=False yields zero-copy views into the input buffers; the

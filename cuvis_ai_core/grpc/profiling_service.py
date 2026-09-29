@@ -43,7 +43,7 @@ class ProfilingService:
         )
         if resolved is None:
             return cuvis_ai_pb2.SetProfilingResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         # Unset optional scalars read as proto3 defaults (False / 0), the same
         # defaults CuvisPipeline.set_profiling applies.
@@ -70,7 +70,7 @@ class ProfilingService:
         )
         if resolved is None:
             return cuvis_ai_pb2.GetProfilingSummaryResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         # Unset or UNSPECIFIED stage reads as 0, which is not in the map: no filter.
         stage_str = _STAGE_PROTO_TO_STR.get(request.stage)

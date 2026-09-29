@@ -35,7 +35,7 @@ class IntrospectionService:
         )
         if resolved is None:
             return cuvis_ai_pb2.GetPipelineInputsResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         input_specs_dict = pipeline.get_input_specs()
         input_specs = {
@@ -60,7 +60,7 @@ class IntrospectionService:
         )
         if resolved is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         output_specs_dict = pipeline.get_output_specs()
         output_specs = {
@@ -85,7 +85,7 @@ class IntrospectionService:
         )
         if resolved is None:
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
-        session, pipeline = resolved
+        _, pipeline = resolved
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
 
