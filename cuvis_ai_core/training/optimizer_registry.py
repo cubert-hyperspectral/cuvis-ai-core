@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.lr_scheduler import LinearLR, LRScheduler, SequentialLR
 
 from cuvis_ai_core.training.config import OptimizerConfig, SchedulerConfig
 
@@ -90,6 +90,27 @@ SUPPORTED_SCHEDULERS: dict[str, dict[str, Any]] = {
 }
 
 
+def scheduler_supports_warmup(name: str) -> bool:
+    """Whether a linear warmup can precede the scheduler ``name`` names.
+
+    Only an epoch-stepped scheduler can follow a warmup in a ``SequentialLR``
+    chain; one that steps on a monitored metric (``requires_monitor``) cannot.
+    """
+    scheduler_name = _canonical_scheduler_name(name)
+    if scheduler_name is None:
+        raise ValueError(f"Unknown scheduler: {name}")
+    return not SUPPORTED_SCHEDULERS[scheduler_name].get("requires_monitor", False)
+
+
+def _canonical_scheduler_name(name: str) -> str | None:
+    """Return the registry key for a scheduler name or one of its aliases."""
+    normalized = name.lower()
+    for scheduler_name, spec in SUPPORTED_SCHEDULERS.items():
+        if normalized == scheduler_name or normalized in spec.get("aliases", []):
+            return scheduler_name
+    return None
+
+
 # -----------------------------------------------------------------------------
 # Factories
 # -----------------------------------------------------------------------------
@@ -125,18 +146,31 @@ def create_scheduler(
     if config is None or not config.name:
         return None
 
-    scheduler_name = config.name.lower()
-    if scheduler_name in {"none", ""}:
+    if config.name.lower() == "none":
         return None
 
-    if scheduler_name not in SUPPORTED_SCHEDULERS:
-        supported = ", ".join(sorted(SUPPORTED_SCHEDULERS.keys()))
+    scheduler_name = _canonical_scheduler_name(config.name)
+    if scheduler_name is None:
+        supported = ", ".join(sorted(get_supported_schedulers()))
         raise ValueError(
             f"Unsupported scheduler: {config.name}. Supported schedulers: {supported}"
         )
 
     scheduler_spec = SUPPORTED_SCHEDULERS[scheduler_name]
     scheduler_cls = scheduler_spec["class"]
+
+    warmup_epochs = config.warmup_epochs or 0
+    if warmup_epochs > 0:
+        if not scheduler_supports_warmup(scheduler_name):
+            raise ValueError(
+                f"warmup_epochs is not supported with {scheduler_name}: it steps on a "
+                "monitored metric, not on the epoch, so a warmup cannot precede it"
+            )
+        if warmup_epochs >= max_epochs:
+            raise ValueError(
+                f"warmup_epochs ({warmup_epochs}) must be smaller than max_epochs "
+                f"({max_epochs}); otherwise the main schedule never runs"
+            )
 
     if scheduler_name == "reduce_on_plateau":
         kwargs = {
@@ -155,23 +189,40 @@ def create_scheduler(
         if "verbose" in inspect.signature(scheduler_cls).parameters:
             kwargs["verbose"] = config.verbose
     elif scheduler_name == "cosine":
+        # The anneal runs after the warmup, so by default it ends at max_epochs;
+        # an explicit t_max is the caller's and passes through.
         kwargs = {
-            "T_max": config.t_max or max_epochs,
+            "T_max": (
+                config.t_max if config.t_max is not None else max_epochs - warmup_epochs
+            ),
             "eta_min": config.min_lr,
         }
     elif scheduler_name == "step":
         kwargs = {
             "step_size": config.step_size or 1,
-            "gamma": config.gamma or 0.1,
+            "gamma": config.gamma if config.gamma is not None else 0.1,
         }
     elif scheduler_name == "exponential":
         kwargs = {
-            "gamma": config.gamma or 0.99,
+            "gamma": config.gamma if config.gamma is not None else 0.99,
         }
     else:  # pragma: no cover - guarded by registry
         kwargs = {}
 
-    return scheduler_cls(optimizer, **kwargs)
+    scheduler = scheduler_cls(optimizer, **kwargs)
+    if warmup_epochs == 0:
+        return scheduler
+    # Linear ramp from lr / (warmup_epochs + 1) to lr over warmup_epochs epochs,
+    # then the main schedule from its own epoch 0.
+    warmup = LinearLR(
+        optimizer,
+        start_factor=1.0 / (warmup_epochs + 1),
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+    return SequentialLR(
+        optimizer, schedulers=[warmup, scheduler], milestones=[warmup_epochs]
+    )
 
 
 def wrap_scheduler_for_lightning(
@@ -216,11 +267,10 @@ def get_optimizer_info(name: str) -> dict[str, Any]:
 
 def get_scheduler_info(name: str) -> dict[str, Any]:
     """Return scheduler specification by name, resolving aliases."""
-    normalized = name.lower()
-    for scheduler_name, spec in SUPPORTED_SCHEDULERS.items():
-        if normalized == scheduler_name or normalized in spec.get("aliases", []):
-            return spec
-    raise ValueError(f"Unknown scheduler: {name}")
+    scheduler_name = _canonical_scheduler_name(name)
+    if scheduler_name is None:
+        raise ValueError(f"Unknown scheduler: {name}")
+    return SUPPORTED_SCHEDULERS[scheduler_name]
 
 
 __all__ = [
@@ -233,4 +283,5 @@ __all__ = [
     "get_supported_schedulers",
     "get_optimizer_info",
     "get_scheduler_info",
+    "scheduler_supports_warmup",
 ]

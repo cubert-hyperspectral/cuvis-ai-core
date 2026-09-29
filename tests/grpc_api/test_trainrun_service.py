@@ -86,12 +86,72 @@ def test_save_train_run_isolates_weights_save_failure(tmp_path, mock_experiment_
         ),
         ctx,
     )
-    # The yaml still saved; only the optional weights dump failed.
+    # The yaml still saved; only the optional weights dump failed, and the answer
+    # says so: no weights_path, nothing left beside the yaml.
     assert resp.success is True
     assert out.exists()
+    assert resp.weights_path == ""
+    assert not list(tmp_path.glob("*.pt")) and not list(tmp_path.glob("*.tmp"))
     assert any(
         "weights save failed" in str(c.args[0]) for c in ctx.set_details.mock_calls
     )
+
+
+def _session_with_pipeline(sm, mock_experiment_dict, mock_pipeline_dict):
+    import torch
+    from cuvis_ai_schemas.pipeline.config import PipelineConfig
+
+    sid = sm.create_session()
+    session = sm.get_session(sid)
+    session.trainrun_config = TrainRunConfig.from_dict(mock_experiment_dict)
+    session._pipeline_config = PipelineConfig.from_dict(mock_pipeline_dict)
+    node = MagicMock()
+    node.name = "n"
+    node.state_dict.return_value = {"w": torch.zeros(2)}
+    session.pipeline = MagicMock()
+    session.pipeline.nodes.return_value = [node]
+    return sid
+
+
+@pytest.mark.parametrize("failing", ["torch.save", "os.replace"])
+def test_save_train_run_keeps_an_older_checkpoint_intact_and_names_it(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch, failing
+):
+    """A failed weights save (the write or the move into place) leaves the previous
+    <stem>.pt byte-identical, no temp file beside it, an empty weights_path, and details
+    that name the failure and the older checkpoint a loader would otherwise pick up."""
+    import os
+
+    import torch
+
+    sm, service = _service()
+    sid = _session_with_pipeline(sm, mock_experiment_dict, mock_pipeline_dict)
+    weights = tmp_path / "tr_pipeline.pt"
+    weights.write_bytes(b"older checkpoint")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    if failing == "torch.save":
+        monkeypatch.setattr(torch, "save", fail)
+    else:
+        monkeypatch.setattr(os, "replace", fail)
+
+    ctx = Mock()
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(tmp_path / "tr.yaml"), save_weights=True
+        ),
+        ctx,
+    )
+    assert resp.success is True
+    assert resp.weights_path == ""
+    assert (tmp_path / "tr.yaml").exists()
+    assert weights.read_bytes() == b"older checkpoint"
+    assert not list(tmp_path.glob("*.tmp"))
+    detail = ctx.set_details.call_args.args[0]
+    assert "weights save failed" in detail and "disk full" in detail
+    assert str(weights) in detail
 
 
 def test_save_train_run_reanchors_reference_to_sibling(

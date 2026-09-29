@@ -1263,7 +1263,9 @@ class ModelWeights:
         """Delete one snapshot file and its blob when unreferenced; returns bytes freed."""
         if not path.is_file() and not path.is_symlink():
             return 0
-        size = cls._file_size(path) or 0
+        # stat() follows a symlink to the blob, whose bytes are counted below
+        # once no snapshot references it any more; count the link as nothing.
+        size = 0 if path.is_symlink() else (cls._file_size(path) or 0)
         blob: Path | None = None
         if path.is_symlink():
             try:
@@ -1272,7 +1274,10 @@ class ModelWeights:
                 blob = None
         path.unlink()
         freed = size
-        if blob is not None and blob.is_file() and (repo_dir / "blobs") in blob.parents:
+        # The blob is resolved; the repo dir must be too, or a relative cache dir
+        # never matches and the blob is left behind.
+        blobs_dir = (repo_dir / "blobs").resolve()
+        if blob is not None and blob.is_file() and blobs_dir in blob.parents:
             still_referenced = any(
                 other.is_symlink() and other.resolve() == blob
                 for other in (repo_dir / "snapshots").rglob("*")

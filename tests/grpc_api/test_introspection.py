@@ -1,3 +1,5 @@
+import shutil
+
 import grpc
 import pytest
 
@@ -56,6 +58,18 @@ class TestGetPipelineOutputs:
         assert first_output.dtype != cuvis_ai_pb2.D_TYPE_UNSPECIFIED
 
 
+def _expect_rendered(response, requested):
+    """A host with Graphviz answers the requested image; one without it answers the
+    DOT source and says so. Both are correct; a mislabelled fallback is not."""
+    if shutil.which("dot"):
+        assert response.format == requested
+        signature = b"\x89PNG" if requested == "png" else b"<svg"
+        assert signature in response.image_data[:512]
+    else:
+        assert response.format == "dot"
+        assert b"digraph" in response.image_data
+
+
 class TestGetPipelineVisualization:
     def test_get_visualization_png(self, grpc_stub, session):
         session_id = session()
@@ -66,7 +80,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "png"
+        _expect_rendered(response, "png")
 
     def test_get_visualization_svg(self, grpc_stub, session):
         session_id = session()
@@ -77,7 +91,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "svg"
+        _expect_rendered(response, "svg")
 
     def test_default_format_png(self, grpc_stub, session):
         session_id = session()
@@ -86,7 +100,7 @@ class TestGetPipelineVisualization:
         )
 
         assert response.image_data
-        assert response.format == "png"
+        _expect_rendered(response, "png")
 
 
 def test_get_pipeline_visualization_from_config_content(grpc_stub):
@@ -123,3 +137,71 @@ def test_get_pipeline_visualization_oversize_config_is_invalid_argument(grpc_stu
             )
         )
     assert exc.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+class TestIntrospectionWithoutPipeline:
+    """Direct service calls on a session that has no pipeline, the child runtime's state
+    after a load that failed inside it: every introspection RPC answers FAILED_PRECONDITION
+    naming the missing pipeline, as the other pipeline-bound services do."""
+
+    def setup_method(self):
+        from unittest.mock import Mock
+
+        from cuvis_ai_core.grpc.introspection_service import IntrospectionService
+        from cuvis_ai_core.grpc.session_manager import SessionManager
+
+        self.session_manager = SessionManager()
+        self.service = IntrospectionService(self.session_manager)
+        self.ctx = Mock()
+        self.session_id = self.session_manager.create_session()
+
+    def teardown_method(self):
+        for sid in list(self.session_manager._sessions.keys()):
+            self.session_manager.close_session(sid)
+
+    def _assert_failed_precondition(self):
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+        assert "pipeline" in self.ctx.set_details.call_args.args[0].lower()
+
+    def test_get_pipeline_inputs(self):
+        response = self.service.get_pipeline_inputs(
+            cuvis_ai_pb2.GetPipelineInputsRequest(session_id=self.session_id), self.ctx
+        )
+        assert not response.input_names
+        self._assert_failed_precondition()
+
+    def test_get_pipeline_outputs(self):
+        response = self.service.get_pipeline_outputs(
+            cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=self.session_id), self.ctx
+        )
+        assert not response.output_names
+        self._assert_failed_precondition()
+
+    def test_get_pipeline_visualization(self):
+        response = self.service.get_pipeline_visualization(
+            cuvis_ai_pb2.GetPipelineVisualizationRequest(
+                session_id=self.session_id, format="dot"
+            ),
+            self.ctx,
+        )
+        assert not response.image_data
+        self._assert_failed_precondition()
+
+
+def test_get_pipeline_visualization_render_failure_answers_dot_and_says_so(
+    grpc_stub, session, monkeypatch
+):
+    """When rendering fails (no Graphviz binary, a broken install) the answer is the
+    DOT source labelled as such, as the sessionless preview does; a client that decodes
+    by format would otherwise treat DOT text as a PNG."""
+    from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
+
+    def broken(self, *args, **kwargs):
+        raise RuntimeError("dot: command not found")
+
+    monkeypatch.setattr(PipelineVisualizer, "render_graphviz", broken)
+    response = grpc_stub.GetPipelineVisualization(
+        cuvis_ai_pb2.GetPipelineVisualizationRequest(session_id=session(), format="png")
+    )
+    assert response.format == "dot"
+    assert b"digraph" in response.image_data

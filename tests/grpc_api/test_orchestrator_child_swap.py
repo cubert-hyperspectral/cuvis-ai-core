@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import grpc
 import psutil
 import pytest
+import yaml
 from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2
 
 from cuvis_ai_core.grpc import orchestrator_bridge
@@ -1688,3 +1689,220 @@ def test_load_pipeline_does_not_forward_into_a_session_that_closed_meanwhile(
     )
     assert resp.success is False
     assert ctx.code() is grpc.StatusCode.NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# child_ready: one answer for requests that race a pipeline switch
+# ---------------------------------------------------------------------------
+
+
+def _failing_child_build(monkeypatch):
+    """Make the child's pipeline build fail after the child has been attached."""
+    from cuvis_ai_core.pipeline.factory import PipelineBuilder
+
+    def boom(self, *args, **kwargs):
+        raise ValueError("node construction failed inside the child")
+
+    monkeypatch.setattr(PipelineBuilder, "build_from_config", boom)
+
+
+@pytest.mark.parametrize(
+    "forwarder,request_cls",
+    [
+        ("forward_get_pipeline_inputs", cuvis_ai_pb2.GetPipelineInputsRequest),
+        ("forward_get_pipeline_outputs", cuvis_ai_pb2.GetPipelineOutputsRequest),
+        (
+            "forward_get_pipeline_visualization",
+            cuvis_ai_pb2.GetPipelineVisualizationRequest,
+        ),
+        ("forward_save_pipeline", cuvis_ai_pb2.SavePipelineRequest),
+    ],
+)
+def test_pipeline_bound_rpcs_after_a_failed_child_load_answer_failed_precondition(
+    two_plugins, monkeypatch, tmp_path, forwarder, request_cls
+):
+    """The state the child-side guards target, reached the production way: the child
+    is attached, its LoadPipeline failed inside it, so the next pipeline-bound request
+    is forwarded and the child answers FAILED_PRECONDITION naming the missing pipeline.
+    Not the parent's no-child answer, and not ABORTED: the load is over."""
+    sm, sid, _spawner = two_plugins
+    _failing_child_build(monkeypatch)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), ctx
+    )
+    assert resp.success is False
+    session = sm.get_session(sid)
+    assert orchestrator_bridge.get_child(session) is not None
+    assert session.child_ready is True
+
+    ctx = _InMemoryContext()
+    kwargs = {"session_id": sid}
+    if request_cls is cuvis_ai_pb2.SavePipelineRequest:
+        kwargs["pipeline_path"] = str(tmp_path / "out" / "p.yaml")
+    getattr(orchestrator_bridge, forwarder)(sm, request_cls(**kwargs), ctx)
+    assert ctx.code() is grpc.StatusCode.FAILED_PRECONDITION
+    assert "Build pipeline first" in ctx.details()
+    assert not (tmp_path / "out").exists()
+
+
+def test_child_ready_is_cleared_when_the_fresh_handle_is_published(
+    two_plugins, monkeypatch
+):
+    """The flag is cleared at the publish inside ensure_child_for_session, not after it
+    returns: a forwarder that runs between the publish and the load's return sees it."""
+    sm, sid, _spawner = two_plugins
+    session = sm.get_session(sid)
+    real = orchestrator_bridge.ensure_child_for_session
+    seen = {}
+
+    def wrapped(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        seen["child_ready"] = session.child_ready
+        seen["published"] = session.child_handle is handle
+        return handle
+
+    monkeypatch.setattr(orchestrator_bridge, "ensure_child_for_session", wrapped)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), ctx
+    )
+    assert resp.success is True
+    assert seen == {"child_ready": False, "published": True}
+    assert session.child_ready is True
+
+
+def test_requests_racing_a_fresh_child_load_are_aborted(two_plugins, monkeypatch):
+    """Inside the window (fresh child attached, its LoadPipeline not yet returned) every
+    pipeline-bound forwarder answers ABORTED, the code that means repeat the request;
+    once the load has returned the same call reaches the child."""
+    sm, sid, _spawner = two_plugins
+    inside = {}
+    real_call = _InMemoryStub._call
+
+    def racing_call(self, method_name, request, timeout=None):
+        if method_name == "LoadPipeline" and "code" not in inside:
+            ctx = _InMemoryContext()
+            orchestrator_bridge.forward_get_pipeline_outputs(
+                sm, cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=sid), ctx
+            )
+            inside["code"], inside["details"] = ctx.code(), ctx.details()
+            train_ctx = _InMemoryContext()
+            list(
+                orchestrator_bridge.forward_train(
+                    sm, cuvis_ai_pb2.TrainRequest(session_id=sid), train_ctx
+                )
+            )
+            inside["train_code"] = train_ctx.code()
+        return real_call(self, method_name, request, timeout)
+
+    monkeypatch.setattr(_InMemoryStub, "_call", racing_call)
+    ctx = _InMemoryContext()
+    resp = orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), ctx
+    )
+    assert resp.success is True
+    assert inside["code"] is grpc.StatusCode.ABORTED
+    assert "repeat the request" in inside["details"]
+    assert inside["train_code"] is grpc.StatusCode.ABORTED
+
+    after = _InMemoryContext()
+    orchestrator_bridge.forward_get_pipeline_outputs(
+        sm, cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=sid), after
+    )
+    assert after.code() is not grpc.StatusCode.ABORTED
+    assert sm.get_session(sid).child_ready is True
+
+
+def test_a_reuse_load_never_aborts_racing_requests(two_plugins, monkeypatch):
+    """A warm reuse (the child can serve the new pipeline) keeps serving the old one
+    meanwhile: the flag is never cleared, the racing request reaches the child."""
+    sm, sid, spawner = two_plugins
+    first = _InMemoryContext()
+    assert orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), first
+    ).success
+    codes = []
+    real_call = _InMemoryStub._call
+
+    def racing_call(self, method_name, request, timeout=None):
+        if method_name == "LoadPipeline":
+            ctx = _InMemoryContext()
+            orchestrator_bridge.forward_get_pipeline_outputs(
+                sm, cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=sid), ctx
+            )
+            codes.append(ctx.code())
+        return real_call(self, method_name, request, timeout)
+
+    monkeypatch.setattr(_InMemoryStub, "_call", racing_call)
+    second = _InMemoryContext()
+    assert orchestrator_bridge.forward_load_pipeline(
+        sm, _load_request(sid, ["plugin_a"]), second
+    ).success
+    assert len(spawner.handles) == 1
+    assert codes and all(code is not grpc.StatusCode.ABORTED for code in codes)
+
+
+def test_requests_racing_a_restore_into_a_fresh_child_are_aborted(
+    two_plugins, monkeypatch, tmp_path, mock_experiment_dict
+):
+    """The restore path spawns the same way and gates the same window."""
+    sm, sid, _spawner = two_plugins
+    _register(sm, sid, "cu3s_plugin", data_module="cu3s")
+    trainrun = dict(mock_experiment_dict)
+    (tmp_path / "run.yaml").write_text(yaml.safe_dump(trainrun), encoding="utf-8")
+    (tmp_path / trainrun["pipeline"]).write_text(
+        yaml.safe_dump(
+            {
+                "metadata": {"name": "empty"},
+                "plugins": ["plugin_a"],
+                "nodes": [],
+                "connections": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    inside = {}
+    real_call = _InMemoryStub._call
+
+    def racing_call(self, method_name, request, timeout=None):
+        if method_name == "RestoreTrainRun" and "code" not in inside:
+            ctx = _InMemoryContext()
+            orchestrator_bridge.forward_get_pipeline_outputs(
+                sm, cuvis_ai_pb2.GetPipelineOutputsRequest(session_id=sid), ctx
+            )
+            inside["code"] = ctx.code()
+        return real_call(self, method_name, request, timeout)
+
+    monkeypatch.setattr(_InMemoryStub, "_call", racing_call)
+    ctx = _InMemoryContext()
+    orchestrator_bridge.forward_restore_train_run(
+        sm,
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            session_id=sid, trainrun_path=str(tmp_path / "run.yaml")
+        ),
+        ctx,
+    )
+    assert inside["code"] is grpc.StatusCode.ABORTED
+    assert sm.get_session(sid).child_ready is True
+
+
+def test_child_ready_is_restored_when_the_load_fails_after_the_publish(
+    two_plugins, monkeypatch
+):
+    """ensure_child_for_session records the plugin identities after publishing the
+    handle; a failure there is a bug the load re-raises, and the flag must not stay
+    cleared behind it (every later request would be ABORTED for good)."""
+    sm, sid, _spawner = two_plugins
+
+    def broken_identity(manifest):
+        raise RuntimeError("identity failed after the publish")
+
+    monkeypatch.setattr(orchestrator_bridge, "_install_identity", broken_identity)
+    with pytest.raises(RuntimeError, match="after the publish"):
+        orchestrator_bridge.forward_load_pipeline(
+            sm, _load_request(sid, ["plugin_a"]), _InMemoryContext()
+        )
+    session = sm.get_session(sid)
+    assert session.child_handle is not None
+    assert session.child_ready is True

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 import grpc
 import torch
 import yaml
+from loguru import logger
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 from cuvis_ai_core.utils.restore import (
@@ -103,18 +106,20 @@ class TrainRunService:
                 sort_keys=False,
             )
 
-        # Simplified: Only save weights if explicitly requested
+        # Weights only on request. The contract of a failed weights save: the
+        # trainrun yaml is written and stays written, ``weights_path`` is empty,
+        # and the details name the failure and an older ``<stem>.pt`` if one is
+        # still there, since every loader picks that sibling up next to the new
+        # yaml.
         weights_path = None
         if request.save_weights and session.pipeline is not None:
+            # The checkpoint is the pipeline yaml's sibling (`<stem>.pt`), the one
+            # place every loader looks: `CuvisPipeline.load_pipeline`, the CLI
+            # restore, pipeline discovery and the CuvisNEXT pickers all derive the
+            # weights path from the *pipeline* yaml, never from the trainrun yaml.
+            # A live pipeline always has its sibling written above.
+            weights_path_obj = sibling_pipeline_path.with_suffix(".pt")
             try:
-                # The checkpoint is the pipeline yaml's sibling (`<stem>.pt`), the one
-                # place every loader looks: `CuvisPipeline.load_pipeline`, the CLI
-                # restore, pipeline discovery and the CuvisNEXT pickers all derive the
-                # weights path from the *pipeline* yaml, never from the trainrun yaml.
-                # A live pipeline always has its sibling written above.
-                weights_path_obj = sibling_pipeline_path.with_suffix(".pt")
-                weights_path = str(weights_path_obj)
-
                 # Save only the state_dict (weights) without pipeline config
                 state_dict = {}
                 for node in session.pipeline.nodes():
@@ -130,12 +135,41 @@ class TrainRunService:
                     },
                 }
 
-                torch.save(checkpoint, weights_path_obj)
+                # Written to a unique sibling first and moved into place: a failed
+                # save never leaves a truncated ``<stem>.pt``, and two saves to one
+                # stem cannot clobber each other's staging file.
+                with tempfile.NamedTemporaryFile(
+                    dir=weights_path_obj.parent,
+                    prefix=weights_path_obj.name + ".",
+                    suffix=".tmp",
+                    delete=False,
+                ) as staging:
+                    staging_path = Path(staging.name)
+                try:
+                    torch.save(checkpoint, staging_path)
+                    os.replace(staging_path, weights_path_obj)
+                except BaseException:
+                    try:
+                        staging_path.unlink(missing_ok=True)
+                    except OSError:  # cleanup must not mask the failure
+                        pass
+                    raise
+                weights_path = str(weights_path_obj)
 
             except Exception as exc:
-                # Log weights save failure but don't fail the entire operation
+                # The yaml is saved; the client learns from the empty weights_path
+                # and the details that the checkpoint did not land.
+                older = (
+                    f"; an older checkpoint remains at {weights_path_obj}"
+                    if weights_path_obj.exists()
+                    else ""
+                )
+                logger.opt(exception=True).warning(
+                    f"SaveTrainRun wrote {trainrun_path} but not {weights_path_obj}: {exc}"
+                )
                 context.set_details(
-                    f"Train run config saved successfully, but weights save failed: {exc}"
+                    "Train run config saved successfully, but weights save failed: "
+                    f"{exc}{older}"
                 )
 
         return cuvis_ai_pb2.SaveTrainRunResponse(

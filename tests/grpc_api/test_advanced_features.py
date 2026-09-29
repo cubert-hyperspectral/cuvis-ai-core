@@ -4,7 +4,11 @@ import grpc
 import pytest
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, helpers
-from cuvis_ai_core.training.config import OptimizerConfig, TrainingConfig
+from cuvis_ai_core.training.config import (
+    SchedulerConfig,
+    OptimizerConfig,
+    TrainingConfig,
+)
 
 
 class TestCheckpointManagement:
@@ -67,6 +71,52 @@ class TestConfigValidation:
 
         assert response.valid
         assert len(response.errors) == 0
+
+    def _validate_scheduler(self, grpc_stub, **scheduler):
+        config = TrainingConfig(
+            max_epochs=5,
+            accelerator="cpu",
+            optimizer=OptimizerConfig(name="adam", lr=0.001),
+            scheduler=SchedulerConfig(**scheduler),
+        )
+        return grpc_stub.ValidateConfig(
+            cuvis_ai_pb2.ValidateConfigRequest(
+                config_type="training", config_bytes=config.to_json().encode()
+            )
+        )
+
+    def test_plateau_alias_without_monitor_warns(self, grpc_stub):
+        """The warning follows the registry's requires_monitor, so the alias gets it too."""
+        response = self._validate_scheduler(grpc_stub, name="plateau")
+        assert response.valid
+        assert any("monitor" in w for w in response.warnings)
+
+    def test_plateau_with_monitor_does_not_warn(self, grpc_stub):
+        response = self._validate_scheduler(
+            grpc_stub, name="reduce_on_plateau", monitor="val_loss"
+        )
+        assert response.valid
+        assert not response.warnings
+
+    def test_cosine_does_not_warn_about_a_monitor(self, grpc_stub):
+        response = self._validate_scheduler(grpc_stub, name="cosine")
+        assert response.valid
+        assert not response.warnings
+
+    def test_unsupported_scheduler_is_reported_not_internal(self, grpc_stub):
+        response = self._validate_scheduler(grpc_stub, name="bogus")
+        assert not response.valid
+        assert any("Unsupported scheduler 'bogus'" in e for e in response.errors)
+
+    def test_warmup_with_plateau_is_an_error(self, grpc_stub):
+        response = self._validate_scheduler(grpc_stub, name="plateau", warmup_epochs=1)
+        assert not response.valid
+        assert any("warmup_epochs" in e for e in response.errors)
+
+    def test_warmup_as_long_as_the_run_is_an_error(self, grpc_stub):
+        response = self._validate_scheduler(grpc_stub, name="cosine", warmup_epochs=5)
+        assert not response.valid
+        assert any("warmup_epochs" in e for e in response.errors)
 
     def test_validate_invalid_optimizer(self, grpc_stub):
         config = TrainingConfig(

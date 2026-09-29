@@ -118,7 +118,9 @@ def _answer_no_child(session: SessionState, context: grpc.ServicerContext) -> No
 
     While a load owns the session the child is being replaced: ABORTED, repeat
     the request. Otherwise no pipeline was ever loaded, a precondition the
-    caller has to meet first.
+    caller has to meet first. The forwarders give the same ABORTED answer once
+    the fresh child is attached and until its first load returns
+    (``SessionState.child_ready``), so the whole switch shows one code.
     """
     if session.load_in_flight:
         context.set_code(grpc.StatusCode.ABORTED)
@@ -658,6 +660,9 @@ def ensure_child_for_session(
         _discard_runtime_tree(session)
         raise SessionClosedDuringLoad(session_id)
 
+    # Cleared on the line before the handle becomes visible: a forwarder that
+    # runs between this publish and the load's return must find it False.
+    session.child_ready = False
     session.child_handle = handle
     session.resolved_plugins = dict(resolved)
     session.child_data_module = data_module
@@ -770,41 +775,48 @@ def forward_load_pipeline(
             context.set_details(f"Session {request.session_id} was closed")
             return cuvis_ai_pb2.LoadPipelineResponse(success=False)
         try:
-            child = ensure_child_for_session(
-                session_manager,
-                request.session_id,
-                pipeline_config,
-                data_module=data_module,
-            )
-        except Exception as exc:
-            answer = _load_failure_status(
-                exc,
-                subject="pipeline",
-                session_manager=session_manager,
-                session_id=request.session_id,
+            try:
+                child = ensure_child_for_session(
+                    session_manager,
+                    request.session_id,
+                    pipeline_config,
+                    data_module=data_module,
+                )
+            except Exception as exc:
+                answer = _load_failure_status(
+                    exc,
+                    subject="pipeline",
+                    session_manager=session_manager,
+                    session_id=request.session_id,
+                    session=session,
+                )
+                if answer is None:
+                    # A bug, not a load failure: the undecorated servicer reports
+                    # it as UNKNOWN.
+                    raise
+                context.set_code(answer[0])
+                context.set_details(answer[1])
+                return cuvis_ai_pb2.LoadPipelineResponse(success=False)
+            if session.closing.is_set():
+                # A close gave up on the lock between the child's return and this
+                # forward; the child it found attached is stopped or about to be.
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details(f"Session {request.session_id} was closed")
+                return cuvis_ai_pb2.LoadPipelineResponse(success=False)
+            return _call_child_with_error_propagation(
+                child,
+                "LoadPipeline",
+                request,
+                context,
+                lambda: cuvis_ai_pb2.LoadPipelineResponse(success=False),
                 session=session,
             )
-            if answer is None:
-                # A bug, not a load failure: the undecorated servicer reports
-                # it as UNKNOWN.
-                raise
-            context.set_code(answer[0])
-            context.set_details(answer[1])
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        if session.closing.is_set():
-            # A close gave up on the lock between the child's return and this
-            # forward; the child it found attached is stopped or about to be.
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Session {request.session_id} was closed")
-            return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-        return _call_child_with_error_propagation(
-            child,
-            "LoadPipeline",
-            request,
-            context,
-            lambda: cuvis_ai_pb2.LoadPipelineResponse(success=False),
-            session=session,
-        )
+        finally:
+            # Whatever happened once the handle was published (the forwarded
+            # call returned, the closing early return, a raise from the
+            # identity bookkeeping after the publish), the switch window is
+            # over: the child answers for itself from here on.
+            session.child_ready = True
 
 
 def forward_inference(
@@ -837,6 +849,10 @@ def forward_train(
     child = get_child(session)
     if child is None:
         _answer_no_child(session, context)
+        return iter([])
+    if not session.child_ready:
+        context.set_code(grpc.StatusCode.ABORTED)
+        context.set_details(_LOAD_IN_FLIGHT_DETAIL)
         return iter([])
 
     def _proxy():
@@ -936,47 +952,51 @@ def forward_restore_train_run(
             context.set_details(f"Session {parent_session_id} was closed")
             return cuvis_ai_pb2.RestoreTrainRunResponse()
         try:
-            ensure_child_for_session(
-                session_manager,
-                parent_session_id,
-                pipeline_config,
-                data_module=trainrun_data_module,
-            )
-        except Exception as exc:
-            # The status is decided before the owned session is dropped: the
-            # drop closes it, and a closed session must not turn every
-            # failure into NOT_FOUND.
-            answer = _load_failure_status(
-                exc,
-                subject="trainrun",
-                session_manager=session_manager,
-                session_id=parent_session_id,
+            try:
+                child = ensure_child_for_session(
+                    session_manager,
+                    parent_session_id,
+                    pipeline_config,
+                    data_module=trainrun_data_module,
+                )
+            except Exception as exc:
+                # The status is decided before the owned session is dropped: the
+                # drop closes it, and a closed session must not turn every
+                # failure into NOT_FOUND.
+                answer = _load_failure_status(
+                    exc,
+                    subject="trainrun",
+                    session_manager=session_manager,
+                    session_id=parent_session_id,
+                    session=parent_session,
+                )
+                if not isinstance(exc, SessionClosedDuringLoad):
+                    _drop_owned_session()
+                if answer is None:
+                    # A bug, not a load failure: the undecorated servicer reports
+                    # it as UNKNOWN.
+                    raise
+                context.set_code(answer[0])
+                context.set_details(answer[1])
+                return cuvis_ai_pb2.RestoreTrainRunResponse()
+
+            if parent_session.closing.is_set():
+                # See forward_load_pipeline: a close gave up on the lock meanwhile.
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details(f"Session {parent_session_id} was closed")
+                return cuvis_ai_pb2.RestoreTrainRunResponse()
+            response = _call_child_with_error_propagation(
+                child,
+                "RestoreTrainRun",
+                request,
+                context,
+                cuvis_ai_pb2.RestoreTrainRunResponse,
                 session=parent_session,
             )
-            if not isinstance(exc, SessionClosedDuringLoad):
-                _drop_owned_session()
-            if answer is None:
-                # A bug, not a load failure: the undecorated servicer reports
-                # it as UNKNOWN.
-                raise
-            context.set_code(answer[0])
-            context.set_details(answer[1])
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-
-        if parent_session.closing.is_set():
-            # See forward_load_pipeline: a close gave up on the lock meanwhile.
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Session {parent_session_id} was closed")
-            return cuvis_ai_pb2.RestoreTrainRunResponse()
-        child = parent_session.child_handle
-        response = _call_child_with_error_propagation(
-            child,
-            "RestoreTrainRun",
-            request,
-            context,
-            cuvis_ai_pb2.RestoreTrainRunResponse,
-            session=parent_session,
-        )
+        finally:
+            # See forward_load_pipeline: the switch window ends here on every
+            # path out of the block.
+            parent_session.child_ready = True
     # Contract: the child reuses the session_id we pinned via
     # InitializeSession, so an empty session_id in its response means
     # "same as the parent's". Fill in the parent id for the public client.
@@ -1010,6 +1030,13 @@ def _forward_pipeline_op(
     child = get_child(session)
     if child is None:
         _answer_no_child(session, context)
+        return empty_response_factory()
+    if not session.child_ready:
+        # A fresh child is attached but its first load has not returned: the
+        # same switch window _answer_no_child covers before the attach, and
+        # the same answer.
+        context.set_code(grpc.StatusCode.ABORTED)
+        context.set_details(_LOAD_IN_FLIGHT_DETAIL)
         return empty_response_factory()
     return _call_child_with_error_propagation(
         child, stub_method, request, context, empty_response_factory, session=session

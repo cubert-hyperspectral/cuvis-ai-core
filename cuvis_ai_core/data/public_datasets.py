@@ -447,6 +447,9 @@ class PublicDatasets:
             }
             snapshot_download, hf_api = cls._require_hf_hub()
             target.mkdir(parents=True, exist_ok=True)
+            # This marker replaces the complete one before the snapshot starts, so
+            # it carries the old revision's file list: a refresh that fails midway
+            # must still know which files are stale when it is resumed.
             cls._write_marker(
                 target,
                 {
@@ -454,6 +457,7 @@ class PublicDatasets:
                     "repo_id": spec.repo_id,
                     "revision": spec.revision,
                     "started_at": _now(),
+                    "files": (current.marker or {}).get("files", []),
                 },
             )
             try:

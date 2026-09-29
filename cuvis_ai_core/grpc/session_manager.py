@@ -24,6 +24,8 @@ from cuvis_ai_core.training.config import (
 )
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 
+from .helpers import get_server_base_dir
+
 
 class ChildStillRunning(RuntimeError):
     """The session's child runtime survived terminate and kill.
@@ -55,6 +57,19 @@ CLOSE_LOCK_RETRY_SECONDS = 1.0
 CHILD_STOP_GRACE_SECONDS = 2.0
 
 
+def default_search_paths() -> list[str]:
+    """The one directory a session searches until the client sets its own.
+
+    ``CUVIS_CONFIGS_DIR`` when it is set, else ``<cwd>/configs``: the directory
+    discovery lists pipelines from and a relative SavePipeline writes to, so a
+    pipeline the discovery RPC names resolves in a fresh session by its
+    ``pipeline/<name>`` path. Resolved once, when the session is created; the
+    child runtime is spawned with the server's working directory and gets the
+    same absolute path. Directories a client appends come after it.
+    """
+    return [str(get_server_base_dir().resolve())]
+
+
 @dataclass
 class SessionState:
     """State for a single training session."""
@@ -66,9 +81,7 @@ class SessionState:
     data_config: DataConfig | None = None
     training_config: TrainingConfig | None = None
     trainrun_config: TrainRunConfig | None = None
-    search_paths: list[str] = field(
-        default_factory=lambda: ["./configs", "./configs/pipeline"]
-    )
+    search_paths: list[str] = field(default_factory=default_search_paths)
     trainer: Any | None = None
     # Cooperative-cancel flag for the session's training run. Set by StopTrain
     # (or a dropped Train stream); checked per batch / between statistical
@@ -103,6 +116,12 @@ class SessionState:
     # pipeline's plugins against these, not against ``resolved_plugins``: a
     # local plugin's pyproject may have changed on disk since the compose.
     child_install: dict[str, tuple] | None = None
+    # False from the moment a fresh child handle is published until that
+    # child's first forwarded LoadPipeline / RestoreTrainRun has returned.
+    # The pipeline-bound forwarders answer ABORTED meanwhile, so a switch
+    # has one answer whether or not the new child is attached yet; a reuse
+    # never clears it, so the old pipeline keeps serving during a warm load.
+    child_ready: bool = True
     # Serialises everything that decides over or replaces the child: a
     # LoadPipeline / RestoreTrainRun holds it from the reuse-or-replace
     # decision through the forwarded call, close_session holds it while it
@@ -191,7 +210,7 @@ class SessionManager:
             data_config=data_config,
             training_config=training_config,
             trainrun_config=trainrun_config,
-            search_paths=search_paths or ["./configs"],
+            search_paths=search_paths or default_search_paths(),
         )
         self._sessions[session_id] = state
         logger.info(f"Created session: {session_id}")
@@ -282,9 +301,7 @@ class SessionManager:
                 if path not in session.search_paths:
                     session.search_paths.append(path)
         else:
-            session.search_paths = (
-                valid_paths if valid_paths else ["./configs", "./configs/pipeline"]
-            )
+            session.search_paths = valid_paths or default_search_paths()
 
         logger.info(f"Session {session_id} search paths: {session.search_paths}")
         return session.search_paths, rejected_paths
@@ -571,4 +588,4 @@ class SessionManager:
         return len(expired)
 
 
-__all__ = ["SessionManager", "SessionState"]
+__all__ = ["SessionManager", "SessionState", "default_search_paths"]

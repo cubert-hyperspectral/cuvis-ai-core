@@ -6,8 +6,9 @@ import tempfile
 from pathlib import Path
 
 import grpc
+from loguru import logger
 
-from .error_handling import get_session_or_error, grpc_handler
+from .error_handling import get_session_or_error, grpc_handler, require_pipeline
 from .helpers import spec_to_tensor_spec
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
@@ -30,6 +31,8 @@ class IntrospectionService:
             self.session_manager, request.session_id, context
         )
         if session is None:
+            return cuvis_ai_pb2.GetPipelineInputsResponse()
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.GetPipelineInputsResponse()
 
         input_specs_dict = session.pipeline.get_input_specs()
@@ -55,6 +58,8 @@ class IntrospectionService:
         )
         if session is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
+        if not require_pipeline(session, context):
+            return cuvis_ai_pb2.GetPipelineOutputsResponse()
 
         output_specs_dict = session.pipeline.get_output_specs()
         output_specs = {
@@ -78,6 +83,8 @@ class IntrospectionService:
             self.session_manager, request.session_id, context
         )
         if session is None:
+            return cuvis_ai_pb2.GetPipelineVisualizationResponse()
+        if not require_pipeline(session, context):
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
@@ -105,10 +112,16 @@ class IntrospectionService:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(str(exc))
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
-        except Exception:
-            # Fallback to a DOT string if rendering dependencies are unavailable
+        except Exception as exc:
+            # No renderer on this host (no Graphviz binary, a broken install):
+            # answer the DOT source and label it so, as the sessionless preview
+            # does; a client that decodes by format must not get DOT as a PNG.
+            logger.warning(
+                f"Rendering the pipeline as {format_type} failed, returning DOT: {exc}"
+            )
             dot_source = visualizer.to_graphviz()
             image_data = dot_source.encode("utf-8")
+            format_type = "dot"
 
         return cuvis_ai_pb2.GetPipelineVisualizationResponse(
             image_data=image_data,
