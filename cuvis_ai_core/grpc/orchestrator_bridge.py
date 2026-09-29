@@ -230,7 +230,7 @@ def reset_composer() -> None:
 
 
 def get_spawner() -> ChildRuntimeSpawner:
-    """Return the child-runtime spawner, creating the local subprocess spawner on first use."""
+    """Return the child spawner, creating the local subprocess one on first use."""
     global _spawner
     if _spawner is None:
         _spawner = LocalChildRuntimeSpawner()
@@ -857,7 +857,7 @@ def forward_train(
         return iter([])
 
     def _proxy():
-        """Relay the child's ``Train`` stream; its ``RpcError`` becomes this call's status."""
+        """Relay the child ``Train`` stream; an ``RpcError`` sets the parent status."""
         try:
             yield from child.stub().Train(request)
         except grpc.RpcError as exc:
@@ -1435,7 +1435,7 @@ class _InMemoryStub:
         self._servicer = servicer
 
     def _call(self, method_name: str, request, timeout=None):
-        """Call ``method_name`` on the servicer; a non-OK status raises ``_InMemoryRpcError``."""
+        """Call ``method_name`` on the servicer; non-OK raises ``_InMemoryRpcError``."""
         ctx = _InMemoryContext()
         method = getattr(self._servicer, method_name)
         result = method(request, ctx)
@@ -1497,7 +1497,7 @@ class _InMemoryStub:
         return self._call("Inference", request, timeout)
 
     def Train(self, request, timeout=None):
-        """Forward ``Train`` to the local servicer as a stream that raises on a non-OK status."""
+        """Forward ``Train`` to the local servicer; the stream raises on non-OK."""
         ctx = _InMemoryContext()
         gen = self._servicer.Train(request, ctx)
 

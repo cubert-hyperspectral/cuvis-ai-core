@@ -116,7 +116,7 @@ def _port_spec_to_node(spec: PortSpec) -> NodePortSpec:
 def _specs_map_to_node(
     specs_dict: dict | None,
 ) -> dict[str, NodePortSpec]:
-    """Convert a name-to-``PortSpec`` mapping into manifest port specs; empty when ``None``."""
+    """Convert a ``PortSpec`` mapping to manifest port specs; empty when ``None``."""
     if not specs_dict:
         return {}
     return {
@@ -137,7 +137,7 @@ def _resolve_package_root(node_class: type) -> Path | None:
 
 
 def _category_for(node_class: type, class_name: str) -> NodeCategory:
-    """Return the node's category, ``UNSPECIFIED`` with a warning when ``get_category`` fails."""
+    """Node category; ``UNSPECIFIED`` with a warning when ``get_category`` fails."""
     try:
         return node_class.get_category()
     except Exception as exc:  # pragma: no cover - defensive
@@ -146,7 +146,7 @@ def _category_for(node_class: type, class_name: str) -> NodeCategory:
 
 
 def _tags_for(node_class: type, class_name: str) -> list[str]:
-    """Return the node's tags sorted for a deterministic catalog; empty when ``get_tags`` fails."""
+    """Node tags sorted for a deterministic catalog; empty when ``get_tags`` fails."""
     try:
         # Sort for a deterministic catalog: get_tags() returns an unordered
         # set, so without this the emitted order varies per process and the
@@ -158,7 +158,7 @@ def _tags_for(node_class: type, class_name: str) -> list[str]:
 
 
 def _icon_svg_for(node_class: type, class_name: str, category: NodeCategory) -> str:
-    """Return the node's icon SVG resolved by name or category; empty when resolution fails."""
+    """Node icon SVG resolved by name or category; empty when resolution fails."""
     try:
         icon_name = node_class.get_icon_name()
     except Exception:
@@ -239,7 +239,7 @@ def _entry_to_manifest_dict(entry: PluginCapabilityEntry) -> dict:
     """
 
     def _drop_default_variadic(specs: dict) -> dict:
-        """Drop ``variadic: false`` from each port spec so only the opt-in flag is emitted."""
+        """Drop ``variadic: false`` from each port spec."""
         # `variadic` is an opt-in input flag; only emit it when True.
         return {
             port: {
@@ -387,7 +387,7 @@ def _describe_weight_drift(
 
 
 def _yaml() -> YAML:
-    """Build the ruamel ``YAML`` writer: quotes kept, leaf lists inline, maps block-style."""
+    """Build the ruamel ``YAML`` writer: quotes kept, leaf lists inline, block maps."""
     y = YAML()
     y.preserve_quotes = True
     # None = leaf (scalar-only) collections like `shape` / `tags` render inline
