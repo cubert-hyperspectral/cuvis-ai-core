@@ -133,7 +133,7 @@ class PipelineVisualizer:
                 target,
                 edge_data,
                 include_port_types=show_port_types,
-                dedupe_matching_ports=not show_port_types,
+                omit_port_label=not show_port_types,
             )
 
             src_anchor = (
@@ -338,14 +338,14 @@ class PipelineVisualizer:
         *,
         include_port_types: bool,
         mermaid: bool = False,
-        dedupe_matching_ports: bool = False,
+        omit_port_label: bool = False,
     ) -> str:
         from_port = edge_data.get("from_port") or ""
         to_port = edge_data.get("to_port") or ""
 
         # In card mode the port names are already rendered beside each dot
         # inside the node card, so no edge label is needed.
-        if dedupe_matching_ports and not include_port_types:
+        if omit_port_label and not include_port_types:
             return ""
 
         from_spec = (

@@ -38,7 +38,7 @@ class _P2MedianEstimator:
     Quantiles and Histograms Without Storing Observations", 1985.
     """
 
-    __slots__ = ("_warmup", "_q", "_n", "_ns", "_dn", "_heights")
+    __slots__ = ("_warmup", "_q", "_n", "_ns", "_dn", "_active")
 
     def __init__(self) -> None:
         self._warmup: list[float] = []
@@ -47,10 +47,10 @@ class _P2MedianEstimator:
         self._n: list[int] = []  # marker positions
         self._ns: list[float] = []  # desired marker positions
         self._dn: list[float] = []  # desired position increments
-        self._heights: bool = False  # True once P² is active
+        self._active: bool = False  # True once P² is active
 
     def add(self, x: float) -> None:
-        if not self._heights:
+        if not self._active:
             self._warmup.append(x)
             if len(self._warmup) == 5:
                 self._init_p2()
@@ -60,7 +60,7 @@ class _P2MedianEstimator:
     @property
     def median(self) -> float:
         """Exact median during the warm-up buffer, P² estimate afterwards."""
-        if not self._heights:
+        if not self._active:
             return statistics.median(self._warmup) if self._warmup else 0.0
         return self._q[2]
 
@@ -72,7 +72,7 @@ class _P2MedianEstimator:
         self._n = [1, 2, 3, 4, 5]
         self._ns = [1.0, 2.0, 3.0, 4.0, 5.0]
         self._dn = [0.0, 0.25, 0.5, 0.75, 1.0]
-        self._heights = True
+        self._active = True
 
     def _update_p2(self, x: float) -> None:
         q, n, ns, dn = self._q, self._n, self._ns, self._dn

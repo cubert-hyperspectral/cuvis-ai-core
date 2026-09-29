@@ -737,7 +737,8 @@ def forward_load_pipeline(
 ) -> cuvis_ai_pb2.LoadPipelineResponse:
     """Parent's LoadPipeline path: ensure_child + forward unmodified."""
     from cuvis_ai_core.grpc.error_handling import get_session_or_error
-    from cuvis_ai_core.training.config import PipelineConfig
+
+    from cuvis_ai_schemas.pipeline import PipelineConfig
 
     session = get_session_or_error(session_manager, request.session_id, context)
     if session is None:

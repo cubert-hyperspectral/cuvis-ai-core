@@ -75,7 +75,7 @@ from cuvis_ai_core.data._provisioning import (
     ProgressEmitter,
     ProgressPoller,
     log,
-    monotonic_start,
+    wall_clock_start,
     newest_incomplete_blob,
     root_lock,
     sha256_of,
@@ -907,7 +907,7 @@ class ModelWeights:
         primary: Path | None = None
         for fname, sha, size in files:
             log(f"Fetching {entry.repo_id}/{fname}@{entry.revision[:12]} -> {root}")
-            started = monotonic_start()
+            started = wall_clock_start()
             poller = (
                 ProgressPoller(
                     progress,
@@ -970,7 +970,7 @@ class ModelWeights:
             + f" -> {cache_dir}"
         )
         blobs_dir = cache_dir / cls.cache_dir_token(repo_id) / "blobs"
-        started = monotonic_start()
+        started = wall_clock_start()
         poller = (
             ProgressPoller(
                 progress,
