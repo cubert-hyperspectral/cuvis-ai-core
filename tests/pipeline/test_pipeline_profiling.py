@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import cuvis_ai_core.pipeline.pipeline as pipeline_mod
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.profiling import PipelineProfiler
@@ -368,3 +369,263 @@ class TestFormattingAndSaveGuards:
         assert CuvisPipeline._infer_cuda_device(
             _InputNode(), {"x": input_tensor}
         ) == torch.device("cuda:3")
+
+
+# ---------------------------------------------------------------------------
+# iter_profiled_batches: the data-loading side of profiling
+# ---------------------------------------------------------------------------
+
+
+def _scripted_clock(monkeypatch: pytest.MonkeyPatch, step_ms: float = 1.0):
+    """Replace pipeline.py's clock with one that advances ``step_ms`` per call.
+
+    Only the module's ``time`` reference is swapped, so the global module is untouched.
+    Returns the fake so a test can advance the clock itself (simulating consumer work).
+    """
+    state = {"now": 0}
+    step_ns = int(step_ms * 1_000_000)
+
+    def perf_counter_ns() -> int:
+        state["now"] += step_ns
+        return state["now"]
+
+    fake = SimpleNamespace(perf_counter_ns=perf_counter_ns)
+    monkeypatch.setattr(pipeline_mod, "time", fake)
+    return fake
+
+
+def _batches(n: int) -> list[dict[str, torch.Tensor]]:
+    return [{"x": torch.tensor([float(i)])} for i in range(n)]
+
+
+def _move(batch: dict) -> dict:
+    moved = dict(batch)
+    moved["moved"] = True
+    return moved
+
+
+def _rows(pipeline: CuvisPipeline, stage: str = "inference") -> dict[str, object]:
+    return {
+        s.node_name: s
+        for s in pipeline.get_data_profiling_summary()
+        if s.stage == stage
+    }
+
+
+class TestIterProfiledBatches:
+    def test_records_each_step_excluding_the_first_iteration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        out = list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+
+        assert [b["moved"] for b in out] == [True, True, True]
+        rows = _rows(pipeline)
+        assert set(rows) == {"data_load", "to_device", "batch_loop"}
+        assert {name: r.count for name, r in rows.items()} == {
+            "data_load": 2,
+            "to_device": 2,
+            "batch_loop": 2,
+        }
+        # clock ticks: fetch start, fetch end, move end, loop close -> 1 / 1 / 3 ms
+        assert rows["data_load"].mean_ms == 1.0
+        assert rows["to_device"].mean_ms == 1.0
+        assert rows["batch_loop"].mean_ms == 3.0
+        assert pipeline._first_batch_ms == {"inference": [1.0]}
+
+    def test_skip_first_n_applies_on_top_of_the_excluded_first_iteration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True, skip_first_n=1)
+
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+
+        assert {name: r.count for name, r in _rows(pipeline).items()} == {
+            "data_load": 1,
+            "to_device": 1,
+            "batch_loop": 1,
+        }
+        assert pipeline._first_batch_ms == {"inference": [1.0]}
+
+    def test_last_batch_loop_closes_on_the_final_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        it = pipeline.iter_profiled_batches(
+            _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+        )
+        for i, _ in enumerate(it):
+            if i == 2:  # consumer work after the last batch, before it asks again
+                clock.perf_counter_ns()
+                clock.perf_counter_ns()
+
+        loop = _rows(pipeline)["batch_loop"]
+        assert loop.count == 2
+        assert loop.max_ms == 5.0  # 3 ms of helper ticks + 2 ms of consumer work
+        assert loop.mean_ms == 4.0
+
+    def test_break_records_no_open_sample_and_close_discards_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        it = pipeline.iter_profiled_batches(
+            _batches(5), stage=ExecutionStage.INFERENCE, move=_move
+        )
+        next(it)
+        next(it)
+        next(it)  # closes iteration 2's loop sample; iteration 3's stays open
+        rows = _rows(pipeline)
+        assert rows["batch_loop"].count == 1
+        assert rows["data_load"].count == 2
+
+        it.close()  # GeneratorExit at the yield: the open sample is dropped
+        rows = _rows(pipeline)
+        assert rows["batch_loop"].count == 1
+        assert rows["data_load"].count == 2
+
+    def test_exception_thrown_in_discards_the_open_sample(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        it = pipeline.iter_profiled_batches(
+            _batches(5), stage=ExecutionStage.INFERENCE, move=_move
+        )
+        next(it)
+        next(it)
+        next(it)
+        with pytest.raises(RuntimeError, match="consumer failed"):
+            it.throw(RuntimeError("consumer failed"))
+
+        assert _rows(pipeline)["batch_loop"].count == 1
+
+    def test_move_none_has_no_to_device_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        out = list(
+            pipeline.iter_profiled_batches(_batches(3), stage=ExecutionStage.INFERENCE)
+        )
+
+        assert "moved" not in out[0]
+        rows = _rows(pipeline)
+        assert set(rows) == {"data_load", "batch_loop"}
+        assert rows["batch_loop"].mean_ms == 2.0  # fetch start, fetch end, loop close
+
+    def test_disabled_records_nothing_but_still_moves(self) -> None:
+        pipeline = CuvisPipeline("test")
+
+        out = list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+
+        assert [b["moved"] for b in out] == [True, True, True]
+        assert pipeline.get_data_profiling_summary() == []
+        assert pipeline._first_batch_ms == {}
+
+    def test_reset_clears_data_stats_and_first_batch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+        assert pipeline.get_data_profiling_summary() != []
+
+        pipeline.reset_profiling()
+        assert pipeline.get_data_profiling_summary() == []
+        assert pipeline._first_batch_ms == {}
+
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+        pipeline.set_profiling(enabled=True, reset=True)
+        assert pipeline.get_data_profiling_summary() == []
+        assert pipeline._first_batch_ms == {}
+
+    def test_sync_after_move_and_before_each_loop_close(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _CudaLike(torch.Tensor):
+            @property
+            def is_cuda(self) -> bool:  # type: ignore[override]
+                return True
+
+            @property
+            def device(self) -> torch.device:  # type: ignore[override]
+                return torch.device("cuda:0")
+
+        sync_calls: list[torch.device] = []
+        monkeypatch.setattr(
+            torch.cuda, "synchronize", lambda device=None: sync_calls.append(device)
+        )
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True, synchronize_cuda=True)
+
+        def move_to_cuda_like(batch: dict) -> dict:
+            return {"x": batch["x"].as_subclass(_CudaLike)}
+
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(2), stage=ExecutionStage.INFERENCE, move=move_to_cuda_like
+            )
+        )
+        # per iteration: once after the move, once before the loop sample closes
+        assert sync_calls == [torch.device("cuda:0")] * 4
+
+        sync_calls.clear()
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(2), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+        assert sync_calls == []  # CPU tensors: nothing to synchronize
+
+    def test_node_summary_stays_node_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _scripted_clock(monkeypatch)
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+
+        assert pipeline.get_profiling_summary() == []
+        assert pipeline.get_data_profiling_summary() != []
+        assert pipeline.get_data_profiling_summary(stage=ExecutionStage.TRAIN) == []

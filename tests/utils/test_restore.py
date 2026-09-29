@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 from textwrap import dedent
@@ -82,6 +83,79 @@ def test_restore_pipeline_runs_inference_with_profiling_and_video_finalize(
     assert fake_pipeline.summary_calls == [(ExecutionStage.INFERENCE, 2)]
     assert fake_pipeline.video_node.close_calls == 1
     assert tqdm_calls == [{"desc": "Inference", "unit": "batch"}]
+    # The loop runs through the pipeline's profiled iterator (device copy included),
+    # without CUDA sync by default, and closes the iterator it owns.
+    assert fake_pipeline.synchronize_cuda == [False]
+    assert fake_pipeline.iter_calls == [
+        {"stage": ExecutionStage.INFERENCE, "has_move": True}
+    ]
+    assert inspect.getgeneratorstate(fake_pipeline.iterators[0]) == inspect.GEN_CLOSED
+
+
+def _run_restore_with_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **kwargs):
+    fake_pipeline = FakeRestorePipeline()
+    monkeypatch.setattr(
+        restore_mod,
+        "_build_data_module",
+        lambda registry, data_config, candidate_dirs: FakeRestoreDataModule(
+            data_config
+        ),
+    )
+    monkeypatch.setattr(restore_mod, "tqdm", lambda iterable, **kw: iterable)
+    monkeypatch.setattr(
+        restore_mod.CuvisPipeline,
+        "load_pipeline",
+        staticmethod(lambda *args, **kw: fake_pipeline),
+    )
+    restore_mod.restore_pipeline(
+        pipeline_path=tmp_path / "pipeline.yaml",
+        data_module="cu3s",
+        data_args={"cu3s_file_path": str(tmp_path / "sample.cu3s")},
+        **kwargs,
+    )
+    return fake_pipeline
+
+
+def test_restore_pipeline_device_auto_passes_no_move(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_pipeline = _run_restore_with_fakes(monkeypatch, tmp_path, device="auto")
+
+    assert fake_pipeline.iter_calls == [
+        {"stage": ExecutionStage.INFERENCE, "has_move": False}
+    ]
+    assert len(fake_pipeline.forward_calls) == 2
+
+
+def test_restore_pipeline_profile_sync_reaches_set_profiling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake_pipeline = _run_restore_with_fakes(
+        monkeypatch, tmp_path, device="cpu", profile_sync=True
+    )
+
+    assert fake_pipeline.profiling_enabled == [True]
+    assert fake_pipeline.synchronize_cuda == [True]
+
+
+def test_restore_pipeline_cli_profile_sync_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        restore_mod, "restore_pipeline", lambda **kwargs: captured.update(kwargs)
+    )
+
+    monkeypatch.setattr(
+        sys, "argv", ["restore-pipeline", "--pipeline-path", "p.yaml", "--profile-sync"]
+    )
+    restore_mod.restore_pipeline_cli()
+    assert captured["profile_sync"] is True
+
+    captured.clear()
+    monkeypatch.setattr(sys, "argv", ["restore-pipeline", "--pipeline-path", "p.yaml"])
+    restore_mod.restore_pipeline_cli()
+    assert captured["profile_sync"] is False
 
 
 def test_restore_pipeline_cli_parses_data_module_and_data_args(

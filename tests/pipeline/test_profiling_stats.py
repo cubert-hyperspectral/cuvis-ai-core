@@ -325,3 +325,141 @@ class TestFormatProfilingTable:
     def test_no_metadata(self) -> None:
         table = format_profiling_table(self._make_stats())
         assert table.startswith("Profiling Summary\n")
+
+
+class TestFormatProfilingTableDataBlock:
+    """The data-loading block: rows recorded outside the nodes, plus the first-batch line."""
+
+    def _node_stats(self) -> list[NodeProfilingStats]:
+        return TestFormatProfilingTable._make_stats(self)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _row(
+        name: str, *, stage: str = "inference", count: int = 50, mean_ms: float = 100.0
+    ) -> NodeProfilingStats:
+        return NodeProfilingStats(
+            node_name=name,
+            stage=stage,
+            count=count,
+            mean_ms=mean_ms,
+            median_ms=mean_ms,
+            std_ms=0.0,
+            min_ms=mean_ms,
+            max_ms=mean_ms,
+            total_ms=mean_ms * count,
+            last_ms=mean_ms,
+        )
+
+    def _data_stats(self, stage: str = "inference") -> list[NodeProfilingStats]:
+        return [
+            self._row("data_load", stage=stage, mean_ms=100.0),
+            self._row("to_device", stage=stage, mean_ms=2.0),
+            self._row("batch_loop", stage=stage, mean_ms=110.0),
+        ]
+
+    def test_data_block_rows_first_batch_and_per_batch_line(self) -> None:
+        table = format_profiling_table(
+            self._node_stats(),
+            data_stats=self._data_stats(),
+            first_batch_ms={"inference": [14620.0]},
+        )
+        assert "Data loading (outside the nodes)" in table
+        rows = [
+            line
+            for line in table.split("\n")
+            if line.startswith(("data_load", "to_device", "batch_loop"))
+        ]
+        assert [r.split()[0] for r in rows] == ["data_load", "to_device", "batch_loop"]
+        assert (
+            "First batch data load (inference, excluded from the rows): 14.62 s"
+            in table
+        )
+        # 1000 / 110 ms = 9.09 batches/s
+        assert (
+            "Time per batch (inference, batch_loop, host wall time): 110.00 ms (9.1 batches/s)"
+            in table
+        )
+
+    def test_first_batch_line_over_two_passes(self) -> None:
+        table = format_profiling_table(
+            self._node_stats(),
+            data_stats=self._data_stats(),
+            first_batch_ms={"inference": [14500.0, 14700.0]},
+        )
+        assert (
+            "First batch data load (inference, excluded from the rows): "
+            "mean 14.60 s over 2 passes (min 14.50 s, max 14.70 s)"
+        ) in table
+
+    def test_two_stages_are_reported_separately(self) -> None:
+        data = self._data_stats("inference") + [
+            self._row("data_load", stage="test", mean_ms=180.0),
+            self._row("batch_loop", stage="test", mean_ms=200.0),
+        ]
+        table = format_profiling_table(self._node_stats(), data_stats=data)
+        assert (
+            "Time per batch (inference, batch_loop, host wall time): 110.00 ms" in table
+        )
+        assert "Time per batch (test, batch_loop, host wall time): 200.00 ms" in table
+        assert "155.00 ms" not in table  # never the mean of the two stages
+
+    def test_node_block_is_unchanged_by_the_data_block(self) -> None:
+        without = format_profiling_table(
+            self._node_stats(), total_frames=103, skip_first_n=3
+        )
+        with_data = format_profiling_table(
+            self._node_stats(),
+            total_frames=103,
+            skip_first_n=3,
+            data_stats=self._data_stats(),
+            first_batch_ms={"inference": [14620.0]},
+        )
+        assert with_data.startswith(without)
+
+    def test_no_data_kwargs_is_todays_output(self) -> None:
+        assert format_profiling_table(
+            self._node_stats(), data_stats=None, first_batch_ms=None
+        ) == format_profiling_table(self._node_stats())
+        assert "Data loading" not in format_profiling_table(self._node_stats())
+
+    def test_empty_data_stats_prints_no_block(self) -> None:
+        table = format_profiling_table(
+            self._node_stats(), data_stats=[], first_batch_ms={}
+        )
+        assert "Data loading" not in table
+        assert "First batch" not in table
+
+    def test_data_block_without_node_stats(self) -> None:
+        table = format_profiling_table([], data_stats=self._data_stats())
+        assert table != "No profiling data collected."
+        assert "Data loading (outside the nodes)" in table
+        assert any(line.startswith("data_load") for line in table.split("\n"))
+
+    def test_zero_count_rows_are_filtered(self) -> None:
+        zero = [
+            self._row("data_load", count=0, mean_ms=0.0),
+            self._row("to_device", count=0, mean_ms=0.0),
+            self._row("batch_loop", count=0, mean_ms=0.0),
+        ]
+        table = format_profiling_table(
+            self._node_stats(), data_stats=zero, first_batch_ms={"inference": [14620.0]}
+        )
+        assert not any(
+            line.startswith(("data_load", "to_device", "batch_loop"))
+            for line in table.split("\n")
+        )
+        assert "Time per batch" not in table
+        assert (
+            "First batch data load (inference, excluded from the rows): 14.62 s"
+            in table
+        )
+
+    def test_cuda_synchronized_label(self) -> None:
+        table = format_profiling_table(
+            self._node_stats(), data_stats=self._data_stats(), cuda_synchronized=True
+        )
+        assert (
+            "Time per batch (inference, batch_loop, CUDA-synchronized): 110.00 ms"
+            in table
+        )
+        assert "host wall time" not in table

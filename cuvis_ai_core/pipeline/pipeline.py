@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 from copy import copy
 from datetime import datetime
 from functools import cached_property
@@ -19,7 +19,13 @@ from cuvis_ai_core.utils.node_registry import NodeRegistry
 
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline._metadata_warnings import warn_if_metadata_missing
-from cuvis_ai_core.pipeline.profiling import PipelineProfiler, format_profiling_table
+from cuvis_ai_core.pipeline.profiling import (
+    BATCH_LOOP,
+    DATA_LOAD,
+    TO_DEVICE,
+    PipelineProfiler,
+    format_profiling_table,
+)
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import (
@@ -166,6 +172,10 @@ class CuvisPipeline:
         self._profiling_enabled: bool = False
         self._profiler: PipelineProfiler | None = None
         self._synchronize_cuda: bool = False
+        # The data-loading side, fed by ``iter_profiled_batches``: per stage, the
+        # first fetch of every pass (one-time setup, kept out of the rows).
+        self._data_profiler: PipelineProfiler | None = None
+        self._first_batch_ms: dict[str, list[float]] = {}
         # Port-retention profile (see PORT_RETENTION_ENV). The env switch is read
         # once per pipeline; ``set_profiling(port_retention=...)`` is the API switch.
         self._port_retention_env: bool = (
@@ -1134,11 +1144,16 @@ class CuvisPipeline:
             Activate or deactivate profiling.
         synchronize_cuda : bool
             If ``True``, call ``torch.cuda.synchronize`` before and after each
-            ``node.forward()`` for accurate GPU wall-clock timing.
+            ``node.forward()`` for accurate GPU wall-clock timing, and in
+            :meth:`iter_profiled_batches` after the device copy and before each
+            loop sample closes.
         reset : bool
-            If ``True``, discard all previously accumulated statistics.
+            If ``True``, discard all previously accumulated statistics, the
+            data-loading ones included.
         skip_first_n : int
-            Number of initial samples per node to discard (warm-up skip).
+            Number of initial samples per node to discard (warm-up skip). The
+            data-loading rows skip the same number, on top of the first iteration
+            of every pass that :meth:`iter_profiled_batches` always leaves out.
         port_retention : bool
             If ``True``, log one DEBUG line per executed node with the bytes the
             forward's port table still holds (CUDA subtotal included), for the
@@ -1158,14 +1173,127 @@ class CuvisPipeline:
 
         if reset or self._profiler is None:
             self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
+            self._new_data_profiler(skip_first_n)
         elif enabled and self._profiler.skip_first_n != skip_first_n:
             # skip_first_n changed without reset — recreate per spec
             self._profiler = PipelineProfiler(skip_first_n=skip_first_n)
+            self._new_data_profiler(skip_first_n)
+
+    def _new_data_profiler(self, skip_first_n: int) -> None:
+        """Start the data-loading statistics over, with the node profiler's skip."""
+        self._data_profiler = PipelineProfiler(skip_first_n=skip_first_n)
+        self._first_batch_ms = {}
 
     def reset_profiling(self) -> None:
-        """Clear all accumulated profiling statistics."""
+        """Clear all accumulated profiling statistics, the data-loading ones included."""
         if self._profiler is not None:
             self._profiler.reset()
+        if self._data_profiler is not None:
+            self._data_profiler.reset()
+        self._first_batch_ms = {}
+
+    def get_data_profiling_summary(
+        self,
+        stage: ExecutionStage | None = None,
+    ) -> list[NodeProfilingStats]:
+        """Return the data-loading stats recorded by :meth:`iter_profiled_batches`.
+
+        The rows are named after the steps (``data_load``, ``to_device``,
+        ``batch_loop``); :meth:`get_profiling_summary` stays node-only.
+
+        Parameters
+        ----------
+        stage : ExecutionStage or None
+            If provided, only return stats for this execution stage.
+        """
+        if self._data_profiler is None:
+            return []
+        stage_value = stage.value if stage is not None else None
+        return self._data_profiler.snapshot(stage=stage_value)
+
+    def iter_profiled_batches(
+        self,
+        batches: Iterable[dict[str, Any]],
+        *,
+        stage: ExecutionStage,
+        move: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield ``batches`` (moved through ``move``), timing the loop around them.
+
+        Wrap the raw batch iterable, never a progress bar: a bar's update then counts
+        in ``batch_loop`` instead of ``data_load``. While profiling is enabled, every
+        iteration after the first records ``data_load`` (the fetch: read, processing,
+        collate), ``to_device`` (the ``move`` call, when one is given) and
+        ``batch_loop`` (from the fetch start until the consumer asks for the next
+        batch, so the whole iteration: forward, orchestration, output handling). The
+        first iteration of a pass is left out of the rows because its fetch carries
+        one-time setup; that fetch time goes to the first-batch line instead.
+
+        A loop sample closes only on the next request. Closing the generator early
+        (``close()``, or a ``break`` followed by garbage collection) or throwing into
+        it discards the open sample. Callers own the generator and close it in a
+        ``finally``. With ``synchronize_cuda`` the device is synchronized after the
+        copy and before each loop sample closes, when the moved batch holds CUDA
+        tensors; without it the loop samples are host wall time.
+
+        Parameters
+        ----------
+        batches : Iterable[dict[str, Any]]
+            The batch iterable (a DataLoader, or any iterable of batch dicts).
+        stage : ExecutionStage
+            The execution stage the samples are keyed under.
+        move : callable or None
+            Moves one batch to the pipeline's device; ``None`` yields the batch as is.
+        """
+        stage_value = stage.value
+        profiler = self._data_profiler
+        if self._profiling_enabled and profiler is None:
+            skip = self._profiler.skip_first_n if self._profiler is not None else 0
+            self._new_data_profiler(skip)
+            profiler = self._data_profiler
+        iterator = iter(batches)
+        first = True
+        while True:
+            t_fetch = time.perf_counter_ns()
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                return
+            t_fetched = time.perf_counter_ns()
+            if move is not None:
+                batch = move(batch)
+                self._synchronize_batch_device(batch)
+                t_moved: int | None = time.perf_counter_ns()
+            else:
+                t_moved = None
+            recording = self._profiling_enabled and profiler is not None
+            if recording:
+                fetch_ms = (t_fetched - t_fetch) / 1_000_000
+                if first:
+                    self._first_batch_ms.setdefault(stage_value, []).append(fetch_ms)
+                else:
+                    profiler.record(stage_value, DATA_LOAD, fetch_ms)
+                    if t_moved is not None:
+                        profiler.record(
+                            stage_value, TO_DEVICE, (t_moved - t_fetched) / 1_000_000
+                        )
+            yield batch
+            # The consumer asked for the next batch: the iteration is complete.
+            if recording:
+                self._synchronize_batch_device(batch)
+                if not first:
+                    loop_ms = (time.perf_counter_ns() - t_fetch) / 1_000_000
+                    profiler.record(stage_value, BATCH_LOOP, loop_ms)
+            first = False
+
+    def _synchronize_batch_device(self, batch: dict[str, Any]) -> None:
+        """Synchronize the CUDA device of ``batch``'s tensors when sync is requested."""
+        if not self._synchronize_cuda:
+            return
+        for value in batch.values():
+            if isinstance(value, torch.Tensor) and value.is_cuda:
+                torch.cuda.synchronize(value.device)
+                return
 
     def get_profiling_summary(
         self,
@@ -1214,8 +1342,18 @@ class CuvisPipeline:
         """
         stats = self.get_profiling_summary(stage=stage)
         skip_first_n = self._profiler.skip_first_n if self._profiler is not None else 0
+        first_batch_ms = (
+            self._first_batch_ms
+            if stage is None
+            else {k: v for k, v in self._first_batch_ms.items() if k == stage.value}
+        )
         return format_profiling_table(
-            stats, total_frames=total_frames, skip_first_n=skip_first_n
+            stats,
+            total_frames=total_frames,
+            skip_first_n=skip_first_n,
+            data_stats=self.get_data_profiling_summary(stage=stage),
+            first_batch_ms=first_batch_ms,
+            cuda_synchronized=self._synchronize_cuda,
         )
 
     # ------------------------------------------------------------------

@@ -286,13 +286,29 @@ class PipelineProfiler:
 # ---------------------------------------------------------------------------
 
 
+#: Step names a batch loop records through ``CuvisPipeline.iter_profiled_batches``.
+DATA_LOAD = "data_load"
+TO_DEVICE = "to_device"
+BATCH_LOOP = "batch_loop"
+DATA_STEPS = (DATA_LOAD, TO_DEVICE, BATCH_LOOP)
+
+
 def format_profiling_table(
     stats: list[NodeProfilingStats],
     *,
     total_frames: int | None = None,
     skip_first_n: int = 0,
+    data_stats: list[NodeProfilingStats] | None = None,
+    first_batch_ms: dict[str, list[float]] | None = None,
+    cuda_synchronized: bool = False,
 ) -> str:
     """Format profiling stats as a pretty-printed text table.
+
+    The node table is followed by a "Data loading" block when ``data_stats`` or
+    ``first_batch_ms`` carry samples: one row per step (``data_load``, ``to_device``,
+    ``batch_loop``) and stage, the first-batch line per stage, and a per-batch line
+    from the ``batch_loop`` mean. Rows with a zero count (every sample skipped) are
+    left out. Nothing is summed across stages or between the two blocks.
 
     Parameters
     ----------
@@ -303,16 +319,24 @@ def format_profiling_table(
         Total number of frames/batches processed (shown in the header).
     skip_first_n : int
         Number of warm-up samples that were skipped (shown in the header).
+    data_stats : list[NodeProfilingStats] or None
+        Data-loading stats as returned by ``CuvisPipeline.get_data_profiling_summary()``.
+    first_batch_ms : dict[str, list[float]] or None
+        Per stage value, the first fetch of every profiled pass (milliseconds); it is
+        excluded from the rows because it carries one-time setup.
+    cuda_synchronized : bool
+        Whether the loop samples were taken after a CUDA synchronize; the per-batch
+        line names host wall time otherwise.
 
     Returns
     -------
     str
         Multi-line formatted table ready for logging or printing.
     """
-    if not stats:
+    data_rows = [s for s in (data_stats or []) if s.count > 0]
+    first_batches = {k: v for k, v in (first_batch_ms or {}).items() if v}
+    if not stats and not data_rows and not first_batches:
         return "No profiling data collected."
-
-    sorted_stats = sorted(stats, key=lambda s: s.total_ms, reverse=True)
 
     # Header
     parts: list[str] = []
@@ -325,27 +349,43 @@ def format_profiling_table(
     elif skip_first_n > 0:
         header_meta += f" (skip_first_n={skip_first_n})"
     parts.append(header_meta)
+    if stats:
+        parts.extend(_node_block(stats))
+    if data_rows or first_batches:
+        parts.extend(_data_block(data_rows, first_batches, cuda_synchronized))
+    return "\n".join(parts)
 
-    col_header = (
-        f"{'Node':<40} {'Stage':<12} {'Count':>5} {'Mean(ms)':>10} "
+
+def _column_header(label: str) -> str:
+    """The column header line, with ``label`` over the name column."""
+    return (
+        f"{label:<40} {'Stage':<12} {'Count':>5} {'Mean(ms)':>10} "
         f"{'Std(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} "
         f"{'Median(ms)':>10} {'Total(s)':>10}"
     )
-    separator = "-" * len(col_header)
-    parts.append(col_header)
-    parts.append(separator)
 
-    # Rows
+
+def _format_row(s: NodeProfilingStats) -> str:
+    """One table row for a node or a data-loading step."""
+    return (
+        f"{s.node_name:<40} {s.stage:<12} {s.count:>5} {s.mean_ms:>10.2f} "
+        f"{s.std_ms:>10.2f} {s.min_ms:>10.2f} {s.max_ms:>10.2f} "
+        f"{s.median_ms:>10.2f} {s.total_ms / 1000:>10.3f}"
+    )
+
+
+def _node_block(stats: list[NodeProfilingStats]) -> list[str]:
+    """The node rows sorted by total time, the TOTAL footer and the per-frame line."""
+    sorted_stats = sorted(stats, key=lambda s: s.total_ms, reverse=True)
+    col_header = _column_header("Node")
+    separator = "-" * len(col_header)
+    parts = [col_header, separator]
+
     total_pipeline_ms = 0.0
     for s in sorted_stats:
         total_pipeline_ms += s.total_ms
-        parts.append(
-            f"{s.node_name:<40} {s.stage:<12} {s.count:>5} {s.mean_ms:>10.2f} "
-            f"{s.std_ms:>10.2f} {s.min_ms:>10.2f} {s.max_ms:>10.2f} "
-            f"{s.median_ms:>10.2f} {s.total_ms / 1000:>10.3f}"
-        )
+        parts.append(_format_row(s))
 
-    # Footer
     parts.append(separator)
     parts.append(
         f"{'TOTAL':<40} {'':12} {'':>5} {'':>10} {'':>10} {'':>10} "
@@ -360,8 +400,58 @@ def format_profiling_table(
         parts.append(
             f"Average per-frame pipeline time: {avg_frame_ms:.2f} ms ({fps:.1f} FPS)"
         )
+    return parts
 
-    return "\n".join(parts)
+
+def _data_block(
+    rows: list[NodeProfilingStats],
+    first_batches: dict[str, list[float]],
+    cuda_synchronized: bool,
+) -> list[str]:
+    """The data-loading rows per stage, then the first-batch and per-batch lines."""
+    col_header = _column_header("Step")
+    separator = "-" * len(col_header)
+    parts = ["", "Data loading (outside the nodes)", col_header, separator]
+    order = {name: i for i, name in enumerate(DATA_STEPS)}
+    stages = sorted({s.stage for s in rows} | set(first_batches))
+    for stage in stages:
+        stage_rows = sorted(
+            (s for s in rows if s.stage == stage),
+            key=lambda s: order.get(s.node_name, len(order)),
+        )
+        parts.extend(_format_row(s) for s in stage_rows)
+    parts.append(separator)
+
+    timing = "CUDA-synchronized" if cuda_synchronized else "host wall time"
+    for stage in stages:
+        values = first_batches.get(stage)
+        if values:
+            if len(values) == 1:
+                text = f"{values[0] / 1000:.2f} s"
+            else:
+                text = (
+                    f"mean {sum(values) / len(values) / 1000:.2f} s over {len(values)} "
+                    f"passes (min {min(values) / 1000:.2f} s, max {max(values) / 1000:.2f} s)"
+                )
+            parts.append(
+                f"First batch data load ({stage}, excluded from the rows): {text}"
+            )
+        loop = next(
+            (s for s in rows if s.stage == stage and s.node_name == BATCH_LOOP), None
+        )
+        if loop is not None and loop.mean_ms > 0:
+            parts.append(
+                f"Time per batch ({stage}, {BATCH_LOOP}, {timing}): "
+                f"{loop.mean_ms:.2f} ms ({1000.0 / loop.mean_ms:.1f} batches/s)"
+            )
+    return parts
 
 
-__all__ = ["PipelineProfiler", "format_profiling_table"]
+__all__ = [
+    "BATCH_LOOP",
+    "DATA_LOAD",
+    "DATA_STEPS",
+    "PipelineProfiler",
+    "TO_DEVICE",
+    "format_profiling_table",
+]
