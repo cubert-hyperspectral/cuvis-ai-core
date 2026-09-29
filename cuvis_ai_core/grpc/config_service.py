@@ -95,8 +95,10 @@ class ConfigService:
             if request.config_type == "training" and valid:
                 from cuvis_ai_core.training.config import TrainingConfig
                 from cuvis_ai_core.training.optimizer_registry import (
+                    get_scheduler_info,
                     get_supported_optimizers,
                     get_supported_schedulers,
+                    scheduler_supports_warmup,
                 )
 
                 training_config = TrainingConfig.model_validate(config_dict)
@@ -124,15 +126,30 @@ class ConfigService:
                                 f"Unsupported scheduler '{scheduler.name}'. Supported: {', '.join(sorted(supported_schedulers))}"
                             )
                             valid = False
-
-                        # Provide helpful warning for plateau schedulers without monitor
-                        if (
-                            scheduler_name in {"plateau", "reduce_on_plateau"}
-                            and not scheduler.monitor
-                        ):
-                            warnings.append(
-                                "Plateau scheduler configured without 'monitor'; defaulting to val_loss"
-                            )
+                        else:
+                            # Registry metadata only for a name the registry knows:
+                            # get_scheduler_info raises for any other, and that
+                            # would surface as INTERNAL instead of this error list.
+                            info = get_scheduler_info(scheduler_name)
+                            if info.get("requires_monitor") and not scheduler.monitor:
+                                warnings.append(
+                                    "Plateau scheduler configured without 'monitor'; defaulting to val_loss"
+                                )
+                            warmup_epochs = scheduler.warmup_epochs or 0
+                            if warmup_epochs > 0 and not scheduler_supports_warmup(
+                                scheduler_name
+                            ):
+                                errors.append(
+                                    f"warmup_epochs is not supported with scheduler "
+                                    f"'{scheduler.name}': it steps on a monitored metric"
+                                )
+                                valid = False
+                            if 0 < training_config.max_epochs <= warmup_epochs:
+                                errors.append(
+                                    f"warmup_epochs ({warmup_epochs}) must be smaller than "
+                                    f"max_epochs ({training_config.max_epochs})"
+                                )
+                                valid = False
 
             return cuvis_ai_pb2.ValidateConfigResponse(
                 valid=valid,
