@@ -469,8 +469,9 @@ class PluginService:
 
         return cuvis_ai_pb2.ListAvailableNodesResponse(nodes=nodes)
 
+    @staticmethod
     def _extract_port_specs(
-        self, node_class: type
+        node_class: type,
     ) -> tuple[dict[str, cuvis_ai_pb2.PortSpec], dict[str, cuvis_ai_pb2.PortSpec]]:
         """Extract INPUT_SPECS and OUTPUT_SPECS from a node class as proto maps.
 

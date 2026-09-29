@@ -174,13 +174,13 @@ class InferenceService:
         batch: dict[str, Any] = {}
 
         def parse_tensor(tensor_proto: cuvis_ai_pb2.Tensor) -> torch.Tensor:
-            """Decode one proto: on ``stack`` per ``copy_tensors``, else a clone."""
+            """Decode one proto: on ``stack`` per ``copy_tensors``, else as a copy."""
             if stack is not None:
                 return stack.enter_context(
                     helpers.proto_to_tensor(tensor_proto, copy=copy_tensors)
                 )
             with helpers.proto_to_tensor(tensor_proto, copy=True) as t:
-                return t.clone()
+                return t
 
         # Parse tensor inputs (if provided)
         for field in ("cube", "wavelengths", "mask", "rgb_image"):

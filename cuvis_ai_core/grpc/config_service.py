@@ -62,10 +62,6 @@ class ConfigService:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(str(exc))
             return cuvis_ai_pb2.GetParameterSchemaResponse()
-        except Exception as exc:  # pragma: no cover - safety net
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to generate schema: {exc}")
-            return cuvis_ai_pb2.GetParameterSchemaResponse()
 
     @grpc_handler("Failed to validate config")
     def validate_config(

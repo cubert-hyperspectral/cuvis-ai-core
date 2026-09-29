@@ -720,11 +720,6 @@ def _initialize_child_session(
         )
 
 
-def get_child(session: SessionState) -> ChildHandle | None:
-    """Return the session's child runtime handle if attached, else ``None``."""
-    return session.child_handle
-
-
 # ---------------------------------------------------------------------------
 # Forwarding helpers — the parent-side gRPC handlers call these instead of
 # the in-process service methods so the orchestrator is the only path.
@@ -742,7 +737,7 @@ def forward_load_pipeline(
     session = get_session_or_error(session_manager, request.session_id, context)
     if session is None:
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
-    if not request.pipeline or not request.pipeline.config_bytes:
+    if not request.pipeline.config_bytes:
         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
         context.set_details("pipeline.config_bytes is required")
         return cuvis_ai_pb2.LoadPipelineResponse(success=False)
@@ -847,7 +842,7 @@ def forward_train(
     if session is None:
         return iter([])
 
-    child = get_child(session)
+    child = session.child_handle
     if child is None:
         _answer_no_child(session, context)
         return iter([])
@@ -1027,7 +1022,7 @@ def _forward_pipeline_op(
     session = get_session_or_error(session_manager, request.session_id, context)
     if session is None:
         return empty_response_factory()
-    child = get_child(session)
+    child = session.child_handle
     if child is None:
         _answer_no_child(session, context)
         return empty_response_factory()
@@ -1291,7 +1286,7 @@ def forward_set_train_run_config(session_manager, request, context):
     # rejects a missing child): this RPC returns a message tailored to
     # its "build the pipeline first" contract rather than the generic
     # no-child message.
-    if get_child(session) is None:
+    if session.child_handle is None:
         if session.load_in_flight:
             _answer_no_child(session, context)
             return cuvis_ai_pb2.SetTrainRunConfigResponse(success=False)
