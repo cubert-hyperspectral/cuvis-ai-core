@@ -20,6 +20,7 @@ from cuvis_ai_core.grpc.training_service import TrainingService, _run_outcome
 from cuvis_ai_core.training.trainers import TrainingCancelled
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.grpc.session_manager import SessionManager
+from cuvis_ai_core.grpc.session_service import SessionService
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.training import CalibrationOutcome
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
@@ -336,6 +337,39 @@ class TestGrpcHandlerDecorator:
         FakeService().my_method("request", context=ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
         ctx.set_details.assert_called_with("kwarg test")
+
+
+class TestSessionServiceErrors:
+    """CloseSession keeps two answers apart: an unknown session is NOT_FOUND, a teardown
+    failure is INTERNAL with the "Failed to close session:" prefix. A FileNotFoundError
+    from the teardown must not fall through to ``@grpc_handler``, whose NOT_FOUND mapping
+    is the code CloseSession uses for an unknown session."""
+
+    def _service(self, exc):
+        manager = Mock(spec=SessionManager)
+        manager.close_session.side_effect = exc
+        return SessionService(manager)
+
+    def test_unknown_session_is_not_found(self):
+        ctx = Mock()
+        resp = self._service(ValueError("Session s missing")).close_session(
+            cuvis_ai_pb2.CloseSessionRequest(session_id="s"), ctx
+        )
+        assert resp.success is False
+        ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
+        ctx.set_details.assert_called_with("Session s missing")
+
+    def test_teardown_failure_is_internal_with_prefix(self):
+        ctx = Mock()
+        exc = FileNotFoundError("[Errno 2] No such file or directory: 'run.lock'")
+        resp = self._service(exc).close_session(
+            cuvis_ai_pb2.CloseSessionRequest(session_id="s"), ctx
+        )
+        assert resp.success is False
+        ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
+        detail = ctx.set_details.call_args.args[0]
+        assert detail.startswith("Failed to close session: ")
+        assert "run.lock" in detail
 
 
 class TestPipelineServiceValidation:
