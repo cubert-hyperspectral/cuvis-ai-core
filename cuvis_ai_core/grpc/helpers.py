@@ -729,14 +729,10 @@ def extract_pipeline_metadata(yaml_path: Path) -> dict[str, Any]:
         yaml_path: Path to pipeline YAML file
 
     Returns:
-        Dictionary with metadata fields:
-        - name: str
-        - description: str
-        - created: str
-        - cuvis_ai_version: str
-        - metrics: dict[str, float]
-        - epoch: int
-        - tags: list[str]
+        Dictionary whose keys are exactly the ``PipelineMetadata`` proto fields
+        (``name``, ``description``, ``created``, ``cuvis_ai_version``, ``tags``,
+        ``author``). The discovery service unpacks it straight into the message
+        (``PipelineMetadata(**metadata)``), so a key the proto lacks fails there.
 
     Note:
         Returns empty/default values if metadata section is missing or invalid.
