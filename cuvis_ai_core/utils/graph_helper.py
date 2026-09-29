@@ -38,7 +38,5 @@ def restructure_output_to_node_dict(
     """
     structured: dict[str, dict[str, Any]] = {}
     for (node_id, port_name), value in outputs.items():
-        if node_id not in structured:
-            structured[node_id] = {}
-        structured[node_id][port_name] = value
+        structured.setdefault(node_id, {})[port_name] = value
     return structured

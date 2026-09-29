@@ -193,8 +193,7 @@ class NodeRegistry:
 
         # Check if it looks like a plugin node (has multiple dots or known plugin pattern)
         looks_like_plugin = class_identifier.count(".") >= 2 or any(
-            pkg in class_identifier.lower()
-            for pkg in ["plugin", "adaclip", "cuvis_ai_"]
+            pkg in class_identifier.lower() for pkg in ["plugin", "cuvis_ai_"]
         )
 
         error_msg = f"Node '{class_identifier}' not found in registry.\n"
@@ -335,7 +334,7 @@ class NodeRegistry:
 
             except Exception as e:
                 # Log warning but continue
-                print(f"Warning: Failed to auto-register from {module_name}: {e}")
+                logger.warning(f"Failed to auto-register from {module_name}: {e}")
 
         return registered_count
 
@@ -426,13 +425,7 @@ class NodeRegistry:
                 )
             self.plugin_catalog[name] = cfg
 
-    def _register_node_classes(
-        self,
-        name: str,
-        config: PluginManifest,
-        *,
-        clear_cache: bool = False,
-    ) -> None:
+    def _register_node_classes(self, name: str, config: PluginManifest) -> None:
         """Import a plugin's provided classes into ``loaded_plugin_nodes``.
 
         The shared registration core: the in-process front door
@@ -443,13 +436,8 @@ class NodeRegistry:
         missing one is re-raised with a hint pointing at the ``provision`` helper.
         """
         class_paths = [node.class_name for node in config.capabilities]
-        if clear_cache:
-            package_prefixes = git_os.extract_package_prefixes(class_paths)
-            git_os.clear_package_modules(package_prefixes)
         try:
-            imported_nodes = git_os.import_plugin_nodes(
-                class_paths, clear_cache=clear_cache
-            )
+            imported_nodes = git_os.import_plugin_nodes(class_paths, clear_cache=False)
         except ImportError as exc:
             raise ModuleNotFoundError(
                 f"Plugin '{name}' could not be imported: {exc}\n"
@@ -520,7 +508,7 @@ class NodeRegistry:
         try:
             for name, config in resolved_plugins.items():
                 self.plugin_catalog[name] = config
-                self._register_node_classes(name, config, clear_cache=False)
+                self._register_node_classes(name, config)
                 logger.info(
                     f"Loaded preinstalled plugin '{name}' with "
                     f"{len(config.capabilities)} nodes"

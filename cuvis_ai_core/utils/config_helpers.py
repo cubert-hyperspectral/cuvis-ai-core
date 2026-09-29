@@ -155,7 +155,7 @@ def resolve_config_with_hydra(
     hydra_overrides = overrides if isinstance(overrides, list) else []
 
     with initialize_config_dir(config_dir=str(config_root), version_base="1.3"):
-        cfg = compose(config_name=config_name, overrides=hydra_overrides or [])
+        cfg = compose(config_name=config_name, overrides=hydra_overrides)
         config_dict = OmegaConf.to_container(cfg, resolve=True)
 
     # Handle Hydra packaging for all config types

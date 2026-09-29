@@ -12,10 +12,10 @@ import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Mapping
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Mapping
 
 import tomli_w
 from loguru import logger
@@ -230,11 +230,15 @@ def build_runtime_pyproject(
 
     The same inputs on the same host always produce the same bytes — uv
     resolves against this single file and writes ``uv.lock`` next to it.
-    The output is host-aware (see :func:`_host_required_environments`), so
+    The output is host-aware (``required-environments`` names the platform), so
     a Windows cache entry is distinct from a Linux one, which is correct:
     a venv built for one platform can't be reused on the other.
     """
-    dependencies: list[str] = [_core_dependency(core_source)]
+    # Core: the pinned PEP 508 spec for PyPI (e.g. "cuvis-ai-core==0.7.3"),
+    # else the bare name.
+    dependencies: list[str] = [
+        core_source.identity if core_source.kind == "pypi" else CORE_PACKAGE_NAME
+    ]
     sources: dict[str, dict] = {}
 
     core_entry = _core_source_entry(core_source)
@@ -265,7 +269,12 @@ def build_runtime_pyproject(
         sources.update({name: {"index": index_name} for name in torch_versions})
     if sources:
         uv_table["sources"] = sources
-    uv_table["required-environments"] = _host_required_environments()
+    # The composed venv runs on the host that builds it, so the resolution only
+    # has to be installable here. Declaring the host platform makes uv pick a
+    # version that ships a wheel for it instead of failing when a dependency's
+    # newest release skipped this platform (cuvis-il ships only manylinux
+    # wheels for 3.5.3.x: Windows backtracks to 3.5.0, Linux stays current).
+    uv_table["required-environments"] = [f"sys_platform == '{sys.platform}'"]
 
     doc: dict = {
         "project": {
@@ -277,20 +286,6 @@ def build_runtime_pyproject(
         "tool": {"uv": uv_table},
     }
     return tomli_w.dumps(doc)
-
-
-def _host_required_environments() -> list[str]:
-    """uv ``required-environments`` marker for the composing host.
-
-    The composed venv runs on the same machine that builds it, so the
-    resolution only has to be installable on this host. Declaring the host
-    platform makes uv pick a version that actually ships a wheel for it
-    instead of failing when a dependency's newest release skipped this
-    platform. For example, ``cuvis-il`` ships only manylinux wheels for
-    3.5.3.x, so on Windows uv backtracks to 3.5.0 (which has a ``win_amd64``
-    wheel); on Linux it stays on the latest, which has a manylinux wheel.
-    """
-    return [f"sys_platform == '{sys.platform}'"]
 
 
 def _core_source_entry(core_source: CoreSource) -> dict | None:
@@ -331,14 +326,6 @@ def _plugin_source_entry(p: ResolvedPlugin, ref: str = "sha") -> tuple[str, str,
             return dependency_string, source_key, {"git": url, "tag": p.tag}
         return dependency_string, source_key, {"git": url, "rev": p.sha}
     return dependency_string, source_key, {"path": str(p.path), "editable": True}
-
-
-def _core_dependency(core_source: CoreSource) -> str:
-    """Requirement for core: the pinned PEP 508 spec for PyPI, else the bare name."""
-    if core_source.kind == "pypi":
-        # identity is the full PEP-508 string, e.g. "cuvis-ai-core==0.7.3"
-        return core_source.identity
-    return CORE_PACKAGE_NAME
 
 
 def _read_local_package_name(path: Path, *, manifest_key: str) -> str:

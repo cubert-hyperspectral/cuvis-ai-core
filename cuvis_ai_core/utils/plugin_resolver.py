@@ -4,10 +4,9 @@
   the merged catalog and return its :class:`GitPluginSource` or
   :class:`LocalPluginSource` (the manifest union). A name with no manifest
   in the catalog is an error.
-* If ``pipeline_config.plugins`` is None/empty, the production wrapper
-  ``_auto_resolve`` hard-fails with a fix-it message pointing at
-  ``suggest-plugins-fix``; the pure heuristic ``_compute_auto_resolution``
-  stays callable for the fix-it tool itself.
+* If ``pipeline_config.plugins`` is None/empty, the resolver hard-fails with
+  a fix-it message pointing at ``suggest-plugins-fix``; the pure heuristic
+  ``_compute_auto_resolution`` stays callable for the fix-it tool itself.
 
 This module has **no side effects** — no install, no import, no
 ``NodeRegistry`` mutation. The caller decides how to materialise the
@@ -51,23 +50,6 @@ def _build_catalog(plugins_dirs: list[Path]) -> dict[str, PluginManifest]:
     return catalog
 
 
-def _ref_to_core(
-    ref: str,
-    catalog: dict[str, PluginManifest],
-) -> tuple[str, PluginManifest]:
-    """Materialise a single bare plugin name into ``(name, core-side config)``.
-
-    Raises ``ValueError`` if the name has no manifest in the catalog.
-    """
-    if ref not in catalog:
-        msg = (
-            f"Plugin '{ref}' is referenced in 'plugins:' but is not in the "
-            f"catalog. Known plugins: {sorted(catalog)}"
-        )
-        raise ValueError(msg)
-    return ref, catalog[ref]
-
-
 def _compute_auto_resolution(
     class_names: list[str],
     catalog: dict[str, PluginManifest],
@@ -75,7 +57,7 @@ def _compute_auto_resolution(
 ) -> dict[str, PluginManifest]:
     """Pure heuristic: map class_names to plugins by exact-match against provides.
 
-    Used by both the production hard-fail wrapper (``_auto_resolve``) and the
+    Used by the hard-fail path of :func:`resolve_against_catalog` and the
     fix-it CLI (``plugin_fixer.suggest_plugins_field``). No logging side
     effects; raises ``ValueError`` on ambiguous matches, missing classes,
     and an empty catalog.
@@ -117,28 +99,6 @@ def _compute_auto_resolution(
         resolved[plugin_name] = catalog[plugin_name]
 
     return resolved
-
-
-def _auto_resolve(
-    class_names: list[str],
-    catalog: dict[str, PluginManifest],
-    plugins_dirs: list[Path],
-) -> dict[str, PluginManifest]:
-    """Production auto-resolve: heuristic + hard-fail with fix-it hint.
-
-    The ``plugins:`` field is mandatory in pipeline yamls. If a pipeline
-    reaches this path it has omitted the field; we run the heuristic to
-    suggest names, then raise ``ValueError`` pointing the caller at
-    ``suggest-plugins-fix``.
-    """
-    suggested = _compute_auto_resolution(class_names, catalog, plugins_dirs)
-    msg = (
-        "Pipeline is missing the mandatory 'plugins:' field. Run\n"
-        "    uv run suggest-plugins-fix --pipeline-path <yaml>\n"
-        "to generate the field and patch the yaml. Auto-resolution suggests: "
-        f"{sorted(suggested)}."
-    )
-    raise ValueError(msg)
 
 
 def _validate_coverage(
@@ -231,12 +191,24 @@ def resolve_against_catalog(
     class_names = [node.class_name for node in pipeline_config.nodes]
 
     if not pipeline_config.plugins:
-        resolved = _auto_resolve(class_names, catalog, plugins_dirs)
-    else:
-        resolved = {}
-        for ref in pipeline_config.plugins:
-            name, cfg = _ref_to_core(ref, catalog)
-            resolved[name] = cfg  # duplicate names collapse to one entry
+        # The field is mandatory; the heuristic only phrases the hint.
+        suggested = _compute_auto_resolution(class_names, catalog, plugins_dirs)
+        msg = (
+            "Pipeline is missing the mandatory 'plugins:' field. Run\n"
+            "    uv run suggest-plugins-fix --pipeline-path <yaml>\n"
+            "to generate the field and patch the yaml. Auto-resolution suggests: "
+            f"{sorted(suggested)}."
+        )
+        raise ValueError(msg)
+    resolved: dict[str, PluginManifest] = {}
+    for ref in pipeline_config.plugins:
+        if ref not in catalog:
+            msg = (
+                f"Plugin '{ref}' is referenced in 'plugins:' but is not in the "
+                f"catalog. Known plugins: {sorted(catalog)}"
+            )
+            raise ValueError(msg)
+        resolved[ref] = catalog[ref]  # duplicate names collapse to one entry
 
     _validate_coverage(class_names, resolved)
     # Union the data-module plugin (selected by DataConfig.data_module): it ships
