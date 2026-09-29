@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-- A session's default search paths are one constant, `DEFAULT_SEARCH_PATHS = ("./configs", "./configs/pipeline")`, used by `SessionState`, `create_session` and the replace-mode fallback of `SetSessionSearchPaths`. `create_session` gave a new session `["./configs"]` while the other two places used the two-entry list, so whether a bare pipeline name resolved depended on how the session was created. A session created by `CreateSession` now resolves `configs/pipeline/<name>.yaml` from `<name>` as well as from `pipeline/<name>`. Paths added with `append=true` come after both defaults, so a bare name that exists under `configs/pipeline/` and in an appended directory now resolves to the bundled file (before, the appended directory won for bare names); replace mode is unaffected, and so are the clients that use it with absolute paths (CuvisNEXT, the cookbook helper).
 - Removed, breaking (the next release is 0.18.0): the public names the 0.17.5 simplification pass kept for an API decision. None of them is referenced by cuvis-ai, the plugins, the notebooks, the skills or CuvisNEXT.
   - `CuvisPipeline.custom_copy` (it raised `AttributeError`) and `save_to_file(include_optimizer=, include_scheduler=)` (nothing ever set `pipeline.optimizer` or `pipeline.scheduler`; a checkpoint holds `state_dict` and `metadata`).
   - `Node.fit`, the deprecated alias of `statistical_initialization`.
