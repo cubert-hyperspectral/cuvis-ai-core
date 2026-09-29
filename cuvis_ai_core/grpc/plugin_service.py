@@ -237,6 +237,17 @@ def _catalog_entry_to_node_info(
     )
 
 
+def _plugin_info(name: str, config: dict) -> cuvis_ai_pb2.PluginInfo:
+    """Build the ``PluginInfo`` message for one registered plugin manifest."""
+    return cuvis_ai_pb2.PluginInfo(
+        name=name,
+        type="git" if "repo" in config else "local",
+        source=config.get("repo") or config.get("path", ""),
+        tag=config.get("tag", ""),
+        capabilities=[n["class_name"] for n in config.get("capabilities", [])],
+    )
+
+
 class PluginService:
     """gRPC service layer for plugin management operations."""
 
@@ -330,23 +341,10 @@ class PluginService:
         if session is None:
             return cuvis_ai_pb2.ListLoadedPluginsResponse()
 
-        plugins = []
-        for name, config in session.registered_plugins.items():
-            plugin_type = "git" if "repo" in config else "local"
-            source = config.get("repo") or config.get("path", "")
-            tag = config.get("tag", "")
-            capabilities = [n["class_name"] for n in config.get("capabilities", [])]
-
-            plugins.append(
-                cuvis_ai_pb2.PluginInfo(
-                    name=name,
-                    type=plugin_type,
-                    source=source,
-                    tag=tag,
-                    capabilities=capabilities,
-                )
-            )
-
+        plugins = [
+            _plugin_info(name, config)
+            for name, config in session.registered_plugins.items()
+        ]
         return cuvis_ai_pb2.ListLoadedPluginsResponse(plugins=plugins)
 
     @grpc_handler("Failed to get plugin info")
@@ -368,19 +366,8 @@ class PluginService:
             return cuvis_ai_pb2.GetPluginInfoResponse()
 
         config = session.registered_plugins[request.plugin_name]
-        plugin_type = "git" if "repo" in config else "local"
-        source = config.get("repo") or config.get("path", "")
-        tag = config.get("tag", "")
-        capabilities = [n["class_name"] for n in config.get("capabilities", [])]
-
         return cuvis_ai_pb2.GetPluginInfoResponse(
-            plugin=cuvis_ai_pb2.PluginInfo(
-                name=request.plugin_name,
-                type=plugin_type,
-                source=source,
-                tag=tag,
-                capabilities=capabilities,
-            )
+            plugin=_plugin_info(request.plugin_name, config)
         )
 
     @grpc_handler("Failed to list available nodes")

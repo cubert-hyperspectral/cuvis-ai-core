@@ -136,14 +136,6 @@ def _logits_source(
     return None
 
 
-def _pipeline_device(pipeline: CuvisPipeline) -> torch.device:
-    """The device the pipeline's parameters/buffers live on (CPU when it has neither)."""
-    for layer in pipeline.torch_layers:
-        for tensor in (*layer.parameters(), *layer.buffers()):
-            return tensor.device
-    return torch.device("cpu")
-
-
 def _mask_originators(
     pipeline: CuvisPipeline, mask_keys: list[tuple[str, str]]
 ) -> list[tuple[str, str]]:
@@ -210,7 +202,7 @@ def calibrate_pipeline_deciders(
         return skip_all(f"no {split} split")
     loader = getattr(datamodule, f"{split}_dataloader")()
 
-    device = _pipeline_device(pipeline)
+    device = pipeline.device
     for module in pipeline.torch_layers:
         module.eval()
     wanted = {port for (_, port) in sources.values()} | {"mask"}

@@ -18,7 +18,6 @@ from cuvis_ai_core.deciders.base_decider import BinaryDecider
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import CalibrationOutcome, calibrate_pipeline_deciders
-from cuvis_ai_core.training.calibration import _pipeline_device
 from cuvis_ai_core.utils.restore import _log_calibration_outcome
 from cuvis_ai_schemas.pipeline import PortSpec
 
@@ -385,7 +384,7 @@ def test_pipeline_device_follows_the_first_buffer():
     dec = _MockCalibratableDecider(name="dec")
     pipe = _pipeline(dec, source=_BufferedSource(name="src"))
 
-    assert _pipeline_device(pipe) == torch.device("cpu")
+    assert pipe.device == torch.device("cpu")
     outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
     assert outcome.calibrated
 

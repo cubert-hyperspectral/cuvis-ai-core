@@ -109,6 +109,19 @@ def coco_rle_encode(mask_np: np.ndarray) -> dict[str, Any]:
     return {"size": size, "counts": counts}
 
 
+def _pycoco_rle(rle: dict[str, Any]) -> dict[str, Any]:
+    """The pycocotools form of a COCO RLE: list counts encoded, str counts as bytes."""
+    import pycocotools.mask as mask_util
+
+    counts = rle["counts"]
+    if isinstance(counts, list):
+        h, w = rle["size"]
+        return mask_util.frPyObjects(rle, h, w)
+    if isinstance(counts, str):
+        return {"size": rle["size"], "counts": counts.encode("utf-8")}
+    return rle
+
+
 def coco_rle_decode(rle: dict[str, Any]) -> np.ndarray:
     """Decode a COCO RLE dict to a binary mask.
 
@@ -126,37 +139,18 @@ def coco_rle_decode(rle: dict[str, Any]) -> np.ndarray:
     """
     import pycocotools.mask as mask_util
 
-    counts = rle["counts"]
-    if isinstance(counts, list):
-        # Uncompressed RLE — convert via frPyObjects
-        h, w = rle["size"]
-        rle = mask_util.frPyObjects(rle, h, w)
-    elif isinstance(counts, str):
-        rle = {"size": rle["size"], "counts": counts.encode("utf-8")}
-    return mask_util.decode(rle).astype(np.uint8)
+    return mask_util.decode(_pycoco_rle(rle)).astype(np.uint8)
 
 
 def coco_rle_area(rle: dict[str, Any]) -> int:
     """Compute the area (foreground pixel count) from a COCO RLE dict."""
     import pycocotools.mask as mask_util
 
-    counts = rle["counts"]
-    if isinstance(counts, list):
-        h, w = rle["size"]
-        rle = mask_util.frPyObjects(rle, h, w)
-    elif isinstance(counts, str):
-        rle = {"size": rle["size"], "counts": counts.encode("utf-8")}
-    return int(mask_util.area(rle))
+    return int(mask_util.area(_pycoco_rle(rle)))
 
 
 def coco_rle_to_bbox(rle: dict[str, Any]) -> list[float]:
     """Compute ``[x, y, w, h]`` bounding box from a COCO RLE dict."""
     import pycocotools.mask as mask_util
 
-    counts = rle["counts"]
-    if isinstance(counts, list):
-        h, w = rle["size"]
-        rle = mask_util.frPyObjects(rle, h, w)
-    elif isinstance(counts, str):
-        rle = {"size": rle["size"], "counts": counts.encode("utf-8")}
-    return mask_util.toBbox(rle).tolist()
+    return mask_util.toBbox(_pycoco_rle(rle)).tolist()

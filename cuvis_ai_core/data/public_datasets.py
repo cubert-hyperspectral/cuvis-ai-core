@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal
 
 from cuvis_ai_core.data._provisioning import (
+    HF_EXTRA_HINT,
     SCHEMA_VERSION,
     CacheBusyError,
     ProgressEmitter,
@@ -67,7 +68,6 @@ DATASET_TAGS: tuple[str, ...] = (
 CAMERAS: tuple[str, ...] = ("XMR", "X4 SWIR")
 """Camera labels, in display order."""
 
-_HF_EXTRA_HINT = "pip install cuvis-ai-core[hf]"
 
 DatasetState = Literal[
     "present", "damaged", "incomplete", "outdated", "foreign", "absent"
@@ -614,7 +614,7 @@ class PublicDatasets:
             from huggingface_hub import HfApi, snapshot_download
         except ImportError as exc:
             raise DatasetError(
-                f"huggingface_hub is not installed. Install with: {_HF_EXTRA_HINT}"
+                f"huggingface_hub is not installed. Install with: {HF_EXTRA_HINT}"
             ) from exc
         return snapshot_download, HfApi()
 

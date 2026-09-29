@@ -310,19 +310,21 @@ def restore_pipeline(
 
     else:
         # Just display input/output specs
-        input_specs = pipeline.get_input_specs()
-        output_specs = pipeline.get_output_specs()
-
-        print("\nInput Specs:")
-        for name, spec in input_specs.items():
-            print(f"  {name}: {spec}")
-
-        print("\nOutput Specs:")
-        for name, spec in output_specs.items():
-            print(f"  {name}: {spec}")
+        _print_specs(pipeline)
 
     logger.info("Pipeline ready for inference")
     return pipeline
+
+
+def _print_specs(pipeline: CuvisPipeline) -> None:
+    """Print the pipeline's input and output port specs, one per line."""
+    print("\nInput Specs:")
+    for name, spec in pipeline.get_input_specs().items():
+        print(f"  {name}: {spec}")
+
+    print("\nOutput Specs:")
+    for name, spec in pipeline.get_output_specs().items():
+        print(f"  {name}: {spec}")
 
 
 def _build_pipeline_from_config(
@@ -601,17 +603,7 @@ def restore_trainrun(
 
     if mode == "info":
         logger.info("Info mode - displaying pipeline specifications")
-        input_specs = pipeline.get_input_specs()
-        output_specs = pipeline.get_output_specs()
-
-        print("\nInput Specs:")
-        for name, spec in input_specs.items():
-            print(f"  {name}: {spec}")
-
-        print("\nOutput Specs:")
-        for name, spec in output_specs.items():
-            print(f"  {name}: {spec}")
-
+        _print_specs(pipeline)
         logger.info("Info mode complete")
         return
 
