@@ -150,6 +150,9 @@ class PipelineService:
         if session is None:
             return cuvis_ai_pb2.SavePipelineResponse(success=False)
 
+        if not require_pipeline(session, context):
+            return cuvis_ai_pb2.SavePipelineResponse(success=False)
+
         if not request.pipeline_path:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("pipeline_path is required")

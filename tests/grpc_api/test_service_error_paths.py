@@ -74,6 +74,20 @@ class TestPipelineServiceErrors:
         assert response.success is False
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
 
+    def test_save_pipeline_no_pipeline(self, tmp_path):
+        """No pipeline -> FAILED_PRECONDITION before anything touches the disk. The
+        child runtime is in this state after a LoadPipeline that failed inside it."""
+        sid = self.session_manager.create_session()
+        target = tmp_path / "out" / "p.yaml"
+        resp = self.service.save_pipeline(
+            cuvis_ai_pb2.SavePipelineRequest(session_id=sid, pipeline_path=str(target)),
+            self.ctx,
+        )
+        assert resp.success is False
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+        assert "pipeline" in self.ctx.set_details.call_args.args[0].lower()
+        assert not target.parent.exists()
+
     def test_save_pipeline_success(self, tmp_path):
         """Exercise save_pipeline success path (covers __version__ import)."""
         session_id = self.session_manager.create_session()
