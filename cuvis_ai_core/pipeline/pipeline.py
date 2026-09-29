@@ -1820,7 +1820,7 @@ class CuvisPipeline:
         """Unfreeze specific nodes in this pipeline by their names.
 
         This method validates that all requested nodes exist in the pipeline and
-        unfreezes them for gradient training. Nodes must have an 'unfreeze' method.
+        unfreezes them for gradient training.
 
         Parameters
         ----------
