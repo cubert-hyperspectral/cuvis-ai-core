@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 import os
 import time
 from collections.abc import Collection, Iterator
@@ -240,7 +241,9 @@ class CuvisPipeline:
             source_node = source_port.node
             target_node = target_port.node
 
-            is_valid, message = self._validate_connection(source_port, target_port)
+            is_valid, message = source_port.spec.is_compatible_with(
+                target_port.spec, source_port.node, target_port.node
+            )
             if not is_valid:
                 raise PortCompatibilityError(
                     f"Cannot connect {source_node.name}.{source_port.name} "
@@ -295,19 +298,6 @@ class CuvisPipeline:
         self._graph.add_node(node)
         # The module list follows the node set.
         self.__dict__.pop("torch_layers", None)
-
-    def _validate_connection(
-        self,
-        source_port: OutputPort,
-        target_port: InputPort,
-    ) -> tuple[bool, str]:
-        """Validate that two ports can be connected."""
-
-        return source_port.spec.is_compatible_with(
-            target_port.spec,
-            source_port.node,
-            target_port.node,
-        )
 
     def __repr__(self) -> str:
         res = self.name + ":\n"
@@ -426,7 +416,7 @@ class CuvisPipeline:
             If any port connection is incompatible.
         """
         # Check that no cycles exist
-        if len(list(nx.simple_cycles(self._graph))) > 0:
+        if not nx.is_directed_acyclic_graph(self._graph):
             raise ValueError("Graph contains cycles!")
 
         # Verify all port connections
@@ -440,7 +430,9 @@ class CuvisPipeline:
             target_port = end_node._input_ports[to_port_name]
 
             # Validate the connection
-            is_valid, message = self._validate_connection(source_port, target_port)
+            is_valid, message = source_port.spec.is_compatible_with(
+                target_port.spec, source_port.node, target_port.node
+            )
             if not is_valid:
                 raise PortCompatibilityError(
                     f"Invalid connection: {start_node.name}.{from_port_name} "
@@ -512,12 +504,8 @@ class CuvisPipeline:
 
         node_configs: list[NodeConfig] = []
         for node in self.nodes:
-            params = {}
-            if hasattr(node, "hparams"):
-                params = node.hparams
-
             # Convert numpy arrays to native Python types for clean YAML serialization
-            params = self._convert_numpy_to_native(params or {})
+            params = self._convert_numpy_to_native(node.hparams or {})
 
             node_configs.append(
                 NodeConfig(
@@ -542,8 +530,6 @@ class CuvisPipeline:
 
         # Use stored metadata and update created timestamp
         # Create a copy to avoid modifying the original
-        from copy import copy
-
         metadata = copy(self._metadata)
         metadata.created = datetime.now().isoformat()
 
@@ -594,18 +580,9 @@ class CuvisPipeline:
         if validate_nodes and save_weights:
             invalid_nodes = []
             for node in self.nodes:
-                if hasattr(node, "validate_serialization_support"):
-                    is_valid, message = node.validate_serialization_support()
-                    if not is_valid:
-                        invalid_nodes.append((node.name, message))
-                else:
-                    # Node doesn't have validation method - check basics
-                    if not hasattr(node, "state_dict"):
-                        invalid_nodes.append((node.name, "Missing state_dict() method"))
-                    elif not hasattr(node, "load_state_dict"):
-                        invalid_nodes.append(
-                            (node.name, "Missing load_state_dict() method")
-                        )
+                is_valid, message = node.validate_serialization_support()
+                if not is_valid:
+                    invalid_nodes.append((node.name, message))
 
             if invalid_nodes:
                 raise RuntimeError(
@@ -619,8 +596,6 @@ class CuvisPipeline:
         # Get PipelineConfig and convert to dict
         pipeline_config = self.serialize()
         config_dict = pipeline_config.to_dict()
-
-        # Add weights file reference (not part of pipeline structure, but needed for loading)
 
         # Update metadata if provided
         if metadata:
@@ -725,28 +700,17 @@ class CuvisPipeline:
             )
 
             # Log any key mismatches (suppress verbose output for long lists)
-            if hasattr(result, "missing_keys") and result.missing_keys:
-                missing_keys_list = list(result.missing_keys)
-                if len(missing_keys_list) > 10:
+            for kind in ("missing", "unexpected"):
+                keys = list(getattr(result, f"{kind}_keys", None) or [])
+                if not keys:
+                    continue
+                if len(keys) > 10:
                     logger.warning(
-                        f"Node '{node.name}' missing {len(missing_keys_list)} keys "
-                        f"(showing first 5): {missing_keys_list[:5]}..."
+                        f"Node '{node.name}' {kind} {len(keys)} keys "
+                        f"(showing first 5): {keys[:5]}..."
                     )
                 else:
-                    logger.warning(
-                        f"Node '{node.name}' missing keys: {missing_keys_list}"
-                    )
-            if hasattr(result, "unexpected_keys") and result.unexpected_keys:
-                unexpected_keys_list = list(result.unexpected_keys)
-                if len(unexpected_keys_list) > 10:
-                    logger.warning(
-                        f"Node '{node.name}' unexpected {len(unexpected_keys_list)} keys "
-                        f"(showing first 5): {unexpected_keys_list[:5]}..."
-                    )
-                else:
-                    logger.warning(
-                        f"Node '{node.name}' unexpected keys: {unexpected_keys_list}"
-                    )
+                    logger.warning(f"Node '{node.name}' {kind} keys: {keys}")
 
         # Report nodes without saved weights
         if missing_keys:
@@ -937,24 +901,21 @@ class CuvisPipeline:
 
             # Execute only ancestors of upto_node (nodes that feed into it)
             ancestors = nx.ancestors(self._graph, upto_node)
-            executable_nodes = [
-                node
-                for node in self._sorted_nodes
-                if node in ancestors and node.should_execute(execution_stage)
-            ]
         else:
             # Execute all nodes for this stage
-            executable_nodes = [
-                node
-                for node in self._sorted_nodes
-                if node.should_execute(execution_stage)
-            ]
+            ancestors = None
+        executable_nodes = [
+            node
+            for node in self._sorted_nodes
+            if (ancestors is None or node in ancestors)
+            and node.should_execute(execution_stage)
+        ]
 
         port_data: dict[tuple[str, str], Any] = {}
         batch = batch or {}
 
         # Create cache key for validation
-        batch_keys = frozenset(batch.keys()) if batch else frozenset()
+        batch_keys = frozenset(batch)
         upto_node_id = id(upto_node) if upto_node is not None else None
         cache_key = (execution_stage, batch_keys, upto_node_id)
 
@@ -1342,21 +1303,12 @@ class CuvisPipeline:
                 if getattr(spec, "optional", False):
                     continue
 
-                # Check if input can be satisfied
-                can_be_satisfied = False
-
-                # Check if available in batch
-                if port_name in batch:
-                    can_be_satisfied = True
-
-                # Check if connected from a predecessor
-                for predecessor_node in self._graph.predecessors(node):
-                    for _, edge_data in self._graph[predecessor_node][node].items():
-                        if edge_data["to_port"] == port_name:
-                            can_be_satisfied = True
-                            break
-                    if can_be_satisfied:
-                        break
+                # Satisfied by the batch or by an edge from a predecessor
+                can_be_satisfied = port_name in batch or any(
+                    edge_data["to_port"] == port_name
+                    for predecessor_node in self._graph.predecessors(node)
+                    for edge_data in self._graph[predecessor_node][node].values()
+                )
 
                 if not can_be_satisfied:
                     missing_inputs.append(port_name)
