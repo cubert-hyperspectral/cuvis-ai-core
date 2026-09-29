@@ -172,3 +172,22 @@ class TestIntrospectionWithoutPipeline:
         )
         assert not response.image_data
         self._assert_failed_precondition()
+
+
+def test_get_pipeline_visualization_render_failure_answers_dot_and_says_so(
+    grpc_stub, session, monkeypatch
+):
+    """When rendering fails (no Graphviz binary, a broken install) the answer is the
+    DOT source labelled as such, as the sessionless preview does; a client that decodes
+    by format would otherwise treat DOT text as a PNG."""
+    from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
+
+    def broken(self, *args, **kwargs):
+        raise RuntimeError("dot: command not found")
+
+    monkeypatch.setattr(PipelineVisualizer, "render_graphviz", broken)
+    response = grpc_stub.GetPipelineVisualization(
+        cuvis_ai_pb2.GetPipelineVisualizationRequest(session_id=session(), format="png")
+    )
+    assert response.format == "dot"
+    assert b"digraph" in response.image_data
