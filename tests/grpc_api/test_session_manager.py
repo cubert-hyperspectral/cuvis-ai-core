@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -476,11 +477,29 @@ def _write(path, text="nodes: []\n"):
     return path.resolve()
 
 
-def test_default_search_paths_agree_at_every_entry_point(tmp_path):
-    from cuvis_ai_core.grpc.session_manager import DEFAULT_SEARCH_PATHS
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+def isolated_default(monkeypatch, tmp_path):
+    """No ``CUVIS_CONFIGS_DIR`` and a fresh cwd, both set before any session exists:
+    a session captures its default search path when it is created."""
+    monkeypatch.delenv("CUVIS_CONFIGS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+def _fresh_paths():
+    manager = SessionManager()
+    return manager, manager.get_session(manager.create_session()).search_paths
+
+
+def test_default_search_paths_agree_at_every_entry_point(isolated_default):
+    from cuvis_ai_core.grpc.session_manager import default_search_paths
     from cuvis_ai_core.utils.node_registry import NodeRegistry
 
-    expected = list(DEFAULT_SEARCH_PATHS)
+    expected = [str((isolated_default / "configs").resolve())]
+    assert default_search_paths() == expected
     state = SessionState(session_id="s", node_registry=NodeRegistry())
     assert state.search_paths == expected
 
@@ -488,50 +507,87 @@ def test_default_search_paths_agree_at_every_entry_point(tmp_path):
     sid = manager.create_session()
     assert manager.get_session(sid).search_paths == expected
 
-    missing = str(tmp_path / "missing")
+    missing = str(isolated_default / "missing")
     paths, rejected = manager.set_search_paths(sid, [missing], append=False)
     assert rejected == [missing]
     assert paths == expected
 
 
-def test_new_session_resolves_bare_and_prefixed_pipeline_names(tmp_path, monkeypatch):
+def test_default_search_path_follows_cuvis_configs_dir(isolated_default, monkeypatch):
+    """The directory discovery lists from and relative saves write to is the one a new
+    session searches, so a pipeline ListAvailablePipelines names resolves by prefixed
+    name in a fresh session. A relative value is resolved once, at session creation."""
+    from cuvis_ai_core.grpc.session_manager import default_search_paths
+
+    monkeypatch.setenv("CUVIS_CONFIGS_DIR", "custom")
+    expected = [str((isolated_default / "custom").resolve())]
+    assert default_search_paths() == expected
+    _manager, paths = _fresh_paths()
+    assert paths == expected
+
+
+def test_new_session_resolves_prefixed_pipeline_names_only(isolated_default):
     from cuvis_ai_core.utils.config_helpers import _find_config_file
 
-    demo = _write(tmp_path / "configs" / "pipeline" / "demo.yaml")
-    monkeypatch.chdir(tmp_path)
-    manager = SessionManager()
-    paths = manager.get_session(manager.create_session()).search_paths
+    demo = _write(isolated_default / "configs" / "pipeline" / "demo.yaml")
+    _manager, paths = _fresh_paths()
 
     assert _find_config_file("pipeline/demo", paths) == demo
-    assert _find_config_file("demo", paths) == demo
+    with pytest.raises(FileNotFoundError):
+        _find_config_file("demo", paths)
 
 
-def test_new_session_composes_the_same_pipeline_from_either_name_form():
+def test_new_session_composes_bundled_configs_by_prefixed_name(monkeypatch):
     from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 
-    manager = SessionManager()
-    paths = manager.get_session(manager.create_session()).search_paths
+    monkeypatch.delenv("CUVIS_CONFIGS_DIR", raising=False)
+    monkeypatch.chdir(REPO_ROOT)
+    _manager, paths = _fresh_paths()
 
-    bare = resolve_config_with_hydra("pipeline", "gradient_based", paths)
-    prefixed = resolve_config_with_hydra("pipeline", "pipeline/gradient_based", paths)
+    pipeline = resolve_config_with_hydra("pipeline", "pipeline/gradient_based", paths)
+    assert pipeline["metadata"]["name"] == "gradient_based"
+    with pytest.raises(FileNotFoundError):
+        resolve_config_with_hydra("pipeline", "gradient_based", paths)
 
-    assert bare == prefixed
-    assert bare["metadata"]["name"] == "gradient_based"
 
-
-def test_default_search_paths_precede_appended_directories(tmp_path, monkeypatch):
+def test_appended_directory_is_not_shadowed_by_the_bundled_pipelines(isolated_default):
+    """A bare name found in a directory the client appended must win over a bundled
+    pipeline of the same name; the bundled one is still reachable by its prefix."""
     from cuvis_ai_core.grpc.helpers import find_weights_file
     from cuvis_ai_core.utils.config_helpers import _find_config_file
 
-    bundled = _write(tmp_path / "configs" / "pipeline" / "demo.yaml")
-    _write(tmp_path / "custom" / "demo.yaml")
-    bundled_weights = _write(tmp_path / "configs" / "pipeline" / "w.pt", "x")
-    _write(tmp_path / "custom" / "w.pt", "y")
-    monkeypatch.chdir(tmp_path)
+    bundled = _write(isolated_default / "configs" / "pipeline" / "demo.yaml")
+    custom = _write(isolated_default / "custom" / "demo.yaml")
+    bundled_weights = _write(isolated_default / "configs" / "pipeline" / "w.pt", "x")
+    custom_weights = _write(isolated_default / "custom" / "w.pt", "y")
     manager = SessionManager()
     sid = manager.create_session()
-    manager.set_search_paths(sid, [str(tmp_path / "custom")], append=True)
+    manager.set_search_paths(sid, [str(isolated_default / "custom")], append=True)
     paths = manager.get_session(sid).search_paths
 
-    assert _find_config_file("demo", paths) == bundled
-    assert find_weights_file("w", paths) == bundled_weights
+    assert _find_config_file("demo", paths) == custom
+    assert _find_config_file("pipeline/demo", paths) == bundled
+    assert find_weights_file("w", paths) == custom_weights
+    assert find_weights_file("pipeline/w", paths) == bundled_weights
+
+
+def test_appended_trainrun_directory_resolves_the_trainrun_not_the_pipeline(
+    monkeypatch,
+):
+    """The bundled pipeline and trainrun share the stem ``gradient_based``. With the
+    trainrun directory appended (the client's usual pattern) the bare name composes
+    the trainrun, whose Hydra defaults resolve from the configs root."""
+    from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
+
+    monkeypatch.delenv("CUVIS_CONFIGS_DIR", raising=False)
+    monkeypatch.chdir(REPO_ROOT)
+    manager = SessionManager()
+    sid = manager.create_session()
+    manager.set_search_paths(
+        sid, [str(REPO_ROOT / "configs" / "trainrun")], append=True
+    )
+    paths = manager.get_session(sid).search_paths
+
+    trainrun = resolve_config_with_hydra("trainrun", "gradient_based", paths)
+    assert trainrun["name"] == "gradient_based"
+    assert trainrun["pipeline"]
