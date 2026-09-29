@@ -214,12 +214,7 @@ class TrainingService:
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                inner = self._train_gradient(
-                    session,
-                    datamodule,
-                    data_config_py,
-                    training_config_py,
-                )
+                inner = self._train_gradient(session, datamodule, training_config_py)
 
             else:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -581,7 +576,6 @@ class TrainingService:
         self,
         session: SessionState,
         datamodule: "pl.LightningDataModule",
-        data_config: DataConfig,
         training_config: TrainingConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train with gradient-based method and stream progress."""

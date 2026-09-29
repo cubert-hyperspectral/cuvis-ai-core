@@ -83,7 +83,10 @@ def _payload(
     return {"schema_version": SCHEMA_VERSION, key: str(cache_dir), "models": models}
 
 
-def _status_rows(statuses: list[mw.ModelStatus], **extra: Any) -> list[dict[str, Any]]:
+def _status_rows(
+    statuses: list[mw.ModelStatus], *, downloaded: bool = False
+) -> list[dict[str, Any]]:
+    extra = {"downloaded": True} if downloaded else {}
     return [{**s.weight.to_json_dict(), **s.to_json_dict(), **extra} for s in statuses]
 
 

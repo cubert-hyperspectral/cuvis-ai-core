@@ -860,7 +860,6 @@ _EMPTY_SNAPSHOT = leases_mod.ProcessSnapshot(infos=())
 
 def test_sweep_skips_non_directory_entries(tmp_path: Path, monkeypatch):
     # _sweep_leaseless_scratch: a stray file in the scratch root is left alone
-    root = _marked_root(tmp_path)
     scratch_root = tmp_path / leases_mod.SCRATCH_ROOT_NAME
     scratch_root.mkdir()
     stray = scratch_root / "notes.txt"
@@ -868,14 +867,13 @@ def test_sweep_skips_non_directory_entries(tmp_path: Path, monkeypatch):
     _aged(stray, leases_mod._LEASELESS_SCRATCH_AGE_SECONDS + 3600)
 
     monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
-    swept = leases_mod._sweep_leaseless_scratch(root, _EMPTY_SNAPSHOT, [])
+    swept = leases_mod._sweep_leaseless_scratch(_EMPTY_SNAPSHOT, [])
     assert swept == []
     assert stray.exists()
 
 
 def test_sweep_skips_dir_that_vanishes_before_stat(tmp_path: Path, monkeypatch):
     # _sweep_leaseless_scratch: entry.stat() OSError (removed mid-scan) -> skipped
-    root = _marked_root(tmp_path)
     scratch_root = tmp_path / leases_mod.SCRATCH_ROOT_NAME
     vanishing = scratch_root / "vanishing"
     old = scratch_root / "old"
@@ -892,7 +890,7 @@ def test_sweep_skips_dir_that_vanishes_before_stat(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(Path, "is_dir", is_dir_then_vanish)
     monkeypatch.setattr(leases_mod.tempfile, "gettempdir", lambda: str(tmp_path))
-    swept = leases_mod._sweep_leaseless_scratch(root, _EMPTY_SNAPSHOT, [])
+    swept = leases_mod._sweep_leaseless_scratch(_EMPTY_SNAPSHOT, [])
     assert swept == [old]  # the scan continued past the vanished entry
     assert not old.exists()
 

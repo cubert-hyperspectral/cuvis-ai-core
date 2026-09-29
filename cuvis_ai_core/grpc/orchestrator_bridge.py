@@ -1589,7 +1589,7 @@ def _noop_composer(
     plugin_configs: Mapping[str, PluginManifest],
     *,
     core_source: CoreSource,
-    **kwargs,
+    active_data_module: str | None = None,
 ) -> Path:
     """Test-only composer: returns a dummy path the in-memory spawner ignores."""
     return Path("in-memory-venv")

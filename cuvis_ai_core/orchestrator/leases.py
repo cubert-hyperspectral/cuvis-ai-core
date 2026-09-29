@@ -479,7 +479,7 @@ def reap_orphans(cache_root: Path) -> None:
             )
 
     _reap_leaseless_orphans(cache_root, snapshot, handled_pids)
-    _sweep_leaseless_scratch(cache_root, snapshot, surviving_session_roots)
+    _sweep_leaseless_scratch(snapshot, surviving_session_roots)
 
 
 def _unlink_quietly(path: Path) -> None:
@@ -613,7 +613,6 @@ def _guarded_rmtree(path: Path) -> None:
 
 
 def _sweep_leaseless_scratch(
-    cache_root: Path,
     snapshot: ProcessSnapshot,
     surviving_session_roots: list[Path],
     *,
@@ -695,7 +694,6 @@ def sweep_scratch(
         ):
             surviving.append(Path(lease.session_root))
     return _sweep_leaseless_scratch(
-        cache_root,
         snapshot,
         surviving,
         min_age_seconds=0.0 if relax_age_floor else None,

@@ -961,7 +961,7 @@ class CuvisPipeline:
         # Check if validation has already been performed for this configuration
         if cache_key not in self._validation_cache:
             # Perform validation and cache result
-            self._validate_graph_inputs(batch, execution_stage, executable_nodes)
+            self._validate_graph_inputs(batch, executable_nodes)
             self._validation_cache[cache_key] = None
 
         # Port lifetime with free_consumed_ports=True (a -> b -> c, c also reads a.out)
@@ -1321,7 +1321,6 @@ class CuvisPipeline:
     def _validate_graph_inputs(
         self,
         batch: dict,
-        _stage: str,
         executable_nodes: list[Node],
     ) -> None:
         """Validate that executable nodes have their required inputs satisfied.
@@ -1332,8 +1331,6 @@ class CuvisPipeline:
         ----------
         batch : dict
             Batch data from dataloader
-        _stage : str
-            Execution stage (unused; kept for interface compatibility)
         executable_nodes : list[Node]
             Nodes that will execute in this stage
         """
