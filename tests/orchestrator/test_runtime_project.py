@@ -6,6 +6,8 @@ canonical pyproject.toml output.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -73,6 +75,54 @@ def test_resolve_git_tag_uses_first_line_for_lightweight_tags():
         return_value=raw,
     ):
         assert resolve_git_tag("https://example.com/repo.git", "v0.1.0") == "3" * 40
+
+
+def test_resolve_git_tag_asks_for_the_peeled_ref():
+    # An exact ref pattern does not match ``refs/tags/<tag>^{}``: asking for the
+    # tag alone lists an annotated tag's object, never the commit it points at.
+    raw = "3333333333333333333333333333333333333333\trefs/tags/v0.1.0\n"
+    with patch(
+        "cuvis_ai_core.orchestrator.runtime_project.subprocess.check_output",
+        return_value=raw,
+    ) as check_output:
+        resolve_git_tag("https://example.com/repo.git", "v0.1.0")
+    assert check_output.call_args.args[0][-2:] == [
+        "refs/tags/v0.1.0",
+        "refs/tags/v0.1.0^{}",
+    ]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run git in ``cwd`` with a throwaway identity and no signing."""
+    config = [
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "tag.gpgsign=false",
+    ]
+    return subprocess.check_output(["git", *config, *args], cwd=cwd, text=True).strip()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not on PATH")
+def test_resolve_git_tag_returns_the_commit_of_a_real_annotated_tag(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("plugin\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "initial")
+    _git(repo, "tag", "-a", "v1.0.0", "-m", "annotated")
+    _git(repo, "tag", "v1.0.1")
+    commit = _git(repo, "rev-parse", "HEAD")
+    # The annotated tag is an object of its own; its sha is not the commit.
+    assert _git(repo, "rev-parse", "v1.0.0") != commit
+
+    assert resolve_git_tag(str(repo), "v1.0.0") == commit
+    assert resolve_git_tag(str(repo), "v1.0.1") == commit
 
 
 def test_resolve_git_tag_rejects_missing_tag():

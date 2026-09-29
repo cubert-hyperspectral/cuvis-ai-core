@@ -39,7 +39,8 @@ from cuvis_ai_schemas.plugin import (
 CORE_PACKAGE_NAME = "cuvis-ai-core"
 RUNTIME_PROJECT_NAME = "cuvis-ai-runtime-project"
 RUNTIME_PROJECT_VERSION = "0.0.0"
-# git ls-remote lists annotated tags twice; the peeled form has this suffix.
+# git ls-remote lists an annotated tag's commit under the peeled ref with this
+# suffix, and only when that ref is asked for by name.
 _PEELED_TAG_SUFFIX = "^{}"
 
 _TORCH_PACKAGES = ("torch", "torchvision")
@@ -99,10 +100,15 @@ def resolve_git_tag(repo: str, tag: str) -> str:
     Rejects branches and moving refs: only tags listed under
     ``refs/tags/`` count. The check is single-network-round-trip and
     runs once per (repo, tag) at composer time.
+
+    The peeled ref is requested next to the tag: an exact ref pattern does
+    not match ``refs/tags/<tag>^{}``, so the tag alone yields an annotated
+    tag's object sha, which uv rejects as the ``rev`` of a git source.
     """
+    tag_ref = f"refs/tags/{tag}"
     try:
         output = subprocess.check_output(
-            ["git", "ls-remote", "--tags", repo, f"refs/tags/{tag}"],
+            ["git", "ls-remote", "--tags", repo, tag_ref, tag_ref + _PEELED_TAG_SUFFIX],
             text=True,
             stderr=subprocess.PIPE,
             timeout=60,
@@ -133,8 +139,9 @@ def _sha_from_ls_remote(lines: list[str]) -> str:
     """Pick the commit sha from ``git ls-remote --tags`` output lines.
 
     Annotated tags appear twice — the bare tag and a ``^{}`` peeled form
-    pointing at the underlying commit. Prefer the peeled form so we get
-    the commit sha, not the tag-object sha.
+    pointing at the underlying commit (:func:`resolve_git_tag` asks for
+    both). Prefer the peeled form so we get the commit sha, not the
+    tag-object sha.
     """
     for line in lines:
         sha, ref = line.split(maxsplit=1)
