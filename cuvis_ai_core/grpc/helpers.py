@@ -31,7 +31,7 @@ class ShmBufferOwner:
         the mapping is left open and ``closed`` stays ``False`` — the OS will
         reclaim it once the last view is garbage-collected. The file handle
         (POSIX only) is always closed eagerly in the ``finally`` block regardless.
-      - Do not access ``buffer`` after ``close()`` has succeeded (``closed=True``).
+      - Do not access ``mmap_obj`` after ``close()`` has succeeded (``closed=True``).
     """
 
     mmap_obj: mmap.mmap

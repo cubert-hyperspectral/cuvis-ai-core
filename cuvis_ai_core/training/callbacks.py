@@ -133,7 +133,7 @@ class CudaMemoryLogCallback(Callback):
         )
 
     def _resolve_memory_fraction(self) -> float | None:
-        """Return the fraction the environment asks for, or none."""
+        """Return the fraction the environment asks for (in ``(0, 1]``), or none."""
         raw = os.environ.get(CUDA_MEMORY_FRACTION_ENV)
         if raw is None or not raw.strip():
             return None
@@ -144,14 +144,10 @@ class CudaMemoryLogCallback(Callback):
                 f"{CUDA_MEMORY_FRACTION_ENV}={raw!r} is not a number; ignoring it."
             )
             return None
-        return self._validated_fraction(value, CUDA_MEMORY_FRACTION_ENV)
-
-    @staticmethod
-    def _validated_fraction(value: float, source: str) -> float | None:
-        """Accept a fraction in ``(0, 1]``; warn and ignore anything else."""
         if not 0 < value <= 1:
             logger.warning(
-                f"{source} memory fraction {value} is outside (0, 1]; ignoring it."
+                f"{CUDA_MEMORY_FRACTION_ENV} memory fraction {value} is outside "
+                "(0, 1]; ignoring it."
             )
             return None
         return value
