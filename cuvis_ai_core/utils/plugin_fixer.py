@@ -10,10 +10,6 @@ The CLI runs the exact-match resolver heuristic in a non-fatal mode and
 emits a patched yaml on stdout (default), a unified diff, or a
 machine-readable JSON envelope. The user pipes / applies the result to
 silence the error.
-
-The reorder helper is the canonical implementation that the one-off
-backfill script (``cuvis-ai/scripts/backfill_pipeline_plugins.py``)
-also imports.
 """
 
 from __future__ import annotations
