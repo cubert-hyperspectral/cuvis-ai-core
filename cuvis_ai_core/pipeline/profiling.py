@@ -3,15 +3,15 @@
 This module implements a lightweight scalar Welford accumulator with P² approximate
 median, purpose-built for profiling ``node.forward()`` durations.
 
-**Why not reuse** ``cuvis_ai.utils.welford.WelfordAccumulator`` **from cuvis-ai-tracking?**
+**Why not reuse** ``cuvis_ai.utils.welford.WelfordAccumulator`` **from cuvis-ai?**
 
 1. That class is an ``nn.Module`` with float64 torch buffers, designed for
    multi-feature (N, C) tensor statistics during statistical node initialization.
 2. Profiling needs a pure-Python *scalar* accumulator (one float per sample) with
    P² approximate median, ``threading.Lock`` thread safety, min/max/total/last
    tracking, and skip-first-N warm-up — none of which exist in the tensor class.
-3. Importing from cuvis-ai-tracking into cuvis-ai-core would invert the
-   one-directional dependency (core ← tracking), which is architecturally wrong.
+3. Importing from cuvis-ai into cuvis-ai-core would invert the one-directional
+   dependency (cuvis-ai builds on core), which is architecturally wrong.
 """
 
 from __future__ import annotations

@@ -1,6 +1,5 @@
 """gRPC API for cuvis.ai."""
 
-# Import proto stubs first to avoid circular imports with helpers.
 from . import helpers
 from .config_service import ConfigService
 from .discovery_service import DiscoveryService

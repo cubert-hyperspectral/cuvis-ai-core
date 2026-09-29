@@ -391,8 +391,8 @@ class NodeRegistry:
         override is logged and ignored; the caller must ``unload_plugin`` first.
 
         Args:
-            configs: dict mapping plugin name → parsed GitPluginSource /
-                LocalPluginSource (already-resolved paths, etc.).
+            configs: dict mapping plugin name → its parsed ``PluginManifest``
+                (source paths already resolved).
 
         Example:
             from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins

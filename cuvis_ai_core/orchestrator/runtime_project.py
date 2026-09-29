@@ -334,6 +334,7 @@ def _plugin_source_entry(p: ResolvedPlugin, ref: str = "sha") -> tuple[str, str,
 
 
 def _core_dependency(core_source: CoreSource) -> str:
+    """Requirement string for core: the pinned PEP 508 spec for PyPI, else the bare name."""
     if core_source.kind == "pypi":
         # identity is the full PEP-508 string, e.g. "cuvis-ai-core==0.7.3"
         return core_source.identity

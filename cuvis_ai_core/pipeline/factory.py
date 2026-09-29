@@ -60,10 +60,7 @@ class PipelineBuilder:
             Constructed CuvisPipeline instance
 
         Example:
-            pipeline = builder.build_from_config(
-                "configs/gradient_based.yaml",
-                "configs/lentils_experiment.yaml"
-            )
+            pipeline = builder.build_from_config("configs/gradient_based.yaml")
         """
         # Load configurations
         pipeline_cfg = self._load_config(pipeline_config)

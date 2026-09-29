@@ -48,7 +48,9 @@ def test_constraint_case(case: dict) -> None:
     by_key: dict[tuple[str, int], SampleRef] = {}
     for row in case["universe"]:
         ref = SampleRef(
-            source=row["source"], index=row["index"], category_ids=row.get("category_ids", [])
+            source=row["source"],
+            index=row["index"],
+            category_ids=row.get("category_ids", []),
         )
         by_key[(row["source"], row["index"])] = ref
 
@@ -56,7 +58,9 @@ def test_constraint_case(case: dict) -> None:
         return [by_key[(src, idx)] for src, idx in case.get(name, [])]
 
     constraints = [
-        Constraint(kind=ConstraintKind(c["kind"]), severity=ConstraintSeverity(c["severity"]))
+        Constraint(
+            kind=ConstraintKind(c["kind"]), severity=ConstraintSeverity(c["severity"])
+        )
         for c in case["constraints"]
     ]
     results = evaluate_constraints(
@@ -67,7 +71,12 @@ def test_constraint_case(case: dict) -> None:
         available_attrs=frozenset(case.get("available_attrs", [])),
     )
     got = [
-        {"kind": r.kind, "status": r.status, "count": r.count, "offending": list(r.offending)}
+        {
+            "kind": r.kind,
+            "status": r.status,
+            "count": r.count,
+            "offending": list(r.offending),
+        }
         for r in results
     ]
     assert got == case["expected"]

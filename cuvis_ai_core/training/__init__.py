@@ -1,9 +1,11 @@
 """Training infrastructure for cuvis.ai PyTorch Lightning integration.
 
-This module provides:
-- Training configuration dataclasses with Hydra support
-- Port-based loss and metric nodes for training
-- Internal Lightning module for training orchestration
+This package provides:
+- Training configuration dataclasses with Hydra support (``config``)
+- The gradient and statistical trainers (``trainers``) and the ``Predictor``
+- Post-training decider calibration (``calibration``)
+- The optimizer and scheduler registry (``optimizer_registry``) and the runtime
+  callbacks (``callbacks``)
 """
 
 from cuvis_ai_core.training.config import (
