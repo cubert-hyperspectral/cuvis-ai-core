@@ -929,6 +929,68 @@ def test_remove_deletes_only_that_rows_files_in_a_shared_repo(tmp_path, registry
     assert ModelWeights.remove("efficienttam_s", tmp_path) == 0  # already gone
 
 
+def _symlink_or_skip(link: Path, blob: Path) -> None:
+    try:
+        os.symlink(os.path.relpath(blob, link.parent), link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available on this machine")
+
+
+def _link_primary_to_blob(cache: Path, entry) -> tuple[Path, Path]:
+    """Seed ``entry`` and turn its primary into a symlink into blobs/ (the POSIX layout)."""
+    primary = _seed(cache, entry)
+    blob = cache / ModelWeights.cache_dir_token(entry.repo_id) / "blobs" / entry.sha256
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    primary.replace(blob)
+    _symlink_or_skip(primary, blob)
+    return primary, blob
+
+
+def _aux_bytes(entry) -> int:
+    return sum(len(CONTENT[Path(aux.path).name]) for aux in entry.aux_files)
+
+
+def test_remove_counts_a_symlinked_entry_once(tmp_path, registry):
+    """stat() follows the link, so the entry's size is the blob's; adding the blob
+    again reported twice the bytes freed."""
+    entry = registry["efficienttam_ti"]
+    _primary, blob = _link_primary_to_blob(tmp_path, entry)
+    assert ModelWeights.remove("efficienttam_ti", tmp_path) == len(
+        ETAM_TI_BYTES
+    ) + _aux_bytes(entry)
+    assert not blob.exists()
+
+
+def test_remove_frees_the_blob_with_a_relative_cache_dir(
+    tmp_path, registry, monkeypatch
+):
+    """The blob is resolved; the repo dir was not, so with a relative --cache-dir the
+    blobs/ check never matched and the blob was left behind."""
+    entry = registry["efficienttam_ti"]
+    _primary, blob = _link_primary_to_blob(tmp_path / "cache", entry)
+    monkeypatch.chdir(tmp_path)
+    assert ModelWeights.remove("efficienttam_ti", "cache") == len(
+        ETAM_TI_BYTES
+    ) + _aux_bytes(entry)
+    assert not blob.exists()
+
+
+def test_a_blob_shared_by_two_snapshot_entries_is_freed_on_the_last_removal(tmp_path):
+    repo_dir = tmp_path / "models--x--y"
+    blob = repo_dir / "blobs" / "abc"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"12345")
+    first = repo_dir / "snapshots" / "r1" / "w.pt"
+    second = repo_dir / "snapshots" / "r2" / "w.pt"
+    for link in (first, second):
+        link.parent.mkdir(parents=True)
+        _symlink_or_skip(link, blob)
+    assert ModelWeights._remove_snapshot_file(first, repo_dir) == 0
+    assert blob.exists() and not first.exists()
+    assert ModelWeights._remove_snapshot_file(second, repo_dir) == 5
+    assert not blob.exists()
+
+
 def test_remove_dir_handles_orphans_and_refuses_anything_else(tmp_path, registry):
     orphan = tmp_path / "models--facebook--sam3" / "snapshots" / "abc"
     orphan.mkdir(parents=True)
