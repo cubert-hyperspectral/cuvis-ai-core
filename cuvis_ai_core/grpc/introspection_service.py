@@ -101,11 +101,9 @@ class IntrospectionService:
                     )
                     image_data = Path(rendered).read_bytes()
             elif format_type in {"dot", "graphviz"}:
-                dot_source = visualizer.to_graphviz()
-                image_data = dot_source.encode("utf-8")
-            elif format_type in {"mermaid"}:
-                mermaid_source = visualizer.to_mermaid()
-                image_data = mermaid_source.encode("utf-8")
+                image_data = visualizer.to_graphviz().encode("utf-8")
+            elif format_type == "mermaid":
+                image_data = visualizer.to_mermaid().encode("utf-8")
             else:
                 raise ValueError(f"Unsupported visualization format: {format_type}")
         except ValueError as exc:
@@ -119,8 +117,7 @@ class IntrospectionService:
             logger.warning(
                 f"Rendering the pipeline as {format_type} failed, returning DOT: {exc}"
             )
-            dot_source = visualizer.to_graphviz()
-            image_data = dot_source.encode("utf-8")
+            image_data = visualizer.to_graphviz().encode("utf-8")
             format_type = "dot"
 
         return cuvis_ai_pb2.GetPipelineVisualizationResponse(
