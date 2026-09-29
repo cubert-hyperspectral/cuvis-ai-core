@@ -162,6 +162,7 @@ class Predictor:
         if isinstance(dataloaders, DataLoader):
             yield from dataloaders
             return
+        loaders: Iterable[Any]
         if isinstance(dataloaders, Mapping):
             loaders = dataloaders.values()
         elif isinstance(dataloaders, Iterable):
