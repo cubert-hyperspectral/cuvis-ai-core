@@ -323,6 +323,27 @@ def test_outdated_refresh_reports_and_prunes_stale_files(tmp_path, fake_hub):
     assert result.stale_files == () and not (target / "old_split.json").exists()
 
 
+def test_interrupted_refresh_keeps_the_previous_file_list(tmp_path, fake_hub):
+    """The downloading marker replaces the complete one before the snapshot starts;
+    it must carry the old file list, or a refresh that fails midway forgets which
+    files of the old revision are stale, and no later run prunes them."""
+    target = tmp_path / LENTILS.target_dir
+    old_files = FILES[:2] + ["old_split.json"]
+    _write_files(target, old_files)
+    _marker(target, _complete_marker(LENTILS, old_files, revision="b" * 40))
+    fake_hub(fail_after=1)
+    with pytest.raises(DatasetError, match="connection reset"):
+        PublicDatasets.download("Lentils", tmp_path)
+    marker = json.loads((target / MARKER_NAME).read_text(encoding="utf-8"))
+    assert marker["state"] == "downloading"
+    assert {f["path"] for f in marker["files"]} == set(old_files)
+    assert PublicDatasets.status("Lentils", tmp_path).state == "incomplete"
+    fake_hub()
+    result = PublicDatasets.download("Lentils", tmp_path, prune_stale=True)
+    assert result.stale_files == () and not (target / "old_split.json").exists()
+    assert PublicDatasets.status("Lentils", tmp_path).present
+
+
 def test_remove_requires_a_marker_naming_the_repo(tmp_path):
     target = tmp_path / LENTILS.target_dir
     assert PublicDatasets.remove("Lentils", tmp_path) == 0  # absent
