@@ -116,6 +116,12 @@ class SessionState:
     # pipeline's plugins against these, not against ``resolved_plugins``: a
     # local plugin's pyproject may have changed on disk since the compose.
     child_install: dict[str, tuple] | None = None
+    # False from the moment a fresh child handle is published until that
+    # child's first forwarded LoadPipeline / RestoreTrainRun has returned.
+    # The pipeline-bound forwarders answer ABORTED meanwhile, so a switch
+    # has one answer whether or not the new child is attached yet; a reuse
+    # never clears it, so the old pipeline keeps serving during a warm load.
+    child_ready: bool = True
     # Serialises everything that decides over or replaces the child: a
     # LoadPipeline / RestoreTrainRun holds it from the reuse-or-replace
     # decision through the forwarded call, close_session holds it while it

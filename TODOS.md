@@ -81,24 +81,19 @@
   (`_close_all_sessions`, `serve`).
 - **Depends on / blocked by:** nothing.
 
-## One answer for requests that race a pipeline switch
+## Refuse a survivor child up front instead of forwarding into it
 
-- **What:** While a load owns a session, a racing `Inference` / `GetPipelineOutputs` is answered
-  `ABORTED` when it finds no child, but the fresh child is attached before the forwarded
-  `LoadPipeline` runs, so during the pipeline build and weight load the same request reaches a
-  child with no pipeline and gets the child's own `FAILED_PRECONDITION` ("Build pipeline first").
-  One transient state shows two codes depending on timing; and a request that reaches a survivor
-  the parent could not stop (`ChildStillRunning`) is forwarded into it instead of being refused up
-  front.
-- **Why:** The desktop client shows `FAILED_PRECONDITION` once and never retries it, while
-  `ABORTED` means "repeat the request"; a switch under a live view should look like one transient
-  state.
-- **Pros:** A `child_ready` flag on `SessionState` (cleared when a fresh child is attached, set
-  once its `LoadPipeline` returned) lets every non-load forwarder answer `ABORTED` for the whole
-  switch window and refuse a marked survivor with `FAILED_PRECONDITION`.
-- **Cons:** A warm reuse load must keep serving the old pipeline meanwhile (the child handles that
-  today), so the flag must cover a replacement only, not every load.
-- **Context:** `grpc/orchestrator_bridge.py` (`_answer_no_child`, `forward_inference`,
-  `_forward_pipeline_op`, `_propagate_child_failure`), `grpc/error_handling.py`
-  (`require_pipeline`).
-- **Depends on / blocked by:** the CuvisNEXT `ABORTED` branch, for the retry in place to happen.
+- **What:** A request that reaches a survivor the parent could not stop (`ChildStillRunning`
+  on the retire) is forwarded into it instead of being refused up front. The other half of the
+  old entry, one `ABORTED` answer for the whole pipeline-switch window, is done:
+  `SessionState.child_ready` is cleared when a fresh handle is published and restored when its
+  first load returns, and every pipeline-bound forwarder answers `ABORTED` meanwhile.
+- **Why:** A survivor serves a pipeline the parent has already replaced in its own bookkeeping;
+  the client should learn that from the parent, not from whatever the survivor answers.
+- **Pros:** A marker on the survivor's handle (set by the failed retire) lets `_forward_pipeline_op`
+  refuse it with `FAILED_PRECONDITION` before any forward.
+- **Cons:** The marker must not outlive the handle: a later successful retire and spawn replaces
+  the handle, so it is naturally dropped, but the close path must not read it.
+- **Context:** `grpc/orchestrator_bridge.py` (`_answer_no_child`, `_forward_pipeline_op`,
+  `_propagate_child_failure`), `grpc/session_manager.py` (`retire_child`, `ChildStillRunning`).
+- **Depends on / blocked by:** nothing.
