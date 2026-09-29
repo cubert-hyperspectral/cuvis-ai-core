@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from copy import copy
 import os
 import time
 from collections.abc import Collection, Iterator
+from copy import copy
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
