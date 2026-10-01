@@ -59,9 +59,7 @@ def test_training_config_custom():
 
 def test_to_dict():
     """Test to_dict conversion."""
-    config = TrainingConfig(
-        seed=42, max_epochs=5, optimizer=OptimizerConfig(lr=0.01)
-    )
+    config = TrainingConfig(seed=42, max_epochs=5, optimizer=OptimizerConfig(lr=0.01))
 
     result = config.to_dict()
 

@@ -227,8 +227,9 @@ def spec_to_tensor_spec(name: str, spec: dict) -> cuvis_ai_pb2.TensorSpec:
 def dtype_to_proto(dtype: Any) -> int:
     """Map a Python dtype-like value to a proto ``D_TYPE_*`` enum.
 
-    Single dispatch used by both the tensor serializers and the plugin
-    port-spec converter so the two sites cannot drift.
+    Used by the plugin port-spec converter for the dtype-like values a
+    ``PortSpec`` may carry; the tensor serializers index ``DTYPE_TORCH_TO_PROTO``
+    and ``DTYPE_NUMPY_TO_PROTO`` directly with a concrete tensor dtype.
 
     Supported inputs (checked in order):
         - ``torch.dtype`` instance (e.g. ``torch.float32``)
@@ -654,6 +655,8 @@ def extract_pipeline_metadata(yaml_path: Path) -> dict[str, Any]:
         (``name``, ``description``, ``created``, ``cuvis_ai_version``, ``tags``,
         ``author``). The discovery service unpacks it straight into the message
         (``PipelineMetadata(**metadata)``), so a key the proto lacks fails there.
+        ``name`` falls back to the file stem when the section has no name and
+        ``tags`` are inferred from the node types when the section has none.
 
     Note:
         Returns empty/default values if metadata section is missing or invalid.

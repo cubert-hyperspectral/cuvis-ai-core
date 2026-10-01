@@ -342,7 +342,7 @@ class NodeRegistry:
     def register_plugin(self, manifest_path: Union[str, Path]) -> None:
         """Register the plugin declared in a bare manifest YAML into THIS INSTANCE.
 
-        Import-only front door for in-process use (CLI, notebooks, cookbook).
+        Import-only front door for in-process use (CLI, notebooks).
         One yaml file is one plugin: it loads the bare manifest (resolving a
         local plugin's relative path), keys it by ``manifest.name``, and hands
         it to :meth:`register_plugins_installed`. The plugin must already be
@@ -391,8 +391,8 @@ class NodeRegistry:
         override is logged and ignored; the caller must ``unload_plugin`` first.
 
         Args:
-            configs: dict mapping plugin name → parsed GitPluginSource /
-                LocalPluginSource (already-resolved paths, etc.).
+            configs: dict mapping plugin name → its parsed ``PluginManifest``
+                (source paths already resolved).
 
         Example:
             from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins

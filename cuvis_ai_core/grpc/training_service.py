@@ -598,6 +598,7 @@ class TrainingService:
         def progress_handler(
             context_obj: Context, losses: dict, metrics: dict, status: str
         ) -> None:
+            """Queue one progress response for the streaming reply."""
             progress_queue.put(
                 self._create_progress_response(
                     context_obj,
@@ -631,6 +632,7 @@ class TrainingService:
         stop_set_at_failure = False
 
         def _run_training() -> None:
+            """Run ``trainer.fit()`` on the worker thread and record its failure."""
             nonlocal training_error, stop_set_at_failure
             try:
                 trainer.fit()

@@ -108,6 +108,7 @@ _in_process_locks_guard = threading.Lock()
 
 
 def _in_process_lock_for(digest: str) -> threading.Lock:
+    """Return the process-wide lock that serialises builds of ``digest``."""
     with _in_process_locks_guard:
         lock = _in_process_locks.get(digest)
         if lock is None:

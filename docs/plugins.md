@@ -67,7 +67,7 @@ The git/local variants are named for the plugin **source** (where it comes from)
 kind of manifest. The directory scan + cross-directory duplicate-name guard lives in
 `cuvis-ai-core` (`plugin_resolver._build_catalog`), not in schemas.
 
-## In-process use (CLI, notebooks, cookbook)
+## In-process use (CLI, notebooks)
 
 For an in-process pipeline, register plugins into a `NodeRegistry` instance. The plugin package must
 already be importable in the active environment (an editable `[tool.uv.sources]` entry in dev, the

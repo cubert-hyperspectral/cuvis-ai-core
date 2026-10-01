@@ -181,14 +181,8 @@ class TestConfigPreservationThroughTraining:
             saved_training = saved_config["training"]
 
             assert saved_training["seed"] == original_training["seed"]
-            assert (
-                saved_training["max_epochs"]
-                == original_training["max_epochs"]
-            )
-            assert (
-                saved_training["accelerator"]
-                == original_training["accelerator"]
-            )
+            assert saved_training["max_epochs"] == original_training["max_epochs"]
+            assert saved_training["accelerator"] == original_training["accelerator"]
             assert (
                 saved_training["optimizer"]["name"]
                 == original_training["optimizer"]["name"]

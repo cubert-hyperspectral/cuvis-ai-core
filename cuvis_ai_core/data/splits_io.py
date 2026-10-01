@@ -49,6 +49,7 @@ def has_dir_indices(splits: DataSplitConfig) -> bool:
     """True if any stage uses a positional ``dir_indices`` selector (incl. nested)."""
 
     def visit(sel: Selector) -> bool:
+        """True if ``sel`` or a selector nested in it is a ``dir_indices`` selector."""
         if sel.kind == SelectorKind.DIR_INDICES:
             return True
         return any(visit(child) for child in sel.of)

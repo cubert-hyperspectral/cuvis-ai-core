@@ -85,7 +85,9 @@ def test_module_owned_path_also_repeats():
 @pytest.mark.integration
 def test_train_loader_yields_n_times_the_samples():
     dm = FakeDataModule(
-        splits=DataSplitConfig(train=[_fi([0, 1, 2, 3])]), batch_size=2, samples_per_frame=3
+        splits=DataSplitConfig(train=[_fi([0, 1, 2, 3])]),
+        batch_size=2,
+        samples_per_frame=3,
     )
     dm.setup(stage="fit")
     seen = sum(b["x"].shape[0] for b in dm.train_dataloader())
@@ -95,7 +97,9 @@ def test_train_loader_yields_n_times_the_samples():
 @pytest.mark.integration
 def test_each_frame_visited_n_times():
     dm = FakeDataModule(
-        splits=DataSplitConfig(train=[_fi([0, 1, 2, 3])]), batch_size=1, samples_per_frame=3
+        splits=DataSplitConfig(train=[_fi([0, 1, 2, 3])]),
+        batch_size=1,
+        samples_per_frame=3,
     )
     dm.setup(stage="fit")
     from collections import Counter

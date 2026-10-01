@@ -1,4 +1,6 @@
-# TODO make yaml serializer
+"""Constructor-signature capture: ``Serializable`` records a subclass's ``__init__``
+arguments as ``hparams`` so a node can be re-created from its saved configuration."""
+
 import inspect
 
 

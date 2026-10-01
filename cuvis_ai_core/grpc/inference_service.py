@@ -173,6 +173,7 @@ class InferenceService:
         batch: dict[str, Any] = {}
 
         def parse_tensor(tensor_proto: cuvis_ai_pb2.Tensor) -> torch.Tensor:
+            """Decode one proto: on ``stack`` per ``copy_tensors``, else a clone."""
             if stack is not None:
                 return stack.enter_context(
                     helpers.proto_to_tensor(tensor_proto, copy=copy_tensors)
@@ -300,6 +301,7 @@ class InferenceService:
         return str(key)
 
     def _should_return(self, output_name: str, specs: set[str]) -> bool:
+        """True when ``specs`` is empty or names ``output_name`` or its bare port."""
         if not specs:
             return True
         port_name = output_name.split(".", maxsplit=1)[-1]

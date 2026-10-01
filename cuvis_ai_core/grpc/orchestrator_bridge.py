@@ -213,6 +213,7 @@ _spawner: ChildRuntimeSpawner | None = None
 
 
 def get_composer() -> ComposerFn:
+    """Return the composer callable the bridge uses to build child environments."""
     return _composer
 
 
@@ -229,6 +230,7 @@ def reset_composer() -> None:
 
 
 def get_spawner() -> ChildRuntimeSpawner:
+    """Return the child spawner, creating the local subprocess one on first use."""
     global _spawner
     if _spawner is None:
         _spawner = LocalChildRuntimeSpawner()
@@ -855,6 +857,7 @@ def forward_train(
         return iter([])
 
     def _proxy():
+        """Relay the child ``Train`` stream; an ``RpcError`` sets the parent status."""
         try:
             yield from child.stub().Train(request)
         except grpc.RpcError as exc:
@@ -1213,6 +1216,7 @@ def _with_resolved_weights_path(session_manager, request):
 
 
 def forward_save_pipeline(session_manager, request, context):
+    """Forward ``SavePipeline`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1223,6 +1227,7 @@ def forward_save_pipeline(session_manager, request, context):
 
 
 def forward_save_train_run(session_manager, request, context):
+    """Forward ``SaveTrainRun`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1233,6 +1238,7 @@ def forward_save_train_run(session_manager, request, context):
 
 
 def forward_get_pipeline_inputs(session_manager, request, context):
+    """Forward ``GetPipelineInputs`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1243,6 +1249,7 @@ def forward_get_pipeline_inputs(session_manager, request, context):
 
 
 def forward_get_pipeline_outputs(session_manager, request, context):
+    """Forward ``GetPipelineOutputs`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1253,6 +1260,7 @@ def forward_get_pipeline_outputs(session_manager, request, context):
 
 
 def forward_get_pipeline_visualization(session_manager, request, context):
+    """Forward ``GetPipelineVisualization`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1306,6 +1314,7 @@ def forward_set_train_run_config(session_manager, request, context):
 
 
 def forward_get_train_status(session_manager, request, context):
+    """Forward ``GetTrainStatus`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1338,6 +1347,7 @@ def forward_set_profiling(session_manager, request, context):
 
 
 def forward_get_profiling_summary(session_manager, request, context):
+    """Forward ``GetProfilingSummary`` to the session's child runtime."""
     return _forward_pipeline_op(
         session_manager,
         request,
@@ -1378,18 +1388,23 @@ class _InMemoryContext:
         return self._trailing_metadata
 
     def set_code(self, code: grpc.StatusCode) -> None:
+        """Record the status code the servicer set."""
         self._code = code
 
     def set_details(self, details: str) -> None:
+        """Record the status details the servicer set."""
         self._details = details
 
     def code(self) -> grpc.StatusCode | None:
+        """Return the recorded status code, ``None`` when the servicer set none."""
         return self._code
 
     def details(self) -> str:
+        """Return the recorded status details."""
         return self._details
 
     def is_active(self) -> bool:  # pragma: no cover - trivial
+        """Always active: an in-memory call cannot be cancelled by a peer."""
         return True
 
 
@@ -1401,12 +1416,15 @@ class _InMemoryRpcError(grpc.RpcError):
         self._details = details
 
     def code(self) -> grpc.StatusCode:
+        """Return the status code of the failed call."""
         return self._code
 
     def details(self) -> str:
+        """Return the status details of the failed call."""
         return self._details
 
     def __str__(self) -> str:
+        """Render the code and details for logs and assertions."""
         return f"<_InMemoryRpcError code={self._code} details={self._details!r}>"
 
 
@@ -1417,6 +1435,7 @@ class _InMemoryStub:
         self._servicer = servicer
 
     def _call(self, method_name: str, request, timeout=None):
+        """Call ``method_name`` on the servicer; non-OK raises ``_InMemoryRpcError``."""
         ctx = _InMemoryContext()
         method = getattr(self._servicer, method_name)
         result = method(request, ctx)
@@ -1426,49 +1445,64 @@ class _InMemoryStub:
         return result
 
     def InitializeSession(self, request, timeout=None):
+        """Forward ``InitializeSession`` to the local servicer."""
         return self._call("InitializeSession", request, timeout)
 
     def LoadPipeline(self, request, timeout=None):
+        """Forward ``LoadPipeline`` to the local servicer."""
         return self._call("LoadPipeline", request, timeout)
 
     def LoadPipelineWeights(self, request, timeout=None):
+        """Forward ``LoadPipelineWeights`` to the local servicer."""
         return self._call("LoadPipelineWeights", request, timeout)
 
     def SavePipeline(self, request, timeout=None):
+        """Forward ``SavePipeline`` to the local servicer."""
         return self._call("SavePipeline", request, timeout)
 
     def SaveTrainRun(self, request, timeout=None):
+        """Forward ``SaveTrainRun`` to the local servicer."""
         return self._call("SaveTrainRun", request, timeout)
 
     def GetPipelineInputs(self, request, timeout=None):
+        """Forward ``GetPipelineInputs`` to the local servicer."""
         return self._call("GetPipelineInputs", request, timeout)
 
     def GetPipelineOutputs(self, request, timeout=None):
+        """Forward ``GetPipelineOutputs`` to the local servicer."""
         return self._call("GetPipelineOutputs", request, timeout)
 
     def GetPipelineVisualization(self, request, timeout=None):
+        """Forward ``GetPipelineVisualization`` to the local servicer."""
         return self._call("GetPipelineVisualization", request, timeout)
 
     def SetTrainRunConfig(self, request, timeout=None):
+        """Forward ``SetTrainRunConfig`` to the local servicer."""
         return self._call("SetTrainRunConfig", request, timeout)
 
     def GetTrainStatus(self, request, timeout=None):
+        """Forward ``GetTrainStatus`` to the local servicer."""
         return self._call("GetTrainStatus", request, timeout)
 
     def StopTrain(self, request, timeout=None):
+        """Forward ``StopTrain`` to the local servicer."""
         return self._call("StopTrain", request, timeout)
 
     def RestoreTrainRun(self, request, timeout=None):
+        """Forward ``RestoreTrainRun`` to the local servicer."""
         return self._call("RestoreTrainRun", request, timeout)
 
     def Inference(self, request, timeout=None):
+        """Forward ``Inference`` to the local servicer."""
         return self._call("Inference", request, timeout)
 
     def Train(self, request, timeout=None):
+        """Forward ``Train`` to the local servicer; the stream raises on non-OK."""
         ctx = _InMemoryContext()
         gen = self._servicer.Train(request, ctx)
 
         def _iter():
+            """Yield the servicer's responses, then raise if it set a non-OK status."""
             yield from gen
             code = ctx.code()
             if code is not None and code is not grpc.StatusCode.OK:
@@ -1477,18 +1511,23 @@ class _InMemoryStub:
         return _iter()
 
     def SetProfiling(self, request, timeout=None):
+        """Forward ``SetProfiling`` to the local servicer."""
         return self._call("SetProfiling", request, timeout)
 
     def GetProfilingSummary(self, request, timeout=None):
+        """Forward ``GetProfilingSummary`` to the local servicer."""
         return self._call("GetProfilingSummary", request, timeout)
 
     def CloseSession(self, request, timeout=None):
+        """Forward ``CloseSession`` to the local servicer."""
         return self._call("CloseSession", request, timeout)
 
     def StopRun(self, request, timeout=None):
+        """Forward ``StopRun`` to the local servicer."""
         return self._call("StopRun", request, timeout)
 
     def HealthCheck(self, request, timeout=None):
+        """Forward ``HealthCheck`` to the local servicer."""
         return self._call("HealthCheck", request, timeout)
 
 
@@ -1506,9 +1545,11 @@ class _InMemoryChildHandle:
         self.retired_by_parent = False
 
     def stub(self) -> _InMemoryStub:
+        """Return a stub bound to the in-process servicer."""
         return _InMemoryStub(self._servicer)
 
     def terminate(self, grace_s: float = 5.0) -> int:
+        """Signal the servicer to shut down and report exit code 0."""
         try:
             self._servicer.shutdown_event.set()
         except Exception:  # pragma: no cover
@@ -1517,10 +1558,12 @@ class _InMemoryChildHandle:
         return 0
 
     def kill(self) -> int:
+        """Alias of ``terminate`` without a grace period."""
         return self.terminate(grace_s=0)
 
     @property
     def returncode(self) -> int | None:
+        """Exit code after ``terminate``, ``None`` while the handle is live."""
         return self._returncode
 
 
@@ -1535,6 +1578,7 @@ class _InMemorySpawner(ChildRuntimeSpawner):
         declared_paths: DeclaredPaths,
         request_gpu: bool = False,
     ) -> ChildHandle:
+        """Build a ``RunRuntimeServicer`` in this process and return its handle."""
         from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
 
         servicer = RunRuntimeServicer()
@@ -1607,6 +1651,7 @@ def _default_declared_paths(session_id: str) -> DeclaredPaths:
 
 
 def _gpu_requested() -> bool:
+    """True when CUDA is available to this process; a torch failure counts as no GPU."""
     try:
         import torch
 

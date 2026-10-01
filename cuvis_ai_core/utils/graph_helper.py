@@ -33,7 +33,7 @@ def restructure_output_to_node_dict(
     ...     ("metric_node", "metrics"): [Metric(...), Metric(...)],
     ... }
     >>> node_dict = restructure_output_to_node_dict(outputs)
-    >>> # Access loss: node_dict["loss_node_123"]["loss"]
+    >>> # Access loss: node_dict["loss_node"]["loss"]
     >>> # O(1) instead of filtering entire outputs dict
     """
     structured: dict[str, dict[str, Any]] = {}

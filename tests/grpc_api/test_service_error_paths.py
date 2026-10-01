@@ -501,7 +501,7 @@ class TestTrainRunServiceValidation:
             save_weights=True,
         )
 
-        # torch is imported inside the function; patch it at module level
+        # the service imports torch at module level, so patch torch.save itself
         with patch("torch.save", side_effect=RuntimeError("disk full")):
             response = self.service.save_train_run(request, self.ctx)
 

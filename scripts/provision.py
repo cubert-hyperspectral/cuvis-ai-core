@@ -7,7 +7,7 @@ the pip-install specs. Git plugins are pinned to their manifest tag unless
 ``--pin`` resolves them to a commit sha.
 
 This is the import-only world's setup step: provision once, then
-``NodeRegistry.register_plugins`` imports the now-installed plugins.
+``NodeRegistry.register_plugins_installed`` imports the now-installed plugins.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from cuvis_ai_core.utils.provision import provision_environment, resolve_install
 
 
 def main() -> None:
+    """Parse the CLI arguments and print, install or write the resolved plugin specs."""
     parser = argparse.ArgumentParser(
         prog="provision",
         description="Provision the plugins a pipeline needs (import-only world).",

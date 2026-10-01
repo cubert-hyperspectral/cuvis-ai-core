@@ -63,7 +63,8 @@ class Node(nn.Module, ABC, Serializable):
     1. Nodes inheriting from Node (nn.Module):
        - Already have state_dict() and load_state_dict() from PyTorch
        - Ensure all learnable parameters are registered properly
-       - Use register_buffer() for non-trainable state
+       - Pretrained weights that must not train stay nn.Parameters with
+         requires_grad_(False); register_buffer() is for fitted statistics only
 
     2. Stateless nodes:
        - state_dict() returns empty dict {} (default PyTorch behavior)
