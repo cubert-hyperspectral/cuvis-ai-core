@@ -430,16 +430,11 @@ class PipelineVisualizer:
         return groups
 
     def _stage_bucket(self, node: Node) -> str:
-        stages = getattr(node, "execution_stages", None)
-        if not stages:
-            return ExecutionStage.ALWAYS.value
-        normalized = {self._normalize_stage(stage) for stage in stages}
-        normalized.discard(ExecutionStage.ALWAYS.value)
-        if not normalized:
-            return ExecutionStage.ALWAYS.value
-        if len(normalized) > 1:
-            return ExecutionStage.ALWAYS.value
-        return next(iter(normalized))
+        """Cluster of ``node``: its one stage, else ``always`` (unrestricted or several)."""
+        values = self._node_stage_values(node)
+        if len(values) == 1:
+            return next(iter(values))
+        return ExecutionStage.ALWAYS.value
 
     def _normalize_stage(self, stage: ExecutionStage | str) -> str:
         if isinstance(stage, ExecutionStage):

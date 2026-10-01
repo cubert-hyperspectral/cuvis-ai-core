@@ -87,7 +87,7 @@ class VideoIterator:
             frame = self.video_decoder[frame_id].permute(1, 2, 0).numpy()
         except Exception as e:
             logger.error("Error reading frame {}: {}", frame_id, e)
-            return {"frame_id": frame_id, "image": np.zeros((1, 1, 3), dtype=np.uint8)}
+            return self._unreadable_frame(frame_id)
 
         frame = frame.astype(np.uint8, copy=False)
 
@@ -101,8 +101,16 @@ class VideoIterator:
         cap.release()
         if not ok or frame_bgr is None:
             logger.error("cv2: Error reading frame {}", frame_id)
-            return {"frame_id": frame_id, "image": np.zeros((1, 1, 3), dtype=np.uint8)}
+            return self._unreadable_frame(frame_id)
         return {"frame_id": frame_id, "image": frame_bgr, "basename": self.basename}
+
+    def _unreadable_frame(self, frame_id: int) -> dict[str, Any]:
+        """Placeholder for a frame the backend could not read; same keys as a good one."""
+        return {
+            "frame_id": frame_id,
+            "image": np.zeros((1, 1, 3), dtype=np.uint8),
+            "basename": self.basename,
+        }
 
 
 # ---------------------------------------------------------------------------

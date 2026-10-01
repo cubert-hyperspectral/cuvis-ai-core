@@ -175,6 +175,7 @@ def test_video_iterator_torchcodec_backend_and_frame_error(
 
     second = iterator.get_frame(1)
     assert second["frame_id"] == 1
+    assert second["basename"] == "video"
     assert second["image"].shape == (1, 1, 3)
 
     frames = list(iterator)
@@ -223,6 +224,7 @@ def test_video_iterator_falls_back_to_cv2(
 
     missing_frame = iterator.get_frame(3)
     assert missing_frame["image"].shape == (1, 1, 3)
+    assert missing_frame["basename"] == "fallback"
     assert fail_cap.position == 3
     assert fail_cap.released is True
 

@@ -33,7 +33,8 @@ def _data_dir_option(fn: _F) -> _F:
     return click.option(
         "--data-dir",
         type=click.Path(path_type=Path, file_okay=False),
-        default=Path.cwd() / "data",
+        # Callable: resolved when the command runs, not when the CLI is built.
+        default=lambda: Path.cwd() / "data",
         show_default="./data",
         help="Datasets folder; each dataset lands in its own sub-directory.",
     )(fn)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -403,3 +405,29 @@ def test_repr_html_returns_none_when_all_rendering_fails(monkeypatch):
     monkeypatch.setattr(PipelineVisualizer, "to_mermaid", _boom)
 
     assert pipeline._repr_html_() is None
+
+
+_ALWAYS = ExecutionStage.ALWAYS.value
+_TRAIN = ExecutionStage.TRAIN.value
+_VAL = ExecutionStage.VAL.value
+
+
+@pytest.mark.parametrize(
+    "stages, bucket, values",
+    [
+        (None, _ALWAYS, {_ALWAYS}),
+        (set(), _ALWAYS, {_ALWAYS}),
+        ({ExecutionStage.TRAIN}, _TRAIN, {_TRAIN}),
+        ({ExecutionStage.TRAIN, ExecutionStage.VAL}, _ALWAYS, {_TRAIN, _VAL}),
+        ({ExecutionStage.TRAIN, ExecutionStage.ALWAYS}, _ALWAYS, {_ALWAYS}),
+        ({ExecutionStage.TRAIN, None}, _TRAIN, {_TRAIN}),
+        ({"Train"}, _TRAIN, {_TRAIN}),
+    ],
+)
+def test_stage_bucket_and_stage_values_follow_one_rule(stages, bucket, values):
+    """The stage cluster and the stage label of a card read the same normalized set."""
+    pipeline, _, _ = _build_pipeline()
+    visualizer = PipelineVisualizer(pipeline)
+    node = SimpleNamespace(execution_stages=stages)
+    assert visualizer._node_stage_values(node) == values
+    assert visualizer._stage_bucket(node) == bucket

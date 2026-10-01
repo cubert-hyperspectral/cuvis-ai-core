@@ -151,6 +151,9 @@ class CuvisPipeline:
         # empty for pipelines assembled programmatically.
         self._plugins: list[str] = []
         self.strict_runtime_io_validation = strict_runtime_io_validation
+        # Set by a trainer that holds this graph's module list; connect() refuses
+        # to change the structure while it is set (see freeze_structure).
+        self._structure_frozen_by: str | None = None
         self._validation_cache: dict[tuple[str, frozenset, int | None], None] = {}
         # Per (stage, upto_node id): which executed node is the last reader of
         # each produced port. Feeds ``forward(free_consumed_ports=True)``.
@@ -214,7 +217,10 @@ class CuvisPipeline:
             If provided objects are not OutputPort/InputPort instances.
         PortCompatibilityError
             If ports are incompatible according to their specifications.
+        RuntimeError
+            If a trainer froze the structure (see :meth:`freeze_structure`).
         """
+        self._require_mutable_structure()
         if len(connections) == 2 and isinstance(connections[0], OutputPort):
             connections = [(connections[0], connections[1])]
 
@@ -275,6 +281,7 @@ class CuvisPipeline:
             Existing: normalizer (0), normalizer-2 (2)  [gap at 1]
             New node: normalizer-3 (3)  [gap preserved]
         """
+        self._require_mutable_structure()
         warn_if_metadata_missing(node)
 
         # Find the highest counter value for this base name
@@ -286,6 +293,8 @@ class CuvisPipeline:
         # Assign next counter (gaps are preserved)
         node._pipeline_counter = max_counter + 1
         self._graph.add_node(node)
+        # The module list follows the node set.
+        self.__dict__.pop("torch_layers", None)
 
     def _validate_connection(
         self,
@@ -660,6 +669,8 @@ class CuvisPipeline:
         self._last_consumer_cache.clear()
         if "_sorted_nodes" in self.__dict__:
             del self.__dict__["_sorted_nodes"]
+        self.__dict__.pop("torch_layers", None)
+        self._structure_frozen_by = None
 
         self._profiler = None
         self._profiling_enabled = False
@@ -1389,7 +1400,10 @@ class CuvisPipeline:
             elif port_name in batch:
                 node_inputs[port_name] = batch[port_name]
 
-        # Get from predecessor connections
+        # Get from predecessor connections; an edge supersedes a batch value of the
+        # same name, and a variadic port collects its edges into a list of its own
+        # (never into a list that came from the batch).
+        fan_in_started: set[str] = set()
         for predecessor_node in self._graph.predecessors(node):
             for _, edge_data in self._graph[predecessor_node][node].items():
                 from_port = edge_data["from_port"]
@@ -1400,9 +1414,9 @@ class CuvisPipeline:
 
                     port_spec = getattr(node, "INPUT_SPECS", {}).get(to_port)
                     if getattr(port_spec, "variadic", False):
-                        # Variadic port - collect fan-in into a list
-                        if to_port not in node_inputs:
+                        if to_port not in fan_in_started:
                             node_inputs[to_port] = []
+                            fan_in_started.add(to_port)
                         node_inputs[to_port].append(source_data)
                     else:
                         node_inputs[to_port] = source_data
@@ -1588,11 +1602,43 @@ class CuvisPipeline:
 
     @cached_property
     def torch_layers(self) -> nn.ModuleList:
-        """Torch modules stored in the graph's nodes, packaged as an nn.ModuleList."""
-        # If you'll mutate self.nodes after construction, delete this cache:
-        #   del self.__dict__['torch_layers']
+        """Torch modules stored in the graph's nodes, packaged as an nn.ModuleList.
+
+        Cached until the node set changes: adding a node through ``connect()`` and
+        ``cleanup()`` both drop the cache, so ``to()``, ``parameters()`` and the
+        device probes always see the current graph.
+        """
         modules = [node for node in self._graph.nodes() if isinstance(node, nn.Module)]
         return nn.ModuleList(modules)
+
+    @property
+    def structure_frozen_by(self) -> str | None:
+        """Who froze the graph structure, or ``None`` while it may change."""
+        return self._structure_frozen_by
+
+    def freeze_structure(self, owner: str) -> None:
+        """Refuse structural changes until :meth:`unfreeze_structure` or :meth:`cleanup`.
+
+        A ``GradientTrainer`` copies :attr:`torch_layers` into its own module tree at
+        construction and a ``StatisticalTrainer.fit`` walks the sorted graph, so a
+        node connected afterwards would get no device move, no checkpoint entry and
+        no optimizer parameter without any error. ``owner`` names the holder in the
+        message ``connect()`` raises meanwhile.
+        """
+        self._structure_frozen_by = owner
+
+    def unfreeze_structure(self) -> None:
+        """Allow structural changes again (``cleanup()`` does this as well)."""
+        self._structure_frozen_by = None
+
+    def _require_mutable_structure(self) -> None:
+        """Raise while a trainer holds the structure frozen (see freeze_structure)."""
+        if self._structure_frozen_by is not None:
+            raise RuntimeError(
+                f"Pipeline '{self.name}' structure is frozen by "
+                f"{self._structure_frozen_by}: connect every node before building "
+                "the trainer, or cleanup() and rebuild the pipeline."
+            )
 
     def to(self, *args: Any, **kwargs: Any) -> CuvisPipeline:
         """Move all torch-backed nodes to the requested device/dtype."""

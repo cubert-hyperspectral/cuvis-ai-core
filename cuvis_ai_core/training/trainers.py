@@ -120,6 +120,9 @@ class GradientTrainer(pl.LightningModule):
         # Register graph's modules so Lightning can move them to correct device
         # Without this, graph nodes stay on CPU while trainer moves to CUDA
         self.pipeline_modules = pipeline.torch_layers
+        # This copy of the module list is what Lightning moves, checkpoints and
+        # optimizes; a node connected from now on would be missing from all three.
+        pipeline.freeze_structure("GradientTrainer")
         self.pipeline = pipeline
         self.datamodule = datamodule
         self.loss_nodes = loss_nodes
@@ -629,19 +632,30 @@ class StatisticalTrainer:
 
         logger.info(f"Training {len(stat_nodes)} statistical nodes...")
 
-        # Train in topological order
-        for node in self.pipeline._sorted_nodes:
-            if node not in stat_nodes:
-                continue
+        # The fit walks the sorted graph and runs partial forwards; a node connected
+        # meanwhile would corrupt both. Keep an outer freeze (a GradientTrainer
+        # built before this fit) in place afterwards.
+        outer_owner = self.pipeline.structure_frozen_by
+        self.pipeline.freeze_structure("StatisticalTrainer.fit")
+        try:
+            # Train in topological order
+            for node in self.pipeline._sorted_nodes:
+                if node not in stat_nodes:
+                    continue
 
-            self._raise_if_cancelled()
-            logger.info(f"  Training {type(node).__name__}...")
+                self._raise_if_cancelled()
+                logger.info(f"  Training {type(node).__name__}...")
 
-            # Create port-based input stream using upto_node
-            input_stream = self._create_input_stream(node, train_loader)
+                # Create port-based input stream using upto_node
+                input_stream = self._create_input_stream(node, train_loader)
 
-            # Initialize the node from data
-            node.statistical_initialization(input_stream)
+                # Initialize the node from data
+                node.statistical_initialization(input_stream)
+        finally:
+            if outer_owner is None:
+                self.pipeline.unfreeze_structure()
+            else:
+                self.pipeline.freeze_structure(outer_owner)
 
         self._raise_if_cancelled()
 
@@ -715,8 +729,9 @@ class StatisticalTrainer:
     def _create_input_stream(self, target_node, dataloader) -> InputStream:
         """Create port-based input stream for statistical node.
 
-        Uses graph.forward() with upto_node to get clean transformed inputs.
-        Yields dicts matching target_node.INPUT_SPECS.
+        Uses graph.forward() with upto_node to get clean transformed inputs and
+        gathers the target's inputs exactly as a forward would: batch keys by port
+        name, predecessor outputs through the edges, a variadic port as a list.
 
         Parameters
         ----------
@@ -729,6 +744,12 @@ class StatisticalTrainer:
         ------
         dict[str, Any]
             Input dict with keys from target_node.INPUT_SPECS
+
+        Raises
+        ------
+        RuntimeError
+            If a required input's predecessor produced nothing in the partial
+            forward (the predecessor does not run at the inference stage).
         """
         for batch in dataloader:
             self._raise_if_cancelled()
@@ -743,23 +764,21 @@ class StatisticalTrainer:
                 upto_node=target_node,  # Partial execution
             )
 
-            # Gather inputs for target node from predecessor outputs
-            node_inputs = {}
-            predecessors = list(self.pipeline._graph.predecessors(target_node))
+            self._require_predecessor_outputs(target_node, outputs)
+            yield self.pipeline._gather_node_inputs(target_node, outputs, batch)
 
-            if not predecessors:
-                # Entry node - get directly from batch
-                for port_name in target_node.INPUT_SPECS:
-                    if port_name in batch:
-                        node_inputs[port_name] = batch[port_name]
-            else:
-                # Get from parent outputs via graph edges
-                for parent_node in predecessors:
-                    for edge_data in self.pipeline._graph[parent_node][
-                        target_node
-                    ].values():
-                        from_port = edge_data["from_port"]
-                        to_port = edge_data["to_port"]
-                        node_inputs[to_port] = outputs[(parent_node.name, from_port)]
-
-            yield node_inputs  # Clean dict matching INPUT_SPECS!
+    def _require_predecessor_outputs(self, target_node, outputs: dict) -> None:
+        """Raise when a required edge into ``target_node`` has no value to gather."""
+        specs = getattr(target_node, "INPUT_SPECS", {})
+        for parent in self.pipeline._graph.predecessors(target_node):
+            for edge in self.pipeline._graph[parent][target_node].values():
+                if (parent.name, edge["from_port"]) in outputs:
+                    continue
+                if getattr(specs.get(edge["to_port"]), "optional", False):
+                    continue
+                raise RuntimeError(
+                    f"Cannot fit '{target_node.name}': its input '{edge['to_port']}' "
+                    f"comes from '{parent.name}.{edge['from_port']}', which the partial "
+                    f"forward did not produce (does '{parent.name}' run at the "
+                    "inference stage?)"
+                )

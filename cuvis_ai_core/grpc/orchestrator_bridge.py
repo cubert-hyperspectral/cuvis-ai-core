@@ -1174,13 +1174,42 @@ def _call_child_with_error_propagation(
 
 
 def forward_load_pipeline_weights(session_manager, request, context):
+    """Forward a weights load; a relative ``weights_path`` is resolved here first.
+
+    The child keeps the search paths it was initialised with, so a directory added
+    by a later SetSessionSearchPaths call is unknown there. The parent resolves the
+    path against the session's current search paths and forwards a copy carrying
+    the absolute path; a path the parent cannot resolve is forwarded as sent, so
+    the child answers exactly as before.
+    """
     return _forward_pipeline_op(
         session_manager,
-        request,
+        _with_resolved_weights_path(session_manager, request),
         context,
         stub_method="LoadPipelineWeights",
         empty_response_factory=cuvis_ai_pb2.LoadPipelineWeightsResponse,
     )
+
+
+def _with_resolved_weights_path(session_manager, request):
+    """Return ``request`` with an absolute ``weights_path`` when the parent resolves it."""
+    from cuvis_ai_core.grpc import helpers
+
+    if not (request.HasField("weights_path") and request.weights_path):
+        return request
+    try:
+        session = session_manager.get_session(request.session_id)
+        resolved = helpers.find_weights_file(
+            request.weights_path, list(session.search_paths)
+        )
+    except (ValueError, FileNotFoundError):
+        # Unknown session: the forwarder answers NOT_FOUND itself. A miss: the
+        # child resolves (and reports) the original path as it does today.
+        return request
+    forwarded = cuvis_ai_pb2.LoadPipelineWeightsRequest()
+    forwarded.CopyFrom(request)
+    forwarded.weights_path = str(resolved)
+    return forwarded
 
 
 def forward_save_pipeline(session_manager, request, context):
