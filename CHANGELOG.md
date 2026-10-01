@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.0 - 2026-10-01
 
 - Removed, breaking (the next release is 0.18.0): the public names the 0.17.5 simplification pass kept for an API decision. None of them is referenced by cuvis-ai, the plugins, the notebooks, the skills or CuvisNEXT.
   - `CuvisPipeline.custom_copy` (it raised `AttributeError`) and `save_to_file(include_optimizer=, include_scheduler=)` (nothing ever set `pipeline.optimizer` or `pipeline.scheduler`; a checkpoint holds `state_dict` and `metadata`).
