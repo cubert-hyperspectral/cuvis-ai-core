@@ -54,7 +54,10 @@ def _fail(exc: BaseException) -> None:
     sys.exit(EXIT_ERROR)
 
 
-def _rows(statuses: list[ds.DatasetStatus], **extra: Any) -> list[dict[str, Any]]:
+def _rows(
+    statuses: list[ds.DatasetStatus], *, downloaded: bool = False
+) -> list[dict[str, Any]]:
+    extra = {"downloaded": True} if downloaded else {}
     return [{**s.spec.to_json_dict(), **s.to_json_dict(), **extra} for s in statuses]
 
 

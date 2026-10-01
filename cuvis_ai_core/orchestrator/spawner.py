@@ -201,18 +201,16 @@ def _read_stderr_log(path: Path | None) -> str:
         return f"<unreadable stderr log {path}: {exc}>"
 
 
-def extract_crash_summary(
-    stderr_text: str, *, tail_chars: int = _CRASH_STDERR_TAIL_CHARS
-) -> str:
+def extract_crash_summary(stderr_text: str) -> str:
     """Condense a child's stderr into the part worth putting in an error detail.
 
-    The last ``tail_chars`` characters are the base, because the death is
+    The last ``_CRASH_STDERR_TAIL_CHARS`` characters are the base, because the death is
     usually the last thing in the log. When the process kept writing
     afterwards (atexit handlers, a dying dataloader's worker chatter) the
     cause scrolls out of that window, so the last line matching a known
     crash marker is prepended when it is not in the tail already.
     """
-    tail = stderr_text[-tail_chars:].strip()
+    tail = stderr_text[-_CRASH_STDERR_TAIL_CHARS:].strip()
     marker_line = ""
     for line in stderr_text.splitlines():
         if _CRASH_MARKER_PATTERN.search(line):

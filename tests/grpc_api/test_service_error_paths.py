@@ -705,9 +705,7 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
             return_value=outcome,
         ),
     ):
-        responses = list(
-            service._train_gradient(session, Mock(), Mock(), training_config)
-        )
+        responses = list(service._train_gradient(session, Mock(), training_config))
 
     mock_gt.assert_called_once()
     # The (mocked) trainer's fit ran on the worker thread and the stream drained to
@@ -807,7 +805,7 @@ def test_train_gradient_registers_the_cache_release_when_the_config_asks(monkeyp
             return_value=CalibrationOutcome(split="val", applicable=False),
         ),
     ):
-        list(service._train_gradient(session, Mock(), Mock(), training_config))
+        list(service._train_gradient(session, Mock(), training_config))
 
     registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
     assert "CudaCacheReleaseCallback" in registered
