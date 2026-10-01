@@ -146,14 +146,12 @@ class PipelineService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.SavePipelineResponse:
         """Save trained pipeline (structure + weights) to disk."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.SavePipelineResponse(success=False)
-
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.SavePipelineResponse(success=False)
+        _, pipeline = resolved
 
         if not request.pipeline_path:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -174,7 +172,7 @@ class PipelineService:
             author=request.metadata.author,
         )
 
-        session.pipeline.save_to_file(str(pipeline_path), metadata=metadata)
+        pipeline.save_to_file(str(pipeline_path), metadata=metadata)
 
         # save_to_file writes the weights as pipeline_path.with_suffix('.pt')
         return cuvis_ai_pb2.SavePipelineResponse(
