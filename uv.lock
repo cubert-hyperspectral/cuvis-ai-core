@@ -823,7 +823,7 @@ requires-dist = [
     { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=5.29.2" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
-    { name = "urllib3", specifier = ">=2.7.0" },
+    { name = "urllib3", specifier = ">=2.8.0" },
 ]
 provides-extras = ["hf", "dev", "test"]
 

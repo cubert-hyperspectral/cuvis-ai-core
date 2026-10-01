@@ -55,7 +55,7 @@ dependencies = [
     #   aiohttp CVE-2026-34993 / 47265 (via the huggingface / fsspec stack)
     "gitpython>=3.1.62",
     "idna>=3.18",
-    "urllib3>=2.7.0",
+    "urllib3>=2.8.0",
     "aiohttp>=3.14.3",
     # Type hints and validation
     "typing-extensions>=4.15.0",
