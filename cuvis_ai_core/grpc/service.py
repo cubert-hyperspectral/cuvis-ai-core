@@ -202,11 +202,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     ) -> cuvis_ai_pb2.ListAvailableNodesResponse:
         return self.plugin_service.list_available_nodes(request, context)
 
-    def ClearPluginCache(
-        self, request, context
-    ) -> cuvis_ai_pb2.ClearPluginCacheResponse:
-        return self.plugin_service.clear_plugin_cache(request, context)
-
     # ------------------------------------------------------------------
     # Profiling
     # ------------------------------------------------------------------

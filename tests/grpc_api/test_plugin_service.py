@@ -497,18 +497,6 @@ class TestNode(Node):
         assert list(plugin_node.tags) == []
         assert plugin_node.icon_svg == b"<svg/>"
 
-    def test_clear_plugin_cache_not_implemented(self):
-        """Test clear_plugin_cache functionality."""
-        # This test verifies the method exists and returns appropriate response
-        request = cuvis_ai_pb2.ClearPluginCacheRequest(plugin_name="")
-
-        # Call clear_plugin_cache
-        response = self.plugin_service.clear_plugin_cache(request, self.mock_context)
-
-        # Verify response structure (count may be 0 if no cache exists)
-        assert isinstance(response.cleared_count, int)
-        assert response.cleared_count >= 0
-
     def test_list_available_nodes_populates_explicit_metadata(self):
         """A node with _category and _tags set surfaces those exact values over the wire."""
         session_id = self.session_manager.create_session()

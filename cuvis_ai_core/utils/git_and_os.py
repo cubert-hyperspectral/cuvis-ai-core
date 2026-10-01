@@ -16,52 +16,11 @@ funnel through :func:`import_plugin_nodes`.
 
 from __future__ import annotations
 
-import errno
 import importlib
 import inspect
-import os
-import shutil
-import stat
 import sys
-import time
-from pathlib import Path
 
 from loguru import logger
-
-
-def safe_rmtree(path: Path) -> None:
-    """Remove a directory tree with Windows-friendly permission handling.
-
-    Retained for the plugin-cache-clearing gRPC RPC
-    (``PluginService.clear_plugin_cache``), which sweeps any leftover plugin
-    cache directories.
-    """
-
-    def _handle_remove_readonly(func, target_path, exc_info):
-        exc = exc_info[1]
-        if isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (
-            errno.EACCES,
-            errno.EPERM,
-        ):
-            try:
-                os.chmod(target_path, stat.S_IWRITE)
-            except OSError:
-                pass
-            func(target_path)
-        else:
-            raise exc
-
-    for attempt in range(3):
-        try:
-            shutil.rmtree(path, onerror=_handle_remove_readonly)
-            return
-        except PermissionError:
-            if attempt < 2:
-                time.sleep(0.2)
-                continue
-            raise
-        except FileNotFoundError:
-            return
 
 
 def _import_from_path(import_path: str, clear_cache: bool = False) -> type:
@@ -195,7 +154,6 @@ def import_plugin_nodes(
 
 
 __all__ = [
-    "safe_rmtree",
     "_import_from_path",
     "extract_package_prefixes",
     "clear_package_modules",
