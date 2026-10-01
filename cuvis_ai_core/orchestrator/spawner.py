@@ -259,6 +259,7 @@ def dead_child_details(handle, *, wait_s: float | None = None) -> str | None:
 
 
 def _is_denied(name: str) -> bool:
+    """True if ``name`` is on the deny list, by exact name or by prefix."""
     return name in _DENY_EXACT or name.startswith(_DENY_PREFIXES)
 
 
@@ -301,6 +302,7 @@ class ChildHandle:
     _channel: grpc.Channel | None = field(default=None, init=False, repr=False)
 
     def stub(self) -> cuvis_ai_pb2_grpc.RunRuntimeStub:
+        """The child's ``RunRuntimeStub`` on a lazily opened loopback channel."""
         if self._channel is None:
             # No message-size cap: the parent fully trusts its own child on
             # loopback, and inference responses (full RGB + score tensors) can
@@ -373,9 +375,11 @@ class ChildHandle:
 
     @property
     def returncode(self) -> int | None:
+        """Exit code of the child process, ``None`` while it is running."""
         return self.process.poll()
 
     def _close_channel(self) -> None:
+        """Close the gRPC channel if one was opened; a failure is only logged."""
         if self._channel is not None:
             try:
                 self._channel.close()
@@ -399,7 +403,8 @@ class ChildRuntimeSpawner(ABC):
         cwd: Path,
         declared_paths: DeclaredPaths,
         request_gpu: bool = False,
-    ) -> ChildHandle: ...
+    ) -> ChildHandle:
+        """Launch a child runtime from ``venv_path`` and return its handle."""
 
 
 class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
@@ -418,6 +423,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         declared_paths: DeclaredPaths,
         request_gpu: bool = False,
     ) -> ChildHandle:
+        """Launch the child as a local subprocess and wait until it serves."""
         python = venv_python(venv_path)
         if not python.exists():
             raise SpawnError(
@@ -561,6 +567,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         *,
         stderr_log: Path | None = None,
     ) -> str:
+        """Poll for the child's endpoint file; ``SpawnError`` on exit or timeout."""
         timeout_s = _timeout_from_env(
             _ENDPOINT_POLL_TIMEOUT_ENV, _ENDPOINT_POLL_TIMEOUT_SECONDS
         )
@@ -581,6 +588,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         raise SpawnError(f"Child runtime did not write endpoint within {timeout_s}s.")
 
     def _wait_for_health(self, handle: ChildHandle) -> None:
+        """Poll the child's health RPC until it answers; ``SpawnError`` otherwise."""
         timeout_s = _timeout_from_env(
             _HEALTH_POLL_TIMEOUT_ENV, _HEALTH_POLL_TIMEOUT_SECONDS
         )
@@ -613,6 +621,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
 
 
 def _prepend_path(existing: str, new_entry: str) -> str:
+    """``new_entry`` in front of the ``os.pathsep``-separated ``existing`` list."""
     if not existing:
         return new_entry
     return f"{new_entry}{os.pathsep}{existing}"

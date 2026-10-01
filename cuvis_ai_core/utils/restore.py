@@ -24,7 +24,7 @@ from cuvis_ai_core.training.callbacks import build_runtime_callbacks
 from cuvis_ai_core.training.config import TrainRunConfig, create_callbacks_from_config
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
+from cuvis_ai_core.utils.plugin_resolver import _build_catalog, resolve_pipeline_plugins
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import PipelineConfig
@@ -108,9 +108,7 @@ def _load_data_module_plugin(
     / ``DataConfig.data_module``), so we look it up by ``data_module_name`` in the
     plugins-dir catalog and materialise its plugin.
     """
-    from cuvis_ai_core.utils.plugin_resolver import _build_catalog
-
-    catalog = _build_catalog([Path(d) for d in candidate_dirs])
+    catalog = _build_catalog(candidate_dirs)
     for plugin_name, cfg in catalog.items():
         for entry in cfg.capabilities:
             if (
@@ -350,12 +348,11 @@ def _build_pipeline_from_config(
     CuvisPipeline
         Built pipeline ready for training
     """
-    builder = PipelineBuilder()
     if trainrun_config.pipeline is None:
         raise ValueError("Pipeline reference is missing in trainrun config.")
     pipeline_path = _resolve_pipeline_reference(trainrun_config.pipeline, base_dir)
     pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
-    pipeline = builder.build_from_config(pipeline_cfg.to_dict())
+    pipeline = PipelineBuilder().build_from_config(pipeline_cfg.to_dict())
 
     # Move pipeline to specified device if needed
     if device != "auto":

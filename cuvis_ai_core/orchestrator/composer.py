@@ -117,16 +117,6 @@ def _in_process_lock_for(digest: str) -> threading.Lock:
         return lock
 
 
-def _build_dir_name(final_name: str) -> str:
-    """Unique temp-dir name for an in-progress build of ``final_name``."""
-    return f"{final_name}{_BUILDING_TAG}{os.getpid()}.{secrets.token_hex(3)}"
-
-
-def _is_partial_build_dir(name: str) -> bool:
-    """True if ``name`` is an in-progress or abandoned build dir."""
-    return _BUILDING_TAG in name
-
-
 @contextlib.contextmanager
 def _build_lock(digest: str, locks_dir: Path) -> Iterator[None]:
     """Serialise builds of one cache key.
@@ -240,7 +230,9 @@ def _build_or_reuse(
         )
         final_dir.rename(broken)
 
-    build_dir = root / _build_dir_name(final_dir.name)
+    build_dir = root / (
+        f"{final_dir.name}{_BUILDING_TAG}{os.getpid()}.{secrets.token_hex(3)}"
+    )
     build_dir.mkdir(parents=True, exist_ok=False)
     (build_dir / _PYPROJECT_NAME).write_text(pyproject_content, encoding="utf-8")
     (build_dir / _KEY_JSON_NAME).write_text(
@@ -273,7 +265,7 @@ def _sweep_stale_partials(root: Path) -> None:
     now = time.time()
     cutoff = now - _STALE_PARTIAL_AGE_SECONDS
     for entry in root.iterdir():
-        if not _is_partial_build_dir(entry.name) or not entry.is_dir():
+        if _BUILDING_TAG not in entry.name or not entry.is_dir():
             continue
         try:
             mtime = entry.stat().st_mtime
@@ -438,7 +430,7 @@ def _lease_protected_digests(root: Path) -> set[str]:
         if lease is None:
             continue  # corrupt: the reaper quarantines
         parent_alive = leases.pid_alive(lease.parent_pid, lease.parent_create_time)
-        if lease.phase == "intent":
+        if lease.phase == leases._INTENT_PHASE:
             if parent_alive:
                 protected.add(lease.entry_digest)
             continue
