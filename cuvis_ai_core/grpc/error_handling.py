@@ -17,6 +17,8 @@ from pydantic import ValidationError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+
     from .session_manager import SessionManager, SessionState
 
 
@@ -36,6 +38,24 @@ def get_session_or_error(
         context.set_code(grpc.StatusCode.NOT_FOUND)
         context.set_details(str(exc))
         return None
+
+
+def get_session_and_pipeline(
+    session_manager: SessionManager,
+    session_id: str,
+    context: grpc.ServicerContext,
+) -> tuple[SessionState, CuvisPipeline] | None:
+    """Look up a session that has a pipeline, or set the status for what is missing.
+
+    ``NOT_FOUND`` for a missing session (:func:`get_session_or_error`),
+    ``FAILED_PRECONDITION`` for a missing pipeline (:func:`require_pipeline`);
+    ``None`` tells the caller to return its empty or failure response.
+    """
+    session = get_session_or_error(session_manager, session_id, context)
+    if session is None or not require_pipeline(session, context):
+        return None
+    assert session.pipeline is not None
+    return session, session.pipeline
 
 
 def require_pipeline(
@@ -133,4 +153,9 @@ def _extract_context(args: tuple, kwargs: dict) -> grpc.ServicerContext:
     return args[2]
 
 
-__all__ = ["get_session_or_error", "grpc_handler", "require_pipeline"]
+__all__ = [
+    "get_session_and_pipeline",
+    "get_session_or_error",
+    "grpc_handler",
+    "require_pipeline",
+]

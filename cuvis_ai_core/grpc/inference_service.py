@@ -14,7 +14,10 @@ from loguru import logger
 from cuvis_ai_schemas.enums import ExecutionStage
 
 from . import helpers
-from .error_handling import get_session_or_error, grpc_handler, require_pipeline
+from .error_handling import (
+    get_session_and_pipeline,
+    grpc_handler,
+)
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
@@ -32,14 +35,12 @@ class InferenceService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.InferenceResponse:
         """Run a forward pass for the requested session."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.InferenceResponse()
-
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.InferenceResponse()
+        _, pipeline = resolved
 
         with ExitStack() as stack:
             # copy_tensors=False yields zero-copy views into the input buffers; the
@@ -56,13 +57,13 @@ class InferenceService:
             # This must run after the reassignment: on a CPU pipeline `.to('cpu')`
             # returns the same objects, so clearing the original dict would leave
             # them referenced and `owner.close()` would hit BufferError and leak.
-            batch = self._move_batch_to_pipeline_device(batch, session.pipeline)
+            batch = self._move_batch_to_pipeline_device(batch, pipeline)
             stack.callback(batch.clear)
 
             # With an explicit output filter, ports the client did not ask for
             # are released during the forward; without one every port is kept.
             output_specs = set(request.output_specs)
-            outputs = session.pipeline.forward(
+            outputs = pipeline.forward(
                 batch=batch,
                 stage=ExecutionStage.INFERENCE,
                 free_consumed_ports=bool(output_specs),

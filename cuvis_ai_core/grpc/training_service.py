@@ -30,7 +30,11 @@ from cuvis_ai_core.training.trainers import (
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 
-from .error_handling import get_session_or_error, grpc_handler, require_pipeline
+from .error_handling import (
+    get_session_and_pipeline,
+    get_session_or_error,
+    grpc_handler,
+)
 from .session_manager import SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
 
@@ -100,14 +104,12 @@ class TrainingService:
         context: grpc.ServicerContext,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train the pipeline with statistical or gradient methods."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return
-
-        if not require_pipeline(session, context):
-            return
+        session, _ = resolved
 
         stop_event = session.stop_event
 

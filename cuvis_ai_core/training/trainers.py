@@ -429,12 +429,25 @@ class GradientTrainer(pl.LightningModule):
                         prog_bar=True,
                     )
 
-    def training_step(self, batch, batch_idx) -> torch.Tensor:
-        """Execute graph and collect losses for training."""
+    def _run_step(
+        self,
+        batch,
+        batch_idx: int,
+        *,
+        stage: ExecutionStage,
+        collect_metrics: bool,
+        monitor_key: str | None,
+    ) -> torch.Tensor:
+        """Run the graph for one batch of ``stage`` and collect what the split needs.
+
+        Losses land in the ``stage.value`` bucket, ``collect_metrics`` adds the
+        metric nodes and ``monitor_key`` is the external monitors' key for the
+        loss (``None`` logs nothing).
+        """
         from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
 
         context = Context(
-            stage=ExecutionStage.TRAIN,
+            stage=stage,
             epoch=self.current_epoch,
             batch_idx=batch_idx,
             global_step=self.global_step,
@@ -452,82 +465,47 @@ class GradientTrainer(pl.LightningModule):
         # Transform outputs once for efficient access (O(n) operation)
         node_outputs = restructure_output_to_node_dict(outputs)
 
-        # Collect losses with O(1) lookups per node
         total_loss = self._collect_losses(
-            node_outputs, "train", self.current_epoch, batch_idx
+            node_outputs, stage.value, self.current_epoch, batch_idx
         )
+        if collect_metrics:
+            self._collect_metrics(node_outputs)
 
-        # Log to external monitors
-        for monitor in self.monitors:
-            monitor.log("train/loss", total_loss, step=self.global_step)
+        if monitor_key is not None:
+            for monitor in self.monitors:
+                monitor.log(monitor_key, total_loss, step=self.global_step)
 
         return total_loss
+
+    def training_step(self, batch, batch_idx) -> torch.Tensor:
+        """Execute graph and collect losses for training."""
+        return self._run_step(
+            batch,
+            batch_idx,
+            stage=ExecutionStage.TRAIN,
+            collect_metrics=False,
+            monitor_key="train/loss",
+        )
 
     def validation_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses + metrics for validation."""
-        from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
-
-        context = Context(
+        return self._run_step(
+            batch,
+            batch_idx,
             stage=ExecutionStage.VAL,
-            epoch=self.current_epoch,
-            batch_idx=batch_idx,
-            global_step=self.global_step,
+            collect_metrics=True,
+            monitor_key="val/loss",
         )
-
-        # Execute graph; intermediate ports are released as soon as their last
-        # reader has run, only the loss/metric outputs are needed below.
-        outputs = self.pipeline.forward(
-            batch=batch,
-            context=context,
-            free_consumed_ports=True,
-            keep_ports=self._retained_ports,
-        )
-
-        # Transform outputs once for efficient access (O(n) operation)
-        node_outputs = restructure_output_to_node_dict(outputs)
-
-        # Collect losses and metrics with O(1) lookups per node
-        total_loss = self._collect_losses(
-            node_outputs, "val", self.current_epoch, batch_idx
-        )
-        self._collect_metrics(node_outputs)
-
-        # Log to external monitors
-        for monitor in self.monitors:
-            monitor.log("val/loss", total_loss, step=self.global_step)
-
-        return total_loss
 
     def test_step(self, batch, batch_idx) -> torch.Tensor:
         """Execute graph and collect losses + metrics for testing."""
-        from cuvis_ai_core.utils.graph_helper import restructure_output_to_node_dict
-
-        context = Context(
+        return self._run_step(
+            batch,
+            batch_idx,
             stage=ExecutionStage.TEST,
-            epoch=self.current_epoch,
-            batch_idx=batch_idx,
-            global_step=self.global_step,
+            collect_metrics=True,
+            monitor_key=None,
         )
-
-        # Execute graph; intermediate ports are released as soon as their last
-        # reader has run, only the loss/metric outputs are needed below.
-        outputs = self.pipeline.forward(
-            batch=batch,
-            context=context,
-            free_consumed_ports=True,
-            keep_ports=self._retained_ports,
-        )
-
-        # Transform outputs once for efficient access (O(n) operation)
-        node_outputs = restructure_output_to_node_dict(outputs)
-
-        # Collect losses and metrics with O(1) lookups per node
-        total_loss = self._collect_losses(
-            node_outputs, "test", self.current_epoch, batch_idx
-        )
-        self._collect_metrics(node_outputs)
-
-        return total_loss
 
     def configure_optimizers(self) -> Optimizer | dict:
         """Configure optimizer and optional scheduler via the OptimizerConfig.

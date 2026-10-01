@@ -8,7 +8,10 @@ from pathlib import Path
 import grpc
 from loguru import logger
 
-from .error_handling import get_session_or_error, grpc_handler, require_pipeline
+from .error_handling import (
+    get_session_and_pipeline,
+    grpc_handler,
+)
 from .helpers import spec_to_tensor_spec
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
@@ -27,15 +30,14 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineInputsResponse:
         """Return pipeline entrypoint specifications for the session."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.GetPipelineInputsResponse()
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.GetPipelineInputsResponse()
+        _, pipeline = resolved
 
-        input_specs_dict = session.pipeline.get_input_specs()
+        input_specs_dict = pipeline.get_input_specs()
         input_specs = {
             name: spec_to_tensor_spec(name, spec)
             for name, spec in input_specs_dict.items()
@@ -53,15 +55,14 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineOutputsResponse:
         """Return pipeline exit specifications for the session."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.GetPipelineOutputsResponse()
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.GetPipelineOutputsResponse()
+        _, pipeline = resolved
 
-        output_specs_dict = session.pipeline.get_output_specs()
+        output_specs_dict = pipeline.get_output_specs()
         output_specs = {
             name: spec_to_tensor_spec(name, spec)
             for name, spec in output_specs_dict.items()
@@ -79,18 +80,17 @@ class IntrospectionService:
         context: grpc.ServicerContext,
     ) -> cuvis_ai_pb2.GetPipelineVisualizationResponse:
         """Return a visualization of the session pipeline."""
-        session = get_session_or_error(
+        resolved = get_session_and_pipeline(
             self.session_manager, request.session_id, context
         )
-        if session is None:
+        if resolved is None:
             return cuvis_ai_pb2.GetPipelineVisualizationResponse()
-        if not require_pipeline(session, context):
-            return cuvis_ai_pb2.GetPipelineVisualizationResponse()
+        _, pipeline = resolved
 
         from cuvis_ai_core.pipeline.visualizer import PipelineVisualizer
 
         format_type = (request.format or "png").lower()
-        visualizer = PipelineVisualizer(session.pipeline)
+        visualizer = PipelineVisualizer(pipeline)
 
         try:
             if format_type in {"png", "svg"}:
