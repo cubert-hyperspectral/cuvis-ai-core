@@ -15,6 +15,7 @@ from .session_manager import SessionManager
 from .session_service import SessionService
 from .training_service import TrainingService
 from .trainrun_service import TrainRunService
+from . import orchestrator_bridge
 from .v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 
 
@@ -71,8 +72,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def LoadPipelineWeights(
         self, request, context
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_load_pipeline_weights(
             self.session_manager, request, context
         )
@@ -80,8 +79,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def SetTrainRunConfig(
         self, request, context
     ) -> cuvis_ai_pb2.SetTrainRunConfigResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_set_train_run_config(
             self.session_manager, request, context
         )
@@ -90,8 +87,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Inference
     # ------------------------------------------------------------------
     def Inference(self, request, context) -> cuvis_ai_pb2.InferenceResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_inference(
             self.session_manager, request, context
         )
@@ -102,8 +97,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def GetPipelineInputs(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineInputsResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_get_pipeline_inputs(
             self.session_manager, request, context
         )
@@ -111,8 +104,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def GetPipelineOutputs(
         self, request, context
     ) -> cuvis_ai_pb2.GetPipelineOutputsResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_get_pipeline_outputs(
             self.session_manager, request, context
         )
@@ -127,8 +118,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
                 request, context
             )
 
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_get_pipeline_visualization(
             self.session_manager, request, context
         )
@@ -137,20 +126,14 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Training
     # ------------------------------------------------------------------
     def Train(self, request, context) -> Iterable[cuvis_ai_pb2.TrainResponse]:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_train(self.session_manager, request, context)
 
     def StopTrain(self, request, context) -> cuvis_ai_pb2.StopTrainResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_stop_train(
             self.session_manager, request, context
         )
 
     def GetTrainStatus(self, request, context) -> cuvis_ai_pb2.GetTrainStatusResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_get_train_status(
             self.session_manager, request, context
         )
@@ -159,15 +142,11 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Pipeline Management (Model Deployment)
     # ------------------------------------------------------------------
     def SavePipeline(self, request, context) -> cuvis_ai_pb2.SavePipelineResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_save_pipeline(
             self.session_manager, request, context
         )
 
     def LoadPipeline(self, request, context) -> cuvis_ai_pb2.LoadPipelineResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_load_pipeline(
             self.session_manager, request, context
         )
@@ -176,15 +155,11 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Experiment Management (Reproducibility)
     # ------------------------------------------------------------------
     def SaveTrainRun(self, request, context) -> cuvis_ai_pb2.SaveTrainRunResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_save_train_run(
             self.session_manager, request, context
         )
 
     def RestoreTrainRun(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_restore_train_run(
             self.session_manager, request, context
         )
@@ -238,8 +213,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def SetProfiling(self, request, context) -> cuvis_ai_pb2.SetProfilingResponse:
         # Profiling state lives on the live pipeline, which the child holds;
         # the parent never has one, so both profiling RPCs are proxied.
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_set_profiling(
             self.session_manager, request, context
         )
@@ -247,8 +220,6 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     def GetProfilingSummary(
         self, request, context
     ) -> cuvis_ai_pb2.GetProfilingSummaryResponse:
-        from . import orchestrator_bridge
-
         return orchestrator_bridge.forward_get_profiling_summary(
             self.session_manager, request, context
         )

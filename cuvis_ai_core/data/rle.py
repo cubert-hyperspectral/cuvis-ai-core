@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import Any
 
 import numpy as np
@@ -161,23 +160,3 @@ def coco_rle_to_bbox(rle: dict[str, Any]) -> list[float]:
     elif isinstance(counts, str):
         rle = {"size": rle["size"], "counts": counts.encode("utf-8")}
     return mask_util.toBbox(rle).tolist()
-
-
-def RLE2mask(rle: list[int], mask_width: int, mask_height: int) -> np.ndarray:
-    """Deprecated: use :func:`rle_list_to_mask` instead.
-
-    .. deprecated::
-        ``RLE2mask`` will be removed in the next release.
-        Note: the old signature used ``(rle, mask_width, mask_height)``
-        which was misleading — callers typically passed COCO ``size[0]``
-        (height) as ``mask_width``.  The replacement uses explicit
-        ``(rle, height, width)`` order.
-    """
-    warnings.warn(
-        "RLE2mask is deprecated; use rle_list_to_mask(rle, height, width) instead. "
-        "Note the (height, width) argument order matches COCO size [H, W].",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    # Preserve old (buggy) behavior: mask_width was actually height in callers
-    return rle_list_to_mask(rle, height=mask_width, width=mask_height)

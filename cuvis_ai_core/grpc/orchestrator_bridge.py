@@ -203,9 +203,8 @@ _CRASH_PROBE_CODES = frozenset(
     }
 )
 
-# Type aliases for the injectable seams.
+# Type alias for the injectable composer seam.
 ComposerFn = Callable[..., Path]
-SpawnerCtor = Callable[[], ChildRuntimeSpawner]
 
 # Default implementations. Tests override via set_composer / set_spawner;
 # production code never touches these globals after import.

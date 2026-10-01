@@ -33,9 +33,7 @@ from cuvis_ai_core.orchestrator.cache_key import (
     spec_hash_of,
 )
 from cuvis_ai_core.orchestrator.cache_paths import (
-    DEFAULT_RUN_CACHE_ROOT,
     MODEL_CACHE_DIRNAME,
-    RUN_CACHE_ROOT_ENV,
     resolve_cache_root,
 )
 from cuvis_ai_core.orchestrator.env_config import number_from_env
@@ -52,11 +50,6 @@ from cuvis_ai_core.orchestrator.uv_runner import (
     uv_sync,
 )
 
-# The cache-root constants live in the stdlib-only ``cache_paths`` leaf so light
-# consumers (model_cache, crash_logs, model_weights) never import the composer;
-# the private aliases stay for existing importers and tests.
-_DEFAULT_CACHE_ROOT_ENV = RUN_CACHE_ROOT_ENV
-_DEFAULT_CACHE_ROOT = DEFAULT_RUN_CACHE_ROOT
 _LOCK_TIMEOUT_SECONDS = 1800  # cold-start install can take a long time
 
 # Pin composed child envs to the composing interpreter's minor version. Leaving
@@ -161,7 +154,6 @@ def compose_env(
     *,
     core_source: CoreSource,
     cache_root: Path | None = None,
-    python_requires: str = _PARENT_PYTHON_REQUIRES,
     active_data_module: str | None = None,
 ) -> Path:
     """Materialise (or reuse) a cached venv for ``plugin_configs``.
@@ -178,7 +170,7 @@ def compose_env(
     pyproject_content = build_runtime_pyproject(
         core_source=core_source,
         plugins=resolved,
-        python_requires=python_requires,
+        python_requires=_PARENT_PYTHON_REQUIRES,
     )
     spec_hash = spec_hash_of(pyproject_content)
     key = compute_cache_key(

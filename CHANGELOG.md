@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Removed, breaking (the next release is 0.18.0): the public names the 0.17.5 simplification pass kept for an API decision. None of them is referenced by cuvis-ai, the plugins, the notebooks, the skills or CuvisNEXT.
+  - `CuvisPipeline.custom_copy` (it raised `AttributeError`) and `save_to_file(include_optimizer=, include_scheduler=)` (nothing ever set `pipeline.optimizer` or `pipeline.scheduler`; a checkpoint holds `state_dict` and `metadata`).
+  - `Node.fit`, the deprecated alias of `statistical_initialization`.
+  - The `cuvis_ai_core.orchestrator` package re-exports (`CacheKey`, `ComposerError`, `NodePortSpec`, `PluginCapabilities`, `PluginCapabilityEntry`, `compose_env`, `compute_cache_key`, `load_capabilities`, `venv_bin_dir`, `venv_python`): import the submodules. `compose_env(python_requires=)`: a composed environment always pins the composing interpreter's minor version. The private aliases `composer._DEFAULT_CACHE_ROOT_ENV` and `composer._DEFAULT_CACHE_ROOT`: read `cache_paths`.
+  - The `cuvis_ai_core.training.Context` re-export: import it from `cuvis_ai_schemas.execution`.
+  - `rankdir=` of `config_to_dot`, `render_pipeline_config`, `PipelineVisualizer.to_graphviz` and `render_graphviz`: the layout is always left to right.
+  - The `cuvis_ai_core.pipeline.validator` module (`ShapeValidator`, `GraphValidator`): a no-op nothing instantiated.
+  - gRPC helpers `TRAIN_STATUS_TO_STRING`, `STRING_TO_TRAIN_STATUS`, `train_status_to_string`, `string_to_train_status`, `STRING_TO_POINT_TYPE`, `string_to_point_type` and `ShmBufferOwner.buffer` (read `mmap_obj`); `SessionManager.cleanup_old_sessions` (shutdown closes sessions through `list_sessions` and `close_session`); the `SpawnerCtor` type alias.
+  - `NodeRegistry.auto_register_package(base_class_path=)`: the base class is always `cuvis_ai_core.node.node.Node`.
+  - `utils.general.check_ndim`, `normalize_per_channel_vectorized` and `_resolve_measurement_indices`; `orchestrator.runtime_project.git_source_url`; `data.rle.RLE2mask` (long deprecated; use `rle_list_to_mask`); `PublicDatasets.get_target_dir` (`get_spec(name).target_dir`); `ModelWeights.cache_repo_dir`; `data._provisioning.EXIT_USAGE`; `CudaMemoryLogCallback(memory_fraction=)` (the `CUVIS_CUDA_MEMORY_FRACTION` environment variable stays); the unreachable "unknown frame count" branch of `VideoIterator`.
+- `PublicDatasets.list_datasets` imports `format_bytes` once, `CuvisAIService` imports the orchestrator bridge once at module level instead of inside each proxied handler, `restore_pipeline` no longer re-wraps its `Path`, and `suggest-plugins-fix` computes the unified diff once for the `diff` and `json` outputs.
+
 ## 0.17.5 - 2026-09-29
 
 - `create_scheduler` accepts the `plateau` alias of `reduce_on_plateau`. The registry declared the alias, `get_supported_schedulers` listed it, `get_scheduler_info` resolved it, `ValidateConfig` accepted it and the `SchedulerConfig.name` docs list it, but a trainrun with `scheduler: {name: plateau}` failed in `configure_optimizers` with `Unsupported scheduler: plateau` because the factory checked the raw name against the registry keys. Names and aliases now resolve to their registry entry before the check, so the alias builds the same `ReduceLROnPlateau` with the same parameters as the full name, and the unsupported-name error lists the aliases too.

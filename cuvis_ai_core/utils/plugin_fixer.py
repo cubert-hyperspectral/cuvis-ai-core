@@ -10,10 +10,6 @@ The CLI runs the exact-match resolver heuristic in a non-fatal mode and
 emits a patched yaml on stdout (default), a unified diff, or a
 machine-readable JSON envelope. The user pipes / applies the result to
 silence the error.
-
-The reorder helper is the canonical implementation that the one-off
-backfill script (``cuvis-ai/scripts/backfill_pipeline_plugins.py``)
-also imports.
 """
 
 from __future__ import annotations
@@ -184,23 +180,19 @@ def suggest_plugins_fix_cli(argv: list[str] | None = None) -> int:
 
     if args.output == "yaml":
         sys.stdout.write(patched_text)
-    elif args.output == "diff":
-        diff_lines = difflib.unified_diff(
+        return 0
+
+    diff_text = "".join(
+        difflib.unified_diff(
             raw_text.splitlines(keepends=True),
             patched_text.splitlines(keepends=True),
             fromfile=str(pipeline_path),
             tofile=str(pipeline_path),
         )
-        sys.stdout.writelines(diff_lines)
+    )
+    if args.output == "diff":
+        sys.stdout.write(diff_text)
     else:  # json
-        diff_text = "".join(
-            difflib.unified_diff(
-                raw_text.splitlines(keepends=True),
-                patched_text.splitlines(keepends=True),
-                fromfile=str(pipeline_path),
-                tofile=str(pipeline_path),
-            )
-        )
         sys.stdout.write(
             json.dumps(
                 {

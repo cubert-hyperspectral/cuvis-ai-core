@@ -143,15 +143,6 @@ def _sha_from_ls_remote(lines: list[str]) -> str:
     return lines[0].split(maxsplit=1)[0]
 
 
-def git_source_url(repo: str, sha: str) -> str:
-    """Format a uv-compatible ``git+<url>@<sha>`` source URL.
-
-    Scheme normalisation is delegated to :func:`_ssh_to_url`, so the set
-    of accepted URL schemes lives in exactly one place.
-    """
-    return f"git+{_ssh_to_url(repo)}@{sha}"
-
-
 def _active_extras(
     cfg: PluginManifest, active_data_module: str | None
 ) -> tuple[str, ...]:

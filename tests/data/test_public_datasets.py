@@ -160,11 +160,6 @@ def test_get_spec_accepts_aliases_hyphens_and_case():
         DatasetError, match="Dataset 'nope' not found. Available: Lentils"
     ):
         PublicDatasets.get_spec("nope")
-    assert (
-        PublicDatasets.get_target_dir("blood-perfusion") == "XMR_Demo_Blood_Perfusion"
-    )
-    with pytest.raises(KeyError):
-        PublicDatasets.get_target_dir("nope")
 
 
 def test_list_payload_validates_against_the_schema():

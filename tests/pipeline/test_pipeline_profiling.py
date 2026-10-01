@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 import torch
@@ -286,37 +285,6 @@ class TestFormattingAndSaveGuards:
         assert n1.name in table
         assert n2.name in table
         assert "TOTAL" in table
-
-    def test_save_to_file_requires_weights_for_optimizer_or_scheduler(self, tmp_path):
-        pipeline = CuvisPipeline("test")
-
-        with pytest.raises(
-            ValueError,
-            match="include_optimizer/include_scheduler require save_weights=True",
-        ):
-            pipeline.save_to_file(
-                tmp_path / "pipeline.yaml",
-                save_weights=False,
-                include_optimizer=True,
-            )
-
-    def test_save_to_file_includes_optimizer_and_scheduler_state(self, tmp_path):
-        pipeline = CuvisPipeline("test")
-        pipeline.optimizer = Mock()
-        pipeline.optimizer.state_dict.return_value = {"lr": 0.1}
-        pipeline.scheduler = Mock()
-        pipeline.scheduler.state_dict.return_value = {"gamma": 0.9}
-
-        config_path = tmp_path / "pipeline.yaml"
-        pipeline.save_to_file(
-            config_path,
-            include_optimizer=True,
-            include_scheduler=True,
-        )
-
-        checkpoint = torch.load(config_path.with_suffix(".pt"))
-        assert checkpoint["optimizer_state"] == {"lr": 0.1}
-        assert checkpoint["scheduler_state"] == {"gamma": 0.9}
 
     def test_set_profiling_recreates_profiler_when_skip_first_n_changes(self) -> None:
         pipeline, _, _ = _make_single_node_pipeline(_IdentityNode)

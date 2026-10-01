@@ -257,14 +257,12 @@ def restore_pipeline(
 
     # Generate pipeline visualization if requested
     if pipeline_vis_ext is not None:
-        pipeline_path_obj = Path(pipeline_path)
-
         if pipeline_vis_ext == PipelineVisFormat.PNG:
-            vis_output = pipeline_path_obj.with_suffix(".png")
+            vis_output = pipeline_path.with_suffix(".png")
             pipeline.visualize(format="render", output_path=vis_output)
             logger.info(f"Pipeline visualization (PNG) saved to: {vis_output}")
         elif pipeline_vis_ext == PipelineVisFormat.MD:
-            vis_output = pipeline_path_obj.with_suffix(".md")
+            vis_output = pipeline_path.with_suffix(".md")
             pipeline.visualize(format="render_mermaid", output_path=vis_output)
             logger.info(f"Pipeline visualization (Markdown) saved to: {vis_output}")
 

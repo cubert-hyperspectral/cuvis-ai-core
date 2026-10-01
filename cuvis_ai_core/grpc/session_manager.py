@@ -575,17 +575,5 @@ class SessionManager:
         """List all active session IDs."""
         return list(self._sessions.keys())
 
-    def cleanup_old_sessions(self, max_age_hours: int = 24) -> int:
-        """Remove sessions that haven't been touched within the age window."""
-        cutoff = time.time() - (max_age_hours * 3600)
-        expired = [
-            sid for sid, state in self._sessions.items() if state.last_accessed < cutoff
-        ]
-
-        for sid in expired:
-            self.close_session(sid)
-
-        return len(expired)
-
 
 __all__ = ["SessionManager", "SessionState", "default_search_paths"]

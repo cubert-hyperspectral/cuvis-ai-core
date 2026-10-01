@@ -47,7 +47,6 @@ class PipelineVisualizer:
         self,
         *,
         graph_name: str | None = None,
-        rankdir: str = "LR",
         group_by_stage: bool = False,
         stage_labels: Mapping[str, str] | None = None,
         show_port_types: bool = False,
@@ -72,7 +71,7 @@ class PipelineVisualizer:
         )
         lines: list[str] = [f"digraph {title} {{"]
 
-        lines.append(f"    rankdir={rankdir};")
+        lines.append("    rankdir=LR;")
         lines.append("    node [shape=plaintext];")
 
         if graph_attributes:
@@ -261,7 +260,6 @@ class PipelineVisualizer:
         output_path: str | Path,
         *,
         format: str = "png",
-        rankdir: str = "LR",
         engine: str = "dot",
         **graphviz_kwargs: Any,
     ) -> Path:
@@ -269,10 +267,7 @@ class PipelineVisualizer:
 
         from graphviz import Source
 
-        dot_source = self.to_graphviz(
-            rankdir=rankdir,
-            **graphviz_kwargs,
-        )
+        dot_source = self.to_graphviz(**graphviz_kwargs)
 
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)

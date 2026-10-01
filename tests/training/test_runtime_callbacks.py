@@ -239,12 +239,6 @@ def test_env_fraction_is_applied_and_reported(fake_cuda, monkeypatch, log_lines)
     assert "soft cap" in budget_line
 
 
-def test_the_constructor_argument_wins_over_the_env(fake_cuda, monkeypatch):
-    monkeypatch.setenv(CUDA_MEMORY_FRACTION_ENV, "0.5")
-    CudaMemoryLogCallback(memory_fraction=0.25).on_fit_start(_trainer(), _FakeModule())
-    assert fake_cuda.fraction_calls == [0.25]
-
-
 def test_no_fraction_leaves_the_device_alone(fake_cuda):
     CudaMemoryLogCallback().on_fit_start(_trainer(), _FakeModule())
     assert fake_cuda.fraction_calls == []
