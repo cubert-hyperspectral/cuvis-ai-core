@@ -175,28 +175,12 @@ class Predictor:
             if loader is not None:
                 yield from loader
 
-    def _get_pipeline_device(self) -> torch.device:
-        """Resolve the active pipeline device from parameters or buffers."""
-        for layer in self.pipeline.torch_layers:
-            for param in layer.parameters():
-                return param.device
-            for buf in layer.buffers():
-                return buf.device
-        return torch.device("cpu")
-
     def _move_batch_to_device(self, batch: Any) -> dict[str, Any]:
         """Move tensor batch fields to the pipeline device."""
         if not isinstance(batch, dict):
             raise TypeError(f"Expected batch to be dict, got {type(batch)!r}.")
 
-        device = self._get_pipeline_device()
-        moved: dict[str, Any] = {}
-        for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                moved[key] = value.to(device)
-            else:
-                moved[key] = value
-        return moved
+        return self.pipeline.move_batch_to_device(batch)
 
     def _reset_nodes(self) -> None:
         """Reset stateful nodes before a new prediction run."""

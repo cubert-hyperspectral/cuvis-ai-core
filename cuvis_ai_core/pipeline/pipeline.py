@@ -1637,6 +1637,24 @@ class CuvisPipeline:
                 "the trainer, or cleanup() and rebuild the pipeline."
             )
 
+    @property
+    def device(self) -> torch.device:
+        """Device of the first parameter or buffer in ``torch_layers``, CPU when none."""
+        for layer in self.torch_layers:
+            for param in layer.parameters():
+                return param.device
+            for buf in layer.buffers():
+                return buf.device
+        return torch.device("cpu")
+
+    def move_batch_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Copy of ``batch`` with every tensor moved to :attr:`device`."""
+        device = self.device
+        return {
+            key: value.to(device) if isinstance(value, torch.Tensor) else value
+            for key, value in batch.items()
+        }
+
     def to(self, *args: Any, **kwargs: Any) -> CuvisPipeline:
         """Move all torch-backed nodes to the requested device/dtype."""
         self.torch_layers.to(*args, **kwargs)

@@ -220,44 +220,11 @@ class InferenceService:
         (e.g., via ``pipeline.to('cuda')``) and dataloader batches are produced on
         that device. Here, gRPC deserialization always yields CPU tensors, so we
         align them with the pipeline device before forwarding.
-
-        Uses the same robust device detection pattern as StatisticalTrainer,
-        iterating through all nodes to find one with parameters or buffers.
         """
         if pipeline is None:
             return batch
 
-        device = self._get_pipeline_device(pipeline)
-
-        moved: dict[str, Any] = {}
-        for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                moved[key] = value.to(device)
-            else:
-                moved[key] = value
-
-        return moved
-
-    def _get_pipeline_device(self, pipeline) -> torch.device:
-        """Get the device of the pipeline from its parameters/buffers.
-
-        Iterates through all nodes in the pipeline to find one with
-        parameters or buffers, returning its device. Falls back to CPU
-        if no device information is found.
-
-        This follows the same pattern as StatisticalTrainer._get_pipeline_device
-        to ensure consistent device detection across the codebase.
-        """
-        # Iterate through all torch-backed layers (not just the first one)
-        for layer in pipeline.torch_layers:
-            # Check parameters first (preferred for device detection)
-            for param in layer.parameters():
-                return param.device
-            # Fall back to buffers if no parameters
-            for buf in layer.buffers():
-                return buf.device
-        # Explicit fallback to CPU if no device information found
-        return torch.device("cpu")
+        return pipeline.move_batch_to_device(batch)
 
     def _parse_bounding_boxes(
         self, bboxes_proto: cuvis_ai_pb2.BoundingBoxes

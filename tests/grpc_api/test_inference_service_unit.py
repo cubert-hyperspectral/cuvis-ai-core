@@ -2,7 +2,7 @@
 
 Covers the branches not hit by test_inference_service_extra_inputs.py and
 test_service_error_paths.py: _format_output_key, _should_return, _to_tensor,
-_get_pipeline_device, _move_batch_to_pipeline_device, _parse_points, the
+_move_batch_to_pipeline_device, _parse_points, the
 cube/wavelengths/mask/text_prompt input fields, and the inference() happy path.
 """
 
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from unittest.mock import Mock
+
+from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
 import grpc
 import numpy as np
@@ -103,39 +105,6 @@ class TestToTensor:
 
 
 # ---------------------------------------------------------------------------
-# _get_pipeline_device
-# ---------------------------------------------------------------------------
-
-
-class TestGetPipelineDevice:
-    def setup_method(self):
-        self.service = _make_service()
-
-    def test_no_layers_returns_cpu(self):
-        pipeline = Mock()
-        pipeline.torch_layers = []
-        assert self.service._get_pipeline_device(pipeline) == torch.device("cpu")
-
-    def test_layer_with_parameters(self):
-        cpu_tensor = torch.zeros(1)
-        layer = Mock()
-        layer.parameters.return_value = iter([cpu_tensor])
-        layer.buffers.return_value = iter([])
-        pipeline = Mock()
-        pipeline.torch_layers = [layer]
-        assert self.service._get_pipeline_device(pipeline) == cpu_tensor.device
-
-    def test_layer_with_buffers_no_params(self):
-        cpu_tensor = torch.zeros(1)
-        layer = Mock()
-        layer.parameters.return_value = iter([])
-        layer.buffers.return_value = iter([cpu_tensor])
-        pipeline = Mock()
-        pipeline.torch_layers = [layer]
-        assert self.service._get_pipeline_device(pipeline) == cpu_tensor.device
-
-
-# ---------------------------------------------------------------------------
 # _move_batch_to_pipeline_device
 # ---------------------------------------------------------------------------
 
@@ -143,8 +112,7 @@ class TestGetPipelineDevice:
 class TestMoveBatchToPipelineDevice:
     def setup_method(self):
         self.service = _make_service()
-        self.cpu_pipeline = Mock()
-        self.cpu_pipeline.torch_layers = []  # → device cpu
+        self.cpu_pipeline = CuvisPipeline("cpu")
 
     def test_none_pipeline_returns_batch_unchanged(self):
         batch = {"cube": torch.zeros(2, 3), "meta": [1, 2]}

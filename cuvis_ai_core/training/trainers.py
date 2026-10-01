@@ -684,7 +684,7 @@ class StatisticalTrainer:
         """Forward each batch of ``loader`` at ``stage`` without gradients."""
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
-                batch = self._move_batch_to_device(batch)
+                batch = self.pipeline.move_batch_to_device(batch)
                 context = Context(
                     stage=stage,
                     epoch=0,
@@ -694,37 +694,6 @@ class StatisticalTrainer:
                 self.pipeline.forward(
                     batch=batch, context=context, free_consumed_ports=True
                 )
-
-    def _get_pipeline_device(self) -> torch.device:
-        """Get the device of the pipeline from its parameters/buffers."""
-        for node in self.pipeline._sorted_nodes:
-            for param in node.parameters():
-                return param.device
-            for buf in node.buffers():
-                return buf.device
-        return torch.device("cpu")
-
-    def _move_batch_to_device(self, batch: dict) -> dict:
-        """Move batch tensors to the pipeline's device.
-
-        Parameters
-        ----------
-        batch : dict
-            Input batch dictionary with tensor values
-
-        Returns
-        -------
-        dict
-            Batch with all tensors moved to pipeline's device
-        """
-        device = self._get_pipeline_device()
-        moved_batch = {}
-        for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                moved_batch[key] = value.to(device)
-            else:
-                moved_batch[key] = value
-        return moved_batch
 
     def _create_input_stream(self, target_node, dataloader) -> InputStream:
         """Create port-based input stream for statistical node.
@@ -755,7 +724,7 @@ class StatisticalTrainer:
             self._raise_if_cancelled()
 
             # Move batch to pipeline device BEFORE calling forward
-            batch = self._move_batch_to_device(batch)
+            batch = self.pipeline.move_batch_to_device(batch)
 
             # Execute ancestors, stop before target (using upto_node)
             outputs = self.pipeline.forward(

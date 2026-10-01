@@ -70,6 +70,7 @@ from typing import Any, Literal
 from cuvis_ai_schemas.plugin import AuxFile, PluginWeightEntry
 
 from cuvis_ai_core.data._provisioning import (
+    HF_EXTRA_HINT,
     SCHEMA_VERSION,
     CacheBusyError,
     ProgressEmitter,
@@ -81,7 +82,6 @@ from cuvis_ai_core.data._provisioning import (
     sha256_of,
 )
 
-_HF_EXTRA_HINT = "pip install cuvis-ai-core[hf]"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 HF_ORG = "cubert-gmbh"
@@ -1366,7 +1366,7 @@ class ModelWeights:
             )
         except ImportError as exc:
             raise ModelDownloadError(
-                f"huggingface_hub is not installed. Install with: {_HF_EXTRA_HINT}"
+                f"huggingface_hub is not installed. Install with: {HF_EXTRA_HINT}"
             ) from exc
         return hf_hub_download, {
             "EntryNotFoundError": EntryNotFoundError,

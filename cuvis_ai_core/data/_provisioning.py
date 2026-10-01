@@ -343,3 +343,6 @@ def load_schema(name: str) -> dict[str, Any]:
     if not path.is_file():
         raise KeyError(f"unknown schema '{name}'; known: {', '.join(schema_names())}")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+HF_EXTRA_HINT = "pip install cuvis-ai-core[hf]"

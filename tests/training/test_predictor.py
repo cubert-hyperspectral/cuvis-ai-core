@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 
 import pytorch_lightning as pl
 import pytest
@@ -430,7 +429,7 @@ def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors
         datamodule=PredictDataModule(values=torch.tensor([[1.0]])),
     )
 
-    assert predictor._get_pipeline_device().type == "cpu"
+    assert predictor.pipeline.device.type == "cpu"
 
     moved = predictor._move_batch_to_device(
         {
@@ -441,27 +440,3 @@ def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors
 
     assert moved["value"].device.type == "cpu"
     assert moved["meta"] == "keep-me"
-
-
-def test_predictor_get_pipeline_device_uses_parameter_device() -> None:
-    class _LayerWithParameterDevice:
-        def parameters(self):
-            return [SimpleNamespace(device=torch.device("cuda:0"))]
-
-        def buffers(self):
-            return []
-
-    class _PipelineStub:
-        name = "predict_stub"
-        torch_layers = [_LayerWithParameterDevice()]
-
-        @staticmethod
-        def nodes():
-            return []
-
-    predictor = Predictor(
-        pipeline=_PipelineStub(),
-        datamodule=PredictDataModule(values=torch.tensor([[1.0]])),
-    )
-
-    assert predictor._get_pipeline_device() == torch.device("cuda:0")
