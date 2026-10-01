@@ -1733,7 +1733,7 @@ def test_pipeline_bound_rpcs_after_a_failed_child_load_answer_failed_preconditio
     )
     assert resp.success is False
     session = sm.get_session(sid)
-    assert orchestrator_bridge.get_child(session) is not None
+    assert session.child_handle is not None
     assert session.child_ready is True
 
     ctx = _InMemoryContext()

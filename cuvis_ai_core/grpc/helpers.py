@@ -710,30 +710,20 @@ def _infer_tags_from_pipeline(pipeline_data: dict) -> list[str]:
     Returns:
         List of inferred tags
     """
-    tags = []
-    nodes = pipeline_data.get("nodes", [])
-
-    # Check for anomaly detection nodes
-    anomaly_keywords = ["rx", "anomaly", "detector", "gradient_based", "lad"]
-    for node in nodes:
-        if isinstance(node, dict):
-            node_type = node.get("type", "").lower()
-            if any(keyword in node_type for keyword in anomaly_keywords):
-                if "anomaly" not in tags:
-                    tags.append("anomaly")
-                break
-
-    # Check for segmentation nodes
-    segmentation_keywords = ["segment", "mask", "selector"]
-    for node in nodes:
-        if isinstance(node, dict):
-            node_type = node.get("type", "").lower()
-            if any(keyword in node_type for keyword in segmentation_keywords):
-                if "segmentation" not in tags:
-                    tags.append("segmentation")
-                break
-
-    return tags
+    node_types = [
+        node.get("type", "").lower()
+        for node in pipeline_data.get("nodes", [])
+        if isinstance(node, dict)
+    ]
+    keywords_by_tag = (
+        ("anomaly", ("rx", "anomaly", "detector", "gradient_based", "lad")),
+        ("segmentation", ("segment", "mask", "selector")),
+    )
+    return [
+        tag
+        for tag, keywords in keywords_by_tag
+        if any(keyword in node_type for node_type in node_types for keyword in keywords)
+    ]
 
 
 def list_available_pipelines(
