@@ -8,8 +8,8 @@ orchestrator that never imports plugin modules — each run composes its own ven
 ## Part of the Cuvis.AI ecosystem
 
 `cuvis-ai-schemas` (contracts) → **`cuvis-ai-core`** (this repo) → `cuvis-ai` (node library
-+ CLIs) → plugins. `cuvis-ai-cookbook` = examples; `cuvis-ai-agentic-skills` = Claude Code
-plugin; `dev-docs` = internal ticket docs. This package depends on `cuvis-ai-schemas`.
++ CLIs) → plugins. `cuvis-ai-agentic-skills` = Claude Code plugin; `dev-docs` = internal
+ticket docs. This package depends on `cuvis-ai-schemas`.
 
 ## Layout
 
