@@ -19,6 +19,7 @@
 - The pipeline visualizer groups a node into a stage cluster by the same rule that labels its card: a node whose stages include `always` is unrestricted (it was grouped under its other stage before), and an empty stage entry is ignored (it forced the `always` group before).
 - `dataset` CLI: `--data-dir` defaults to `./data` of the directory the command runs in, not of the process that built the CLI.
 - `VideoIterator`: a frame the backend cannot read carries `basename` like a readable one.
+- Lock upgrade past the urllib3 advisories published 2026-10-01 (CVE-2026-97687, CVE-2026-97688, CVE-2026-97689): urllib3 2.8.0, transitive, no floor change.
 
 ## 0.17.5 - 2026-09-29
 
