@@ -7,7 +7,7 @@ import queue
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import grpc
 import torch
@@ -482,7 +482,7 @@ class TrainingService:
     def _capture_experiment_context(
         self,
         session: SessionState,
-        data_config: Any,
+        data_config: DataConfig,
         training_config: TrainingConfig,
     ) -> None:
         """Persist experiment context on the session for SaveTrainRun."""

@@ -60,9 +60,7 @@ class TrainRunService:
             session.pipeline_config.save_to_file(sibling_pipeline_path)
             return sibling_pipeline_path.name
 
-        has_live_pipeline = (
-            session.pipeline is not None or session._pipeline_config is not None
-        )
+        has_live_pipeline = session.has_live_pipeline
         if not has_live_pipeline and not (
             session.trainrun_config is not None and session.trainrun_config.pipeline
         ):

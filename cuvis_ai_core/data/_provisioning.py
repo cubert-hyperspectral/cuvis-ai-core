@@ -312,7 +312,7 @@ def newest_incomplete_blob(blobs_dir: Path, not_before: float) -> Path | None:
     return newest[1] if newest else None
 
 
-def monotonic_start() -> float:
+def wall_clock_start() -> float:
     """Wall-clock stamp taken right before a download starts (for the mtime bound).
 
     File mtimes are wall-clock, so the bound is ``time.time()``; a one-second

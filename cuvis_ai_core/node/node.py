@@ -408,13 +408,13 @@ class Node(nn.Module, ABC, Serializable):
         # This avoids interfering with PyTorch's parameter management
         try:
             # Check _parameters, _buffers, _modules in order (like nn.Module does)
-            modules = object.__getattribute__(self, "__dict__")
-            if "_parameters" in modules and name in modules["_parameters"]:
-                return modules["_parameters"][name]
-            if "_buffers" in modules and name in modules["_buffers"]:
-                return modules["_buffers"][name]
-            if "_modules" in modules and name in modules["_modules"]:
-                return modules["_modules"][name]
+            attrs = object.__getattribute__(self, "__dict__")
+            if "_parameters" in attrs and name in attrs["_parameters"]:
+                return attrs["_parameters"][name]
+            if "_buffers" in attrs and name in attrs["_buffers"]:
+                return attrs["_buffers"][name]
+            if "_modules" in attrs and name in attrs["_modules"]:
+                return attrs["_modules"][name]
         except AttributeError:
             pass
 

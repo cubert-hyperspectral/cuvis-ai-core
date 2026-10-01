@@ -168,6 +168,11 @@ class SessionState:
     def pipeline_config(self, value: PipelineConfig | None) -> None:
         self._pipeline_config = value
 
+    @property
+    def has_live_pipeline(self) -> bool:
+        """True when a pipeline or a cached pipeline config is attached to the session."""
+        return self.pipeline is not None or self._pipeline_config is not None
+
 
 class SessionManager:
     """Create, track, and retire session resources."""

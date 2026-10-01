@@ -333,7 +333,7 @@ def test_card_renders_variadic_port_specs_without_crashing():
 
 
 def test_format_edge_label_returns_empty_in_card_mode():
-    """Card mode (`dedupe_matching_ports=True, include_port_types=False`) suppresses
+    """Card mode (`omit_port_label=True, include_port_types=False`) suppresses
     the edge label because port names are rendered beside each dot inside the
     node card. ``_format_edge_label`` must return an empty string immediately."""
     pipeline, source, sink = _build_pipeline()
@@ -345,7 +345,7 @@ def test_format_edge_label_returns_empty_in_card_mode():
         sink,
         edge_data,
         include_port_types=False,
-        dedupe_matching_ports=True,
+        omit_port_label=True,
     )
     assert label == ""
 
