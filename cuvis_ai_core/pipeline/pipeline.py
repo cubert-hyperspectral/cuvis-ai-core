@@ -608,8 +608,7 @@ class CuvisPipeline:
         if save_weights:
             state_dict: dict[str, Any] = {}
             for node in self.nodes:
-                if hasattr(node, "state_dict"):
-                    state_dict[node.name] = node.state_dict()
+                state_dict[node.name] = node.state_dict()
 
             checkpoint: dict[str, Any] = {
                 "state_dict": state_dict,
@@ -690,9 +689,6 @@ class CuvisPipeline:
         for node in self.nodes:
             if node.name not in state_dict:
                 missing_keys.append(node.name)
-                continue
-
-            if not hasattr(node, "load_state_dict"):
                 continue
 
             result = node.load_state_dict(
@@ -1824,7 +1820,7 @@ class CuvisPipeline:
         """Unfreeze specific nodes in this pipeline by their names.
 
         This method validates that all requested nodes exist in the pipeline and
-        unfreezes them for gradient training. Nodes must have an 'unfreeze' method.
+        unfreezes them for gradient training.
 
         Parameters
         ----------
@@ -1856,6 +1852,4 @@ class CuvisPipeline:
 
         # Unfreeze requested nodes
         for node_name in node_names:
-            node = available_nodes[node_name]
-            if hasattr(node, "unfreeze"):
-                node.unfreeze()
+            available_nodes[node_name].unfreeze()

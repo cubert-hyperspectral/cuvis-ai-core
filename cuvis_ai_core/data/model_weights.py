@@ -900,12 +900,8 @@ class ModelWeights:
         hf_hub_download, _ = cls._require_hf_hub()
         root.mkdir(parents=True, exist_ok=True)
         blobs_dir = root / weight.cache_dir_name / "blobs"
-        files: list[tuple[str, str, int]] = [
-            (entry.filename, entry.sha256, entry.size_bytes)
-        ]
-        files.extend((aux.path, aux.sha256, aux.size_bytes) for aux in entry.aux_files)
         primary: Path | None = None
-        for fname, sha, size in files:
+        for fname, sha, size in cls._files_of(weight):
             log(f"Fetching {entry.repo_id}/{fname}@{entry.revision[:12]} -> {root}")
             started = wall_clock_start()
             poller = (
@@ -930,8 +926,6 @@ class ModelWeights:
                     )
                 )
             except Exception as exc:  # mapped below; hub errors are many classes
-                if poller is not None:
-                    poller.stop()
                 raise cls._map_hf_error(
                     exc, weight.name, entry.repo_id, fname, entry.revision
                 ) from exc

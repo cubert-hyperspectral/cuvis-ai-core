@@ -86,20 +86,12 @@ def _dtype_to_string(dtype: Any) -> str:
         return dtype.name
     if isinstance(dtype, type) and issubclass(dtype, np.generic):
         return np.dtype(dtype).name
-    if dtype is torch.Tensor or dtype is None:
-        return ""
     return ""
 
 
 def _shape_to_int_list(shape: tuple) -> list[int]:
     """Replace symbolic-dim strings with -1; keep ints as-is."""
-    out: list[int] = []
-    for dim in shape:
-        if isinstance(dim, int):
-            out.append(dim)
-        else:
-            out.append(-1)
-    return out
+    return [dim if isinstance(dim, int) else -1 for dim in shape]
 
 
 def _port_spec_to_node(spec: PortSpec) -> NodePortSpec:
@@ -440,7 +432,7 @@ def emit(
             failures.append((fqcn, f"{type(exc).__name__}: {exc}"))
             logger.error(f"Skipping '{fqcn}': {exc}")
 
-    if node_items and failures and len(failures) == len(node_items):
+    if failures and len(failures) == len(node_items):
         raise RuntimeError("All node classes failed to import; refusing to rewrite")
     if failures:
         logger.warning(

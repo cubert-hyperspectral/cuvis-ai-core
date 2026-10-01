@@ -1298,3 +1298,28 @@ def test_library_methods_write_nothing_to_stdout(tmp_path, registry, fake_hub, c
     ModelWeights.import_from(tmp_path / "e", None, tmp_path / "i")
     ModelWeights.remove("sam3", tmp_path)
     assert capsys.readouterr().out == ""
+
+
+def test_remove_deletes_a_symlinked_snapshot_entry_and_its_blob(tmp_path, registry):
+    """POSIX caches link snapshot entries into blobs/; removing the row drops both.
+
+    The freed byte count is not pinned: the link is sized through the blob it
+    points at and the blob is counted again once it is unreferenced.
+    """
+    entry = registry["efficienttam_ti"]
+    primary = _seed(tmp_path, entry)
+    repo_dir = tmp_path / ModelWeights.cache_dir_token(entry.repo_id)
+    blob = repo_dir / "blobs" / entry.sha256
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    primary.replace(blob)
+    try:
+        os.symlink(os.path.relpath(blob, primary.parent), primary)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available on this machine")
+
+    freed = ModelWeights.remove("efficienttam_ti", tmp_path)
+
+    assert freed >= len(ETAM_TI_BYTES)
+    assert not primary.exists() and not primary.is_symlink()
+    assert not blob.exists()
+    assert not repo_dir.exists()  # pruned once empty

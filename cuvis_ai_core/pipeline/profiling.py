@@ -353,7 +353,7 @@ def format_profiling_table(
     )
 
     # FPS line
-    frame_count = sorted_stats[0].count if sorted_stats else 0
+    frame_count = sorted_stats[0].count
     if frame_count > 0:
         avg_frame_ms = total_pipeline_ms / frame_count
         fps = 1000.0 / avg_frame_ms if avg_frame_ms > 0 else 0.0

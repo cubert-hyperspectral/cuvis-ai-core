@@ -228,7 +228,7 @@ class PipelineService:
 
         metadata_proto = (
             pipeline_config.metadata.to_proto()
-            if getattr(pipeline_config, "metadata", None)
+            if pipeline_config.metadata
             else cuvis_ai_pb2.PipelineMetadata()
         )
         return cuvis_ai_pb2.LoadPipelineResponse(success=True, metadata=metadata_proto)

@@ -12,18 +12,13 @@ from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.extensions.ui.node_display import is_plugin, resolve_display
+from cuvis_ai_schemas.extensions.ui.port_display import (
+    DEFAULT_COLOR as _DTYPE_DEFAULT_RGB,
+)
+from cuvis_ai_schemas.extensions.ui.port_display import (
+    DTYPE_COLORS as _DTYPE_COLORS,
+)
 from cuvis_ai_schemas.pipeline import PortSpec
-
-try:
-    from cuvis_ai_schemas.extensions.ui.port_display import (
-        DEFAULT_COLOR as _DTYPE_DEFAULT_RGB,
-    )
-    from cuvis_ai_schemas.extensions.ui.port_display import (
-        DTYPE_COLORS as _DTYPE_COLORS,
-    )
-except ImportError:  # schemas extension is optional
-    _DTYPE_COLORS = {}
-    _DTYPE_DEFAULT_RGB = (200, 200, 200)
 
 NodeTypeResolver = Callable[[Node], str]
 
@@ -410,15 +405,9 @@ class PipelineVisualizer:
 
     @staticmethod
     def _sanitize_identifier(value: str, *, allow_dash: bool = True) -> str:
-        safe = []
-        for char in value:
-            if char.isalnum() or char == "_":
-                safe.append(char)
-            elif allow_dash and char == "-":
-                safe.append(char)
-            else:
-                safe.append("_")
-        return "".join(safe) or "node"
+        keep = "_-" if allow_dash else "_"
+        safe = "".join(c if c.isalnum() or c in keep else "_" for c in value)
+        return safe or "node"
 
     def _escape_label(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
@@ -448,9 +437,7 @@ class PipelineVisualizer:
         ]
 
     def _compose_attribute_list(self, attrs: Mapping[str, Any]) -> str:
-        return ", ".join(
-            f"{key}={self._quote_graphviz_value(value)}" for key, value in attrs.items()
-        )
+        return ", ".join(self._format_inline_attributes(attrs))
 
     def _format_inline_attributes(self, attrs: Mapping[str, Any]) -> list[str]:
         return [

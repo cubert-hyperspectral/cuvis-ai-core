@@ -13,7 +13,7 @@ import fnmatch
 import logging
 import posixpath
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from cuvis_ai_core.utils.general import expand_range_selectors
@@ -52,7 +52,7 @@ class ConstraintResult:
     status: str
     count: int = 0
     offending: tuple[str, ...] = ()
-    reason: str = field(default="")
+    reason: str = ""
 
 
 def required_attrs(splits: DataSplitConfig) -> frozenset[str]:
