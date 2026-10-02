@@ -79,6 +79,9 @@ class FakeRestorePipeline:
         ]
         self.nodes = _NodeList([self.video_node, *fake_nodes])
         self.profiling_enabled: list[bool] = []
+        self.synchronize_cuda: list[bool] = []
+        self.iter_calls: list[dict[str, object]] = []
+        self.iterators: list = []
         self.forward_calls: list[tuple[dict[str, torch.Tensor], object]] = []
         self.summary_calls: list[tuple[ExecutionStage, int]] = []
         self.save_to_file_calls: list[str] = []
@@ -109,8 +112,21 @@ class FakeRestorePipeline:
                 node._statistically_initialized = True
         return list(self.missing_nodes)
 
-    def set_profiling(self, *, enabled: bool) -> None:
+    def set_profiling(self, *, enabled: bool, synchronize_cuda: bool = False) -> None:
         self.profiling_enabled.append(enabled)
+        self.synchronize_cuda.append(synchronize_cuda)
+
+    def iter_profiled_batches(self, batches, *, stage: ExecutionStage, move=None):
+        """Record the call and hand back a real generator, so ``close()`` is observable."""
+        self.iter_calls.append({"stage": stage, "has_move": move is not None})
+        gen = self._profiled(batches, move)
+        self.iterators.append(gen)
+        return gen
+
+    @staticmethod
+    def _profiled(batches, move):
+        for batch in batches:
+            yield move(batch) if move is not None else batch
 
     def forward(self, *, batch: dict[str, torch.Tensor], context: object) -> dict:
         self.forward_calls.append((batch, context))

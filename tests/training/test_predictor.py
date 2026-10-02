@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 
+from types import SimpleNamespace
+
 import pytorch_lightning as pl
 import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 
+import cuvis_ai_core.pipeline.pipeline as pipeline_mod
 import cuvis_ai_core.training.predictor as predictor_mod
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
@@ -440,3 +443,198 @@ def test_predictor_moves_batches_using_pipeline_device_and_preserves_non_tensors
 
     assert moved["value"].device.type == "cpu"
     assert moved["meta"] == "keep-me"
+
+
+# ---------------------------------------------------------------------------
+# Data-load profiling through the pipeline's profiled batch iterator
+# ---------------------------------------------------------------------------
+
+
+class CountingDataset(DictDataset):
+    """Counts fetches; with batch_size=1 and no workers, one fetch is one batch."""
+
+    def __init__(self, values: torch.Tensor) -> None:
+        super().__init__(values)
+        self.fetches = 0
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        self.fetches += 1
+        return super().__getitem__(idx)
+
+
+class CountingDataModule(PredictDataModule):
+    def setup(self, stage: str | None = None) -> None:
+        if stage == "predict" or stage is None:
+            self.predict_ds = CountingDataset(self.values)
+
+
+class FailingSinkNode(PredictSinkNode):
+    """Fails on its second forward."""
+
+    def forward(
+        self, doubled: torch.Tensor, context: Context | None = None, **_
+    ) -> dict:
+        if self.forward_calls >= 1:
+            raise RuntimeError("sink failed")
+        return super().forward(doubled, context)
+
+
+def _data_rows(pipeline: CuvisPipeline) -> dict[str, object]:
+    return {s.node_name: s for s in pipeline.get_data_profiling_summary()}
+
+
+def test_predictor_profiles_the_data_load_when_enabled() -> None:
+    values = torch.tensor([[1.0], [2.0], [3.0]])
+    plain_pipeline, _, _ = _build_pipeline()
+    plain = Predictor(
+        pipeline=plain_pipeline, datamodule=PredictDataModule(values=values)
+    ).predict(collect_outputs=True)
+
+    pipeline, _, sink = _build_pipeline()
+    pipeline.set_profiling(enabled=True)
+    profiled = Predictor(
+        pipeline=pipeline, datamodule=PredictDataModule(values=values)
+    ).predict(collect_outputs=True)
+
+    assert profiled is not None and plain is not None
+    assert [out[("source", "doubled")].tolist() for out in profiled] == [
+        out[("source", "doubled")].tolist() for out in plain
+    ]
+    rows = _data_rows(pipeline)
+    assert set(rows) == {"data_load", "to_device", "batch_loop"}
+    assert {name: r.count for name, r in rows.items()} == {
+        "data_load": 2,
+        "to_device": 2,
+        "batch_loop": 2,
+    }
+    assert len(pipeline._first_batch_ms["inference"]) == 1
+    assert sink.forward_calls == 3
+    assert sink.close_calls == 1
+
+
+@pytest.mark.parametrize("profiling", [False, True])
+def test_predictor_max_batches_bounds_fetches_moves_and_forwards(
+    monkeypatch: pytest.MonkeyPatch, profiling: bool
+) -> None:
+    pipeline, source, sink = _build_pipeline()
+    pipeline.set_profiling(enabled=profiling)
+    datamodule = CountingDataModule(
+        values=torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]])
+    )
+    predictor = Predictor(pipeline=pipeline, datamodule=datamodule)
+    moves: list[int] = []
+    real_move = predictor._move_batch_to_device
+    monkeypatch.setattr(
+        predictor,
+        "_move_batch_to_device",
+        lambda batch: (moves.append(1), real_move(batch))[1],
+    )
+
+    predictor.predict(max_batches=2, collect_outputs=False)
+
+    assert datamodule.predict_ds is not None
+    assert datamodule.predict_ds.fetches == 2  # not the one-past-the-limit fetch of old
+    assert len(moves) == 2
+    assert sink.forward_calls == 2
+    assert [ctx.batch_idx for ctx in source.contexts] == [0, 1]
+
+
+def test_predictor_repeat_predict_keeps_one_first_batch_per_pass() -> None:
+    pipeline, _, _ = _build_pipeline()
+    pipeline.set_profiling(enabled=True)
+    values = torch.tensor([[1.0], [2.0], [3.0]])
+
+    Predictor(pipeline=pipeline, datamodule=PredictDataModule(values=values)).predict()
+    Predictor(pipeline=pipeline, datamodule=PredictDataModule(values=values)).predict()
+
+    assert len(pipeline._first_batch_ms["inference"]) == 2
+    assert _data_rows(pipeline)["data_load"].count == 4  # (3 - 1) per pass
+
+
+def test_predictor_batch_loop_includes_output_handling_and_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {"now": 0}
+
+    def perf_counter_ns() -> int:
+        state["now"] += 1_000_000
+        return state["now"]
+
+    monkeypatch.setattr(
+        pipeline_mod, "time", SimpleNamespace(perf_counter_ns=perf_counter_ns)
+    )
+
+    class _RenderingPbar:
+        """A progress bar whose per-item update costs one clock tick."""
+
+        def __init__(self, iterable) -> None:
+            self._iterable = iterable
+
+        def __iter__(self):
+            for item in self._iterable:
+                perf_counter_ns()
+                yield item
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        predictor_mod, "tqdm", lambda iterable, **kw: _RenderingPbar(iterable)
+    )
+    real_select = Predictor._select_outputs
+    monkeypatch.setattr(
+        Predictor,
+        "_select_outputs",
+        staticmethod(
+            lambda outputs, ports: (perf_counter_ns(), real_select(outputs, ports))[1]
+        ),
+    )
+
+    pipeline, _, _ = _build_pipeline()
+    pipeline.set_profiling(enabled=True)
+    Predictor(
+        pipeline=pipeline,
+        datamodule=PredictDataModule(values=torch.tensor([[1.0], [2.0], [3.0]])),
+    ).predict(collect_outputs=True, collect_ports={"doubled"})
+
+    rows = _data_rows(pipeline)
+    # data_load sees only the loader's next(): one tick.
+    assert rows["data_load"].mean_ms == 1.0
+    # batch_loop spans fetch start .. next request: fetch (1) + move (1) + progress render (1)
+    # + two node timers (4) + output selection (1) + loop close (1) = 9 ticks.
+    assert rows["batch_loop"].mean_ms == 9.0
+
+
+def test_predictor_forward_error_leaves_no_partial_loop_sample() -> None:
+    pipeline = CuvisPipeline("predict_pipeline")
+    source = PredictSourceNode(name="source")
+    sink = FailingSinkNode(name="sink")
+    pipeline.connect(source.outputs.doubled, sink.inputs.doubled)
+    pipeline.set_profiling(enabled=True)
+
+    with pytest.raises(RuntimeError, match="sink failed"):
+        Predictor(
+            pipeline=pipeline,
+            datamodule=PredictDataModule(values=torch.tensor([[1.0], [2.0], [3.0]])),
+        ).predict()
+
+    rows = _data_rows(pipeline)
+    assert rows["data_load"].count == 1  # the second fetch happened
+    assert (
+        "batch_loop" not in rows or rows["batch_loop"].count == 0
+    )  # its loop never closed
+    assert sink.close_calls == 1  # the finally ran
+
+
+def test_predictor_single_batch_shows_only_the_first_batch_line() -> None:
+    pipeline, _, _ = _build_pipeline()
+    pipeline.set_profiling(enabled=True)
+
+    Predictor(
+        pipeline=pipeline, datamodule=PredictDataModule(values=torch.tensor([[1.0]]))
+    ).predict()
+
+    table = pipeline.format_profiling_summary()
+    assert "First batch data load (inference, excluded from the rows):" in table
+    assert "Time per batch" not in table
+    assert not any(line.startswith("data_load") for line in table.split("\n"))

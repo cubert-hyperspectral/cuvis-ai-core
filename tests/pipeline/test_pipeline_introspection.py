@@ -228,6 +228,8 @@ class TestPipelineIntrospection:
         pipeline._graph.add_node(node)
         pipeline._validation_cache[("cleanup_node", frozenset(), None)] = None
         _ = pipeline._sorted_nodes
+        pipeline.set_profiling(enabled=True)  # creates the node and data profilers
+        pipeline._first_batch_ms = {"inference": [1.0]}
         pipeline._profiling_enabled = True
         pipeline._synchronize_cuda = True
 
@@ -238,6 +240,8 @@ class TestPipelineIntrospection:
         assert pipeline._validation_cache == {}
         assert "_sorted_nodes" not in pipeline.__dict__
         assert pipeline._profiler is None
+        assert pipeline._data_profiler is None
+        assert pipeline._first_batch_ms == {}
         assert pipeline._profiling_enabled is False
         assert pipeline._synchronize_cuda is False
 

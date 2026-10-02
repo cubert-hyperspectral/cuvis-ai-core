@@ -178,6 +178,7 @@ def restore_pipeline(
     config_overrides: list[str] | None = None,
     plugins_dirs: list[str | Path] | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
+    profile_sync: bool = False,
 ) -> CuvisPipeline:
     """Restore pipeline from configuration and weights for inference.
 
@@ -210,6 +211,11 @@ def restore_pipeline(
         If provided, saves visualization next to the pipeline YAML file.
         PipelineVisFormat.PNG for rendered image, PipelineVisFormat.MD for Mermaid markdown.
         Default: None (no visualization)
+    profile_sync : bool
+        Synchronize CUDA around every profiled step of the inference run, so each
+        node and the device copy carry their own GPU time and the per-batch loop
+        time is GPU-complete. Off by default: the timings are then host wall time,
+        and queued GPU work can show up in the next batch's data load.
 
     Returns
     -------
@@ -276,23 +282,36 @@ def restore_pipeline(
         for module in pipeline.torch_layers:
             module.eval()
 
-        # Process all batches (outputs discarded; sink nodes write to disk).
+        # Process all batches (outputs discarded; sink nodes write to disk). The
+        # pipeline's profiled iterator times the fetch and the device copy, so the
+        # summary below covers the data load and not only the nodes.
         global_step = 0
-        pipeline.set_profiling(enabled=True)
-        with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Inference", unit="batch"):
-                if load_device:
-                    batch = {
-                        k: v.to(load_device) if isinstance(v, torch.Tensor) else v
-                        for k, v in batch.items()
-                    }
-                context = Context(
-                    stage=ExecutionStage.INFERENCE,
-                    batch_idx=global_step,
-                    global_step=global_step,
-                )
-                pipeline.forward(batch=batch, context=context)
-                global_step += 1
+        pipeline.set_profiling(enabled=True, synchronize_cuda=profile_sync)
+
+        def to_device(batch: dict) -> dict:
+            """Move the batch's tensors to the requested device; other values pass."""
+            return {
+                k: v.to(load_device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+
+        batches = pipeline.iter_profiled_batches(
+            dataloader,
+            stage=ExecutionStage.INFERENCE,
+            move=to_device if load_device else None,
+        )
+        try:
+            with torch.no_grad():
+                for batch in tqdm(batches, desc="Inference", unit="batch"):
+                    context = Context(
+                        stage=ExecutionStage.INFERENCE,
+                        batch_idx=global_step,
+                        global_step=global_step,
+                    )
+                    pipeline.forward(batch=batch, context=context)
+                    global_step += 1
+        finally:
+            batches.close()
 
         logger.info(
             pipeline.format_profiling_summary(
@@ -889,6 +908,13 @@ Examples:
         default=None,
         help="Export pipeline visualization: 'png' (rendered image) or 'md' (Mermaid markdown)",
     )
+    parser.add_argument(
+        "--profile-sync",
+        action="store_true",
+        help="Synchronize CUDA around every profiled step (slower) so the summary's "
+        "node, device-copy and per-batch times are GPU-complete instead of host "
+        "wall time.",
+    )
 
     args = parser.parse_args()
 
@@ -914,6 +940,7 @@ Examples:
         config_overrides=args.override,
         plugins_dirs=args.plugins_dir,
         pipeline_vis_ext=vis_ext,
+        profile_sync=args.profile_sync,
     )
 
 

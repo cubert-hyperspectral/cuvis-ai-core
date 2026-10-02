@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -58,21 +59,25 @@ class Predictor:
 
         total = self._estimate_total_batches(dataloaders, max_batches)
 
+        # The limit is applied before the fetch: nothing past it is read or moved.
+        # The pipeline's profiled iterator times the fetch and the device copy; the
+        # progress bar wraps it so its updates count as loop time, not load time.
+        batches = self.pipeline.iter_profiled_batches(
+            itertools.islice(self._iter_batches(dataloaders), max_batches),
+            stage=stage,
+            move=self._move_batch_to_device,
+        )
         self._reset_nodes()
         try:
             with torch.no_grad():
                 pbar = tqdm(
-                    self._iter_batches(dataloaders),
+                    batches,
                     total=total,
                     desc=f"Predict [{self.pipeline.name}]",
                     unit="batch",
                     disable=self._should_disable_progress_bar(),
                 )
-                for batch in pbar:
-                    if max_batches is not None and batch_idx >= max_batches:
-                        break
-
-                    moved_batch = self._move_batch_to_device(batch)
+                for moved_batch in pbar:
                     context = Context(
                         stage=stage,
                         batch_idx=batch_idx,
@@ -91,6 +96,7 @@ class Predictor:
                     batch_idx += 1
                 pbar.close()
         finally:
+            batches.close()
             self._close_nodes()
 
         return collected if collect_outputs else None
