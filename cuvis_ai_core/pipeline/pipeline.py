@@ -805,7 +805,22 @@ class CuvisPipeline:
                 device=device,
             )
 
+        pipeline.prepare_inference()
         return pipeline
+
+    def prepare_inference(self) -> None:
+        """Call :meth:`Node.prepare_inference` on every node in execution order.
+
+        Loaders call this once the pipeline sits on its device with its final
+        weights. A node that fails stops the load with its name in the error.
+        """
+        for node in self._sorted_nodes:
+            try:
+                node.prepare_inference()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Node '{node.name}' failed to prepare for inference: {exc}"
+                ) from exc
 
     @staticmethod
     def load_trainer_state(

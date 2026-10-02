@@ -348,6 +348,17 @@ class Node(nn.Module, ABC, Serializable):
         """
         return None
 
+    def prepare_inference(self) -> None:
+        """Prepare the node for inference once its device and weights are final.
+
+        The pipeline loaders call this after the pipeline has moved to its device,
+        and again after every weights load, so a node can build artifacts that
+        depend on both (for example a TensorRT engine). It can run more than once
+        on the same node and should do nothing when its artifacts are current.
+        A raised exception fails the load. The default implementation is a no-op.
+        """
+        return None
+
     @abstractmethod
     def forward(self, **inputs: Any) -> dict[str, Any]:
         """Execute node computation returning a dictionary of named outputs."""
