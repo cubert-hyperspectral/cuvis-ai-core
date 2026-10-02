@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `audit-plugin-deps --check plugins` takes `--exclude NAME` (repeatable) and skips those manifests with a note. cuvis-ai's registry audit names its own `cuvis_ai_builtin` manifest: tag-pinned like an external plugin, but its floors equal cuvis-ai's lock (its dependency-floor audit enforces that) and so run ahead of core's lock; cuvis-ai's host check covers them.
+
 ## 0.18.0 - 2026-10-01
 
 - Removed, breaking (the next release is 0.18.0): the public names the 0.17.5 simplification pass kept for an API decision. None of them is referenced by cuvis-ai, the plugins, the notebooks, the skills or CuvisNEXT.
