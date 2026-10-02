@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 
+from types import SimpleNamespace
+
 import pytorch_lightning as pl
 import pytest
 import torch
