@@ -78,6 +78,8 @@ class PipelineService:
             context.set_details("Provide either weights_path or weights_bytes")
             return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
 
+        pipeline.prepare_inference()
+
         return cuvis_ai_pb2.LoadPipelineWeightsResponse(
             success=True, resolved_path=resolved_path
         )
@@ -219,6 +221,7 @@ class PipelineService:
         ).build_from_config(pipeline_config.to_dict())
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
+        pipeline.prepare_inference()
 
         self.session_manager.set_pipeline(
             request.session_id,
