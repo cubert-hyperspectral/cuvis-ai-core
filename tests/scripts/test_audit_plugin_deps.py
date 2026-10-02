@@ -473,3 +473,65 @@ def test_cli_plugin_check_takes_the_pyproject_cache_option(tmp_path: Path) -> No
     )
     assert result.exit_code == 1, result.output
     assert "MISMATCH" in result.output and "pillow" in result.output
+
+
+def test_check_plugins_skips_excluded_manifests_by_name(tmp_path: Path) -> None:
+    # The host repo's own builtin manifest is tag-pinned like an external plugin,
+    # but its floors equal the host's lock (its host check enforces that) and so
+    # run ahead of core's: the caller names it, the check notes it and audits the
+    # rest.
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    cache = tmp_path / "pyprojects"
+    for name, deps in (
+        ("cuvis_ai_builtin", ["pydantic>=99.0.0"]),
+        ("cuvis-ai-sam3", ["pillow>=99.0.0"]),
+    ):
+        _write_flat_manifest(plugins_dir, name, "v1.0.0")
+        fetched = cache / f"{name}@v1.0.0"
+        fetched.mkdir(parents=True)
+        _write_plugin_pyproject(fetched, name, deps)
+    core_lock = {"pillow": Version("12.2.0"), "pydantic": Version("2.12.0")}
+
+    findings, warnings = apd.check_plugins(
+        plugins_dir, core_lock, pyproject_cache=cache, exclude={"cuvis_ai_builtin"}
+    )
+
+    assert [(f.plugin, f.name) for f in findings] == [("cuvis-ai-sam3", "pillow")]
+    assert warnings == [
+        "cuvis_ai_builtin: excluded - skipped (host-checked separately)"
+    ]
+
+
+def test_cli_plugin_check_takes_exclude_more_than_once(tmp_path: Path) -> None:
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+    core = _make_repo(core_dir, [], {"pillow": "12.2.0"})
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    cache = tmp_path / "pyprojects"
+    for name in ("cuvis_ai_builtin", "cuvis-ai-sam3"):
+        _write_flat_manifest(plugins_dir, name, "v1.0.0")
+        fetched = cache / f"{name}@v1.0.0"
+        fetched.mkdir(parents=True)
+        _write_plugin_pyproject(fetched, name, ["pillow>=99.0.0"])  # would mismatch
+    result = CliRunner().invoke(
+        apd.main,
+        [
+            "--check",
+            "plugins",
+            "--plugins-dir",
+            str(plugins_dir),
+            "--pyproject-cache",
+            str(cache),
+            "--against-core",
+            str(core),
+            "--exclude",
+            "cuvis_ai_builtin",
+            "--exclude",
+            "cuvis-ai-sam3",
+            "--strict",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output.count("excluded - skipped") == 2

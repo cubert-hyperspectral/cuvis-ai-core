@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sys
 import tomllib
+from collections.abc import Collection
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -288,12 +289,17 @@ def check_plugins(
     plugins_dir: Path,
     core_lock: dict[str, Version],
     pyproject_cache: Path | None = None,
+    exclude: Collection[str] = (),
 ) -> tuple[list[PluginFinding], list[str]]:
     """Compare each manifest's plugin requirements against the core lock.
 
     One manifest file is one plugin: its source lives in the top-level ``name``
     and ``repo`` / ``tag`` (or ``path``) keys. Tag-pinned plugins are read from
     ``pyproject_cache``; without one every tag-pinned plugin is skipped with a note.
+    Manifests named in ``exclude`` are skipped with a note as well: the host
+    repository's own builtin manifest is tag-pinned like an external plugin, but
+    its floors equal the host's own lock (its host check enforces that) and so
+    run ahead of core's.
     """
     import yaml  # local import: only the plugin check needs PyYAML
 
@@ -306,6 +312,10 @@ def check_plugins(
         # (e.g. ``cuvis_ai_builtin`` → the host repo). They are host-checked
         # in their own repo's --check host run, not against core's lock, so
         # the registry check skips them and audits only tag-pinned externals.
+        # A tag-pinned builtin is the same case; the caller names it.
+        if name in exclude:
+            warnings.append(f"{name}: excluded - skipped (host-checked separately)")
+            continue
         if "path" in cfg:
             warnings.append(
                 f"{name}: local-path entry - skipped (host-checked separately)"
@@ -418,6 +428,15 @@ def _print_plugins(findings: list[PluginFinding], warnings: list[str]) -> None:
     "(reads its uv.lock), or unset (defaults to --project-dir's lock).",
 )
 @click.option(
+    "--exclude",
+    "exclude",
+    multiple=True,
+    metavar="NAME",
+    help="Manifest name the plugin check skips (repeatable): the host "
+    "repository's own builtin manifest, whose floors its host check audits "
+    "against its own lock.",
+)
+@click.option(
     "--strict",
     is_flag=True,
     default=False,
@@ -440,6 +459,7 @@ def main(
     plugin_pyproject: Path | None,
     pyproject_cache: Path | None,
     against_core: str | None,
+    exclude: tuple[str, ...],
     strict: bool,
     output_format: str,
 ) -> None:
@@ -471,7 +491,10 @@ def main(
                 )
             else:
                 findings_p, warnings_p = check_plugins(
-                    plugins_dir, core_lock, pyproject_cache=pyproject_cache
+                    plugins_dir,
+                    core_lock,
+                    pyproject_cache=pyproject_cache,
+                    exclude=set(exclude),
                 )
             has_findings = has_findings or bool(findings_p)
             report["plugins"] = {
