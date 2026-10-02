@@ -392,12 +392,12 @@ def child_can_serve(
 ) -> bool:
     """Whether the session's current child env holds everything ``resolved`` needs.
 
-    The child's venv was composed for ``session.resolved_plugins`` (with the
-    pip extras of ``session.child_data_module``). It serves a pipeline whose
-    plugins are a subset of that set, name for name and source for source
-    (a re-registered plugin pointing at another tag or path is another
-    plugin), and whose data module is either none or the one the env was
-    composed with. Anything else needs a new env: a plugin family the child
+    The child's venv was composed for ``session.resolved_plugins`` (with each
+    manifest's own pip extras and those of ``session.child_data_module``). It
+    serves a pipeline whose plugins are a subset of that set, name for name and
+    install for install (a re-registered plugin pointing at another tag or path,
+    or requesting other extras, is another plugin), and whose data module is
+    either none or the one the env was composed with. Anything else needs a new env: a plugin family the child
     never installed fails inside it with a module import error. A child the
     parent has already told to stop (a retire that hit a survivor) serves
     nothing any more, whatever it was composed for.
@@ -416,12 +416,13 @@ def _install_identity(manifest: PluginManifest) -> tuple:
 
     The source (repo and tag, or path plus the hash of the local project's
     ``pyproject.toml``, the one file of a local plugin whose content shapes the
-    venv), the installable name and the pip extras of its data-module
-    capabilities. Capability lists, tags, icons and port specs are metadata the
-    client may regenerate between two LoadPlugin calls (``emit_metadata``,
-    another capability order); they do not change the venv, so they must not
-    replace a warm child. A git tag is taken as immutable, as the composer's
-    cache key takes it: a tag moved to another commit is not detected here.
+    venv), the installable name, the manifest's own pip extras and the extras of
+    its data-module capabilities. Capability lists, tags, icons and port specs
+    are metadata the client may regenerate between two LoadPlugin calls
+    (``emit_metadata``, another capability order); they do not change the venv,
+    so they must not replace a warm child. A git tag is taken as immutable, as
+    the composer's cache key takes it: a tag moved to another commit is not
+    detected here.
     """
     extras = tuple(
         sorted(
@@ -438,6 +439,7 @@ def _install_identity(manifest: PluginManifest) -> tuple:
         getattr(manifest, "tag", None),
         path,
         pyproject_sha256_of(Path(path)) if path else None,
+        tuple(sorted(manifest.extras)),
         extras,
     )
 

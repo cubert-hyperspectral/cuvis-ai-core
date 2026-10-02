@@ -236,3 +236,39 @@ def test_provision_environment_env_file_sync_installs(monkeypatch, tmp_path):
     prov.provision_environment(["a"], env_file=out, sync=True, pipeline_name="P")
     assert out.exists()
     assert calls[0][0][0][:4] == ["uv", "pip", "install", "-r"]
+
+
+def test_resolve_install_specs_merges_one_package_and_never_skips_a_plugin_with_extras(
+    monkeypatch,
+):
+    """Two manifests of one package fold into one spec; a plugin that requests extras
+    is listed even when its package imports, since the extras may still be missing."""
+    plain = _git()
+    variant = ResolvedGitPlugin(
+        name="sam3_trt",
+        repo=_REPO,
+        sha="a" * 40,
+        tag="v0.1.6",
+        package_name="cuvis-ai-sam3",
+        extras=("tensorrt",),
+    )
+    monkeypatch.setattr(
+        prov.PipelineConfig, "load_from_file", staticmethod(lambda p: object())
+    )
+    monkeypatch.setattr(
+        prov,
+        "resolve_pipeline_plugins",
+        lambda cfg, dirs, dm: {
+            "sam3": _cfg("cuvis_ai_sam3.X"),
+            "sam3_trt": _cfg("cuvis_ai_sam3.X"),
+        },
+    )
+    monkeypatch.setattr(
+        prov,
+        "resolve_plugin_sources",
+        lambda cfgs, active_data_module=None: (plain, variant),
+    )
+    monkeypatch.setattr(prov, "_is_satisfied", lambda cfg: True)
+
+    specs = prov.resolve_install_specs("pipe.yaml", ["dir"])
+    assert specs == [f"cuvis-ai-sam3[tensorrt] @ git+{_REPO}@v0.1.6"]

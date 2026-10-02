@@ -91,3 +91,27 @@ def test_emit_empty_capabilities_errors(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="empty 'capabilities:'"):
         emit(manifest, check=False)
+
+
+def test_emit_keeps_manifest_level_extras(tmp_path: Path):
+    """A top-level `extras` is install metadata: emit rewrites capabilities only, and
+    --check accepts the manifest as in sync."""
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "name": "cuvis_ai_test_nodes",
+                "path": "../..",
+                "package_name": "cuvis-ai-core",
+                "extras": ["tensorrt"],
+                "capabilities": [{"class_name": _NODE_FQCN}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    assert emit(manifest, check=False) is True
+    doc = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    assert doc["extras"] == ["tensorrt"]
+    assert doc["package_name"] == "cuvis-ai-core"
+    assert emit(manifest, check=True) is True

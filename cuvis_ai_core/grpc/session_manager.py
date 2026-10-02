@@ -111,7 +111,8 @@ class SessionState:
     resolved_plugins: dict[str, Any] | None = None
     child_data_module: str | None = None
     # Per plugin, the install identity the child's venv was built from (source,
-    # package name, a local plugin's pyproject hash, data-module extras), taken
+    # package name, a local plugin's pyproject hash, the manifest's extras and
+    # the data-module extras), taken
     # when the child was attached. ``child_can_serve`` compares a later
     # pipeline's plugins against these, not against ``resolved_plugins``: a
     # local plugin's pyproject may have changed on disk since the compose.

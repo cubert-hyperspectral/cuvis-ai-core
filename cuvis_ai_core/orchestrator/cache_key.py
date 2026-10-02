@@ -89,8 +89,8 @@ class ResolvedGitPlugin:
     sha: str  # 40-char hex, resolved via ``git ls-remote --tags``
     tag: str  # the original user-facing tag, kept for the human prefix
     package_name: str = ""  # populated by resolve_plugin_sources
-    # pip extras to install for this plugin (e.g. the activated data module's
-    # extras). Lands in the runtime pyproject's dependency string, so spec_hash
+    # pip extras to install for this plugin: the manifest's own plus the activated
+    # data module's. Lands in the runtime pyproject's dependency string, so spec_hash
     # covers it; intentionally omitted from _plugin_to_dict to avoid double-count.
     extras: tuple[str, ...] = ()
 
@@ -119,7 +119,8 @@ class ResolvedLocalPlugin:
     pyproject_sha256: str
     git_head: str | None
     dirty: bool
-    # pip extras to install for this plugin (the activated data module's extras).
+    # pip extras to install for this plugin: the manifest's own plus the activated
+    # data module's (see ResolvedGitPlugin.extras).
     extras: tuple[str, ...] = ()
 
 

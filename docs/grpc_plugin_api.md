@@ -69,6 +69,7 @@ GitPluginSource(
     tag="v1.2.3",                                                      # tag only
     capabilities=[{"class_name": "cuvis_ai_adaclip.node.AdaCLIPDetector"}],
     package_name="cuvis-ai-adaclip",  # optional: real [project].name if it differs from the name
+    extras=[],  # optional: pip extras of the package, installed whenever this manifest is in the plugin set
 )
 ```
 
@@ -344,8 +345,9 @@ under `<cache root>/.crash_logs/<timestamp>-<session-id>/` (override the locatio
 
 **A pipeline whose plugins the session's child was not composed for replaces the child.** A
 `LoadPipeline` (or `RestoreTrainRun`) whose plugins are a subset of the child's, manifest for
-manifest, and whose data module is none or the one the env was composed with reuses the warm
-child; anything else composes the new env first, stops the old child, then spawns the replacement.
+manifest (same source, same `package_name`, same manifest-level `extras`), and whose data module is
+none or the one the env was composed with reuses the warm child; anything else composes the new env
+first, stops the old child, then spawns the replacement.
 A switch across plugin families therefore costs a compose (cache hit about a second, cold build
 minutes) plus a child start. Loads on one session run one at a time.
 

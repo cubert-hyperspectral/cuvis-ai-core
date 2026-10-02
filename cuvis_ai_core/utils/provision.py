@@ -27,6 +27,7 @@ from loguru import logger
 from cuvis_ai_core.orchestrator.cache_key import ResolvedGitPlugin
 from cuvis_ai_core.orchestrator.runtime_project import (
     _plugin_source_entry,
+    merge_by_package,
     resolve_plugin_sources,
 )
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
@@ -75,10 +76,13 @@ def resolve_install_specs(
     """Return pip-install specs for the plugins a pipeline needs.
 
     Git plugins become ``name[extras] @ git+<url>@<tag>`` (or ``@<sha>`` when
-    ``pin`` is set); local plugins become ``name[extras] @ file://<path>``.
-    Plugins already importable in the active environment are skipped unless
-    ``include_satisfied`` is set (so a dev checkout with editable installs
-    yields an empty list - nothing to provision).
+    ``pin`` is set); local plugins become ``name[extras] @ file://<path>``. The
+    extras are each manifest's own plus the selected data module's, and two
+    manifests of one package fold into one spec. Plugins already importable in
+    the active environment are skipped unless ``include_satisfied`` is set (so
+    a dev checkout with editable installs yields an empty list - nothing to
+    provision); a plugin that requests extras is always listed, because an
+    importable package says nothing about its extras.
     """
     pipeline_path = Path(pipeline_path)
     cfg = PipelineConfig.load_from_file(pipeline_path)
@@ -90,9 +94,11 @@ def resolve_install_specs(
         if include_satisfied
         else {name for name, c in resolved_cfgs.items() if _is_satisfied(c)}
     )
-    plugins = resolve_plugin_sources(resolved_cfgs, active_data_module=data_module)
+    plugins = merge_by_package(
+        resolve_plugin_sources(resolved_cfgs, active_data_module=data_module)
+    )
     ref = "sha" if pin else "tag"
-    return [_spec_for(p, ref) for p in plugins if p.name not in satisfied]
+    return [_spec_for(p, ref) for p in plugins if p.extras or p.name not in satisfied]
 
 
 def format_install_command(specs: Sequence[str], *, magic: bool = False) -> str:

@@ -33,10 +33,52 @@ capabilities:
 Each `capabilities` entry is a `PluginCapabilityEntry`: `class_name` (an FQCN) is required; the rest
 is optional palette metadata (`category`, `tags`, `icon_svg`, `input_specs`, `output_specs`,
 `doc_summary`). A `kind: data_module` entry instead registers a data module (it carries
-`data_module_name` + pip `extras` and never appears in the node palette).
+`data_module_name` + pip `extras` and never appears in the node palette). A manifest may also
+carry its own top-level `extras` (see [Optional heavy dependencies](#optional-heavy-dependencies)).
 
 The `capabilities` list **is** the plugin's node catalog: the server enumerates it for the node
 palette without importing any plugin code.
+
+### Optional heavy dependencies
+
+A node plugin with an optional backend keeps the heavy package behind a pip extra of its own
+`pyproject.toml` (`[project.optional-dependencies]`) and lets a manifest request it:
+
+```yaml
+# configs/plugins/rfdetr_seg_trt.yaml  (a second manifest of the same package)
+name: rfdetr_seg_trt
+repo: "https://github.com/cubert-hyperspectral/cuvis-ai-rfdetr.git"
+tag: "v0.5.1"
+package_name: "cuvis-ai-rfdetr"       # the same package as the plain `rfdetr` manifest
+extras: [tensorrt]                    # installed whenever this manifest is in a pipeline's plugin set
+capabilities:
+  - class_name: cuvis_ai_rfdetr.node.rfdetr_segmenter.RFDETRSegmenter
+```
+
+The rules:
+
+- A manifest's `extras` are installed whenever that manifest is in the pipeline's plugin set, united
+  with the selected data module's extras (a `kind: data_module` entry's `extras` apply only to the run
+  that selects that module). Names are PEP 508 extras, normalised per PEP 685 (`Tensor_RT` is
+  `tensor-rt`); a duplicate after normalisation is rejected by the schema.
+- Manifests that install one package (the same canonical `package_name`, the same repo and tag or the
+  same path) merge into one requirement, `cuvis-ai-rfdetr[tensorrt]`. The same package from two
+  different sources fails the compose with `FAILED_PRECONDITION` naming both manifests.
+- A pipeline that needs the backend lists **both** manifests, `plugins: [rfdetr, rfdetr_seg_trt]`.
+  Warm-child reuse compares manifest names: a child composed for both serves a plain `[rfdetr]`
+  pipeline, a child composed for the variant alone does not. Keep the variant manifest minimal (only
+  the node that needs the backend), so the plain manifest stays the one every pipeline lists.
+- An extra the package does not declare fails the compose right after `uv lock` (uv itself only warns),
+  with the extras the package declares:
+  `Plugin 'rfdetr_seg_trt' requests extra 'tensort' that package 'cuvis-ai-rfdetr' (...) does not declare (the lock resolved its extras tensorrt, train)`.
+- A git manifest that names a package other than its `name` needs `package_name`, or uv's metadata
+  check fails with `Package metadata name ... does not match given name`.
+
+To see what a pipeline will install before any compose, run the dry run: `uv run provision
+--pipeline-path <pipeline.yaml> --plugins-dir configs/plugins` prints one spec per package, extras
+included (`cuvis-ai-rfdetr[tensorrt] @ git+https://github.com/cubert-hyperspectral/cuvis-ai-rfdetr.git@v0.5.1`).
+The server logs the same merged requirement when it composes (`Composing for cuvis-ai-rfdetr[tensorrt]`),
+and the composed entry's `env_desc.md` records the plugin set.
 
 ### Register, then materialise
 

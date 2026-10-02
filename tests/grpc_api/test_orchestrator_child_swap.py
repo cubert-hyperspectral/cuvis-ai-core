@@ -52,7 +52,9 @@ NODE_A = "tests.fixtures.mock_nodes.MinMaxNormalizer"
 NODE_B = "tests.fixtures.mock_nodes.MockBinaryDecider"
 
 
-def _register(sm, sid, name, *, class_name=None, data_module=None, path="."):
+def _register(
+    sm, sid, name, *, class_name=None, data_module=None, path=".", extras=None
+):
     """Register a plugin into the session catalog (metadata only, like LoadPlugin)."""
     capabilities = []
     if class_name is not None:
@@ -66,11 +68,10 @@ def _register(sm, sid, name, *, class_name=None, data_module=None, path="."):
                 "extras": [data_module],
             }
         )
-    sm.get_session(sid).registered_plugins[name] = {
-        "name": name,
-        "path": path,
-        "capabilities": capabilities,
-    }
+    manifest = {"name": name, "path": path, "capabilities": capabilities}
+    if extras is not None:
+        manifest["extras"] = list(extras)
+    sm.get_session(sid).registered_plugins[name] = manifest
 
 
 def _pipeline(plugins, class_names=()):
@@ -1906,3 +1907,60 @@ def test_child_ready_is_restored_when_the_load_fails_after_the_publish(
     session = sm.get_session(sid)
     assert session.child_handle is not None
     assert session.child_ready is True
+
+
+# ---------------------------------------------------------------------------
+# Manifest-level extras in the reuse rule
+# ---------------------------------------------------------------------------
+
+
+def test_child_can_serve_manifest_extras_rule(two_plugins):
+    """Manifest extras are part of the install: new extras refuse the warm child,
+    regenerated metadata does not; a child composed for the rfdetr pair serves the
+    plain manifest, one composed for the variant alone does not."""
+    sm, sid, _spawner = two_plugins
+    _register(sm, sid, "rfdetr", class_name=NODE_A)
+    _register(sm, sid, "rfdetr_seg_trt", class_name=NODE_B, extras=["tensorrt"])
+    session = sm.get_session(sid)
+    catalog = session.registered_plugins
+    both = ["rfdetr", "rfdetr_seg_trt"]
+
+    _composed_for(session, _resolved(sm, sid, both, [NODE_A, NODE_B]))
+    assert orchestrator_bridge.child_can_serve(
+        session, _resolved(sm, sid, ["rfdetr"], [NODE_A]), None
+    )
+
+    catalog["rfdetr_seg_trt"]["extras"] = ["tensorrt", "onnx"]
+    assert not orchestrator_bridge.child_can_serve(
+        session, _resolved(sm, sid, both, [NODE_A, NODE_B]), None
+    )
+    catalog["rfdetr_seg_trt"]["extras"] = ["tensorrt"]
+    catalog["rfdetr_seg_trt"]["capabilities"][0]["tags"] = ["regenerated"]
+    assert orchestrator_bridge.child_can_serve(
+        session, _resolved(sm, sid, both, [NODE_A, NODE_B]), None
+    )
+
+    _composed_for(session, _resolved(sm, sid, ["rfdetr_seg_trt"], [NODE_B]))
+    assert not orchestrator_bridge.child_can_serve(
+        session, _resolved(sm, sid, ["rfdetr"], [NODE_A]), None
+    )
+
+
+def test_ensure_child_swaps_when_a_manifest_with_extras_is_added(two_plugins):
+    sm, sid, spawner = two_plugins
+    _register(sm, sid, "rfdetr_seg_trt", class_name=NODE_B, extras=["tensorrt"])
+
+    plain = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_a"], [NODE_A])
+    )
+    with_trt = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_a", "rfdetr_seg_trt"], [NODE_A, NODE_B])
+    )
+    assert with_trt is not plain
+
+    # The reverse direction reuses: an env composed with the extras serves the plain set.
+    again = orchestrator_bridge.ensure_child_for_session(
+        sm, sid, _pipeline(["plugin_a"], [NODE_A])
+    )
+    assert again is with_trt
+    assert len(spawner.handles) == 2
