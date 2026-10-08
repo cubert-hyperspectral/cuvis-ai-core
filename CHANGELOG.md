@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Lock: fsspec 2026.1.0 to 2026.9.0 (CVE-2026-104851) and multidict 6.7.0 to 6.9.1 (CVE-2026-104874), the two advisories pip-audit started flagging on main after 0.18.2. Both are transitive (torch, lightning and huggingface-hub pull fsspec; aiohttp and yarl pull multidict), so no floor changes.
+
 ## 0.18.2 - 2026-10-02
 
 - `Node.prepare_inference()`: a hook a node gets once its device and weights are final, for artifacts that depend on both (a TensorRT engine built from the fitted weights on the GPU it runs on). The default does nothing. `LoadPipeline` calls it on every node in execution order after the move to CUDA and before the pipeline is attached to the session, `LoadPipelineWeights` calls it again after the weights load, and `CuvisPipeline.load_pipeline` (behind `restore-pipeline` and `RestoreTrainRun`) calls it after the device move and the optional weights. A node whose hook raises fails the load with `Node '<name>' failed to prepare for inference: ...`, and a failed `LoadPipeline` attaches no pipeline. `CuvisPipeline.prepare_inference()` runs the hook on its own. `restore-trainrun` does not call it: a training run builds and fits the pipeline itself.
