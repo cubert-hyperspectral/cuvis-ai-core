@@ -43,6 +43,10 @@ class NodeRegistry:
         # Loaded node classes, keyed by class name. Membership here *is* the
         # loaded state: a plugin is loaded iff its provided classes are present.
         self.loaded_plugin_nodes: Dict[str, type] = {}
+        # The same classes keyed by full path: the manifest's class path and the
+        # class's own module path. A full path in a pipeline yaml resolves here
+        # first, so two classes that share a simple name stay apart.
+        self.loaded_plugin_paths: Dict[str, type] = {}
         # Loaded DataModule classes, keyed by DATA_MODULE_NAME (globally unique).
         # A `kind: data_module` capability entry registers here instead of into
         # loaded_plugin_nodes, and never appears in the node palette.
@@ -99,6 +103,11 @@ class NodeRegistry:
             n in self.loaded_plugin_nodes for n in self._provided_class_names(cfg)
         ) or any(d in self.data_modules for d in self._provided_data_module_names(cfg))
 
+    @staticmethod
+    def _class_path(node_class: type) -> str:
+        """The import path of a class: its module and qualified name."""
+        return f"{node_class.__module__}.{node_class.__qualname__}"
+
     @classmethod
     def register(cls, node_class: type) -> type:
         """
@@ -139,6 +148,8 @@ class NodeRegistry:
         - Instance call → built-ins + plugins
 
         Resolution order (instance mode):
+        0. A full path resolves to the plugin or built-in class at exactly that
+           path, so a plugin class never shadows a built-in of the same name
         1. Check instance plugins (if instance mode)
         2. Check built-in registry (O(1) lookup)
         3. Try importlib for full paths (e.g., "my_package.MyNode")
@@ -168,6 +179,16 @@ class NodeRegistry:
             # Custom node with full path
             cls = NodeRegistry.get("my_company.detectors.AdvancedRXDetector")
         """
+        # 0. An exact full path wins over any simple-name match below.
+        if "." in class_identifier:
+            if instance is not None:
+                exact = instance.loaded_plugin_paths.get(class_identifier)
+                if exact is not None:
+                    return exact
+            builtin = cls._builtin_registry.get(class_identifier.rsplit(".", 1)[1])
+            if builtin is not None and cls._class_path(builtin) == class_identifier:
+                return builtin
+
         # 1. Check instance plugins first (if instance provided)
         if instance is not None:
             if class_identifier in instance.loaded_plugin_nodes:
@@ -456,7 +477,18 @@ class NodeRegistry:
             if entry is not None and self._entry_kind(entry) == "data_module":
                 self._register_data_module(name, class_name, node_class, entry)
             else:
+                existing = self.loaded_plugin_nodes.get(class_name)
+                if existing is not None and existing is not node_class:
+                    logger.warning(
+                        f"Plugin '{name}' registers {self._class_path(node_class)}, "
+                        f"which replaces {self._class_path(existing)} for lookups by "
+                        f"the simple name '{class_name}'; full class paths still "
+                        f"resolve to each class."
+                    )
                 self.loaded_plugin_nodes[class_name] = node_class
+                self.loaded_plugin_paths[self._class_path(node_class)] = node_class
+                if entry is not None:
+                    self.loaded_plugin_paths[entry.class_name] = node_class
                 logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
 
     def _register_data_module(self, name, class_name, cls, entry) -> None:
@@ -504,6 +536,7 @@ class NodeRegistry:
         """
         catalog_snapshot = dict(self.plugin_catalog)
         nodes_snapshot = dict(self.loaded_plugin_nodes)
+        paths_snapshot = dict(self.loaded_plugin_paths)
         modules_snapshot = dict(self.data_modules)
         try:
             for name, config in resolved_plugins.items():
@@ -518,6 +551,8 @@ class NodeRegistry:
             self.plugin_catalog.update(catalog_snapshot)
             self.loaded_plugin_nodes.clear()
             self.loaded_plugin_nodes.update(nodes_snapshot)
+            self.loaded_plugin_paths.clear()
+            self.loaded_plugin_paths.update(paths_snapshot)
             self.data_modules.clear()
             self.data_modules.update(modules_snapshot)
             raise
@@ -552,8 +587,23 @@ class NodeRegistry:
         # stays: the plugin is still *known*, just no longer loaded. pop(...,
         # None) is defensive so a partially-loaded plugin still cleans up.
         cfg = self.plugin_catalog[name]
+        own: set[type] = set()
+        own_paths: set[str] = set()
+        for node in cfg.capabilities:
+            if self._entry_kind(node) != "node":
+                continue
+            own_paths.add(node.class_name)
+            node_class = self.loaded_plugin_paths.pop(node.class_name, None)
+            if node_class is not None:
+                own.add(node_class)
+                self.loaded_plugin_paths.pop(self._class_path(node_class), None)
         for class_name in self._provided_class_names(cfg):
-            self.loaded_plugin_nodes.pop(class_name, None)
+            holder = self.loaded_plugin_nodes.get(class_name)
+            # a namesake of another plugin that won the simple name stays loaded
+            if holder is not None and (
+                holder in own or self._class_path(holder) in own_paths
+            ):
+                self.loaded_plugin_nodes.pop(class_name, None)
         for dm_name in self._provided_data_module_names(cfg):
             self.data_modules.pop(dm_name, None)
 
@@ -585,6 +635,7 @@ class NodeRegistry:
             )
 
         self.loaded_plugin_nodes.clear()
+        self.loaded_plugin_paths.clear()
         self.data_modules.clear()
         self.plugin_catalog.clear()
         logger.info("Cleared all plugins")
