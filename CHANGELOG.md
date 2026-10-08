@@ -4,6 +4,7 @@
 
 - Lock: fsspec 2026.1.0 to 2026.9.0 (CVE-2026-104851) and multidict 6.7.0 to 6.9.1 (CVE-2026-104874), the two advisories pip-audit started flagging on main after 0.18.2. Both are transitive (torch, lightning and huggingface-hub pull fsspec; aiohttp and yarl pull multidict), so no floor changes.
 - A full class path in a pipeline yaml resolves to the class at exactly that path. `NodeRegistry.get` matched a full path against the loaded plugin classes by its simple name first, so a plugin class named like a built-in node, or like a class of another plugin, answered for a yaml that named the other one. The registry now also keys the loaded plugin classes by their manifest path and their import path (`loaded_plugin_paths`, kept in step on register, rollback, unload and clear) and checks the exact path of a plugin or built-in class before the simple-name lookups, which are unchanged. A plugin that registers a simple name another plugin already holds logs a warning naming both paths. This lets a plugin keep a deprecated copy of a node that moves into cuvis-ai under the same name.
+- `unload_plugin` leaves the simple name of a namesake that another loaded plugin registered in place (before, unloading one of two plugins that share a class name dropped the other's entry and `get` by simple name failed).
 
 ## 0.18.2 - 2026-10-02
 

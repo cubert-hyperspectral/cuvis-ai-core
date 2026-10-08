@@ -96,3 +96,18 @@ def test_clear_plugins_clears_the_paths():
     reg.clear_plugins()
 
     assert reg.loaded_plugin_paths == {}
+
+
+def test_unload_does_not_evict_a_still_loaded_namesake():
+    reg = NodeRegistry()
+    reg.register_plugins_installed(
+        {"first": _plugin("first", B), "second": _plugin("second", C)}
+    )
+
+    reg.unload_plugin("first")
+
+    assert (
+        reg.get("Shadowed") is shadow_c.Shadowed
+    )  # the namesake that won the name stays
+    assert reg.get(C) is shadow_c.Shadowed
+    assert reg._has_loaded_node("second") and "second" in reg.list_plugins()

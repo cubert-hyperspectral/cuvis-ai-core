@@ -587,14 +587,23 @@ class NodeRegistry:
         # stays: the plugin is still *known*, just no longer loaded. pop(...,
         # None) is defensive so a partially-loaded plugin still cleans up.
         cfg = self.plugin_catalog[name]
+        own: set[type] = set()
+        own_paths: set[str] = set()
         for node in cfg.capabilities:
             if self._entry_kind(node) != "node":
                 continue
+            own_paths.add(node.class_name)
             node_class = self.loaded_plugin_paths.pop(node.class_name, None)
             if node_class is not None:
+                own.add(node_class)
                 self.loaded_plugin_paths.pop(self._class_path(node_class), None)
         for class_name in self._provided_class_names(cfg):
-            self.loaded_plugin_nodes.pop(class_name, None)
+            holder = self.loaded_plugin_nodes.get(class_name)
+            # a namesake of another plugin that won the simple name stays loaded
+            if holder is not None and (
+                holder in own or self._class_path(holder) in own_paths
+            ):
+                self.loaded_plugin_nodes.pop(class_name, None)
         for dm_name in self._provided_data_module_names(cfg):
             self.data_modules.pop(dm_name, None)
 
