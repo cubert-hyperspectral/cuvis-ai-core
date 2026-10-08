@@ -28,12 +28,19 @@ def _build_catalog(plugins_dirs: list[Path]) -> dict[str, PluginManifest]:
     Scans every bare ``*.yaml`` across the given dirs (in precedence order),
     resolves each local plugin's relative path to absolute, and **errors on a
     duplicate plugin name anywhere in the whole set** (no silent
-    last-writer-wins). The returned dict is keyed by the explicit
-    ``manifest.name``; downstream consumers need no ``manifest_dir`` context.
+    last-writer-wins). The same directory listed twice (the catalog discovered
+    next to a packaged pipeline plus the identical ``--plugins-dir``) counts
+    once. The returned dict is keyed by the explicit ``manifest.name``;
+    downstream consumers need no ``manifest_dir`` context.
     """
     catalog: dict[str, PluginManifest] = {}
     sources: dict[str, Path] = {}
+    seen: set[Path] = set()
     for plugins_dir in plugins_dirs:
+        resolved = plugins_dir.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
         if not plugins_dir.is_dir():
             continue
         for manifest_path in sorted(plugins_dir.glob("*.yaml")):
