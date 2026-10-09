@@ -213,6 +213,28 @@ DATASETS: tuple[DatasetSpec, ...] = (
         aliases=("industrial_fod_lentils",),
     ),
     DatasetSpec(
+        name="Industrial_FOD_Walnuts",
+        display_name="Industrial FOD, walnuts",
+        summary="90 recordings, 2,283 frames, 7 classes",
+        repo_id=f"{HF_ORG}/XMR_Industrial_Foreign_Object_Detection_Walnuts",
+        target_dir="XMR_Industrial_Foreign_Object_Detection_Walnuts",
+        revision="8e9e8604b32c837bfb088b446e264562f2a8c138",
+        size_bytes=124_961_935_155,
+        file_count=276,
+        license="Apache-2.0",
+        tags=("Anomaly detection", "Segmentation"),
+        camera="XMR",
+        description=(
+            "Industrial foreign-object detection on walnut kernels and shell fragments: 90 "
+            "XMR CU3S recordings from a lab station and a demonstration stand, August to "
+            "October 2026 (2,283 frames), COCO masks for 7 classes (shell, kernel, stone, "
+            "stem, rubber, aluminium shard, imitation shell), foreign-object and shell "
+            "segmentation splits; fitted pipelines in "
+            "cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts."
+        ),
+        aliases=("industrial_fod_walnuts",),
+    ),
+    DatasetSpec(
         name="Industrial_FOD_Bedding",
         display_name="Industrial FOD, bedding (X4 SWIR)",
         summary="252 VIS+SWIR frames, 23 foreign-object classes",
