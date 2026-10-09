@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `NodeRegistry` keeps, per simple name, the plugins that registered a class under it (`simple_name_providers`, in load order). Unloading the plugin that holds a simple name hands it back to the most recently loaded remaining one instead of leaving it empty, a class that two loaded manifests list (the plain manifest of a package and a second one that adds an extra, such as `rfdetr_seg` and `rfdetr_seg_trt`) keeps its simple name and full paths when one of them unloads, and `list_plugins` no longer reports an unloaded plugin whose namesake another plugin holds. Registration and the rollback of a failed set keep the table in step.
 - Shared helpers for the node library and the plugins, so the nodes that move out of the walnut plugins into cuvis-ai keep one implementation:
   - `node.metric_utils.topk_count`, `topk_mean` and `check_topk_frac`: the one image-score rule, `max(1, ceil(n * frac))` with the product rounded to float32 first (the rule of cuvis-ai's `TwoStageBinaryDecider`), capped at `n`. At the deployed map sizes (1,080,000, 270,000 and 576 values at 0.001) it gives the same `k` as the floor rule cuvis-ai-patchcore used.
   - `node.fit_utils.random_cap` (a seeded row cap that leaves the generator untouched when nothing is dropped) and `require_fitted` (the guard of a fitted node's `forward`), from cuvis-ai-patchcore.

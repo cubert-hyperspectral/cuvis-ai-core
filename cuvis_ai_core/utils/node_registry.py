@@ -47,6 +47,12 @@ class NodeRegistry:
         # class's own module path. A full path in a pipeline yaml resolves here
         # first, so two classes that share a simple name stay apart.
         self.loaded_plugin_paths: Dict[str, type] = {}
+        # The plugins that registered a class under each simple name, in load
+        # order: (plugin name, class, manifest class path). The last one answers
+        # lookups by simple name; when it unloads, the one loaded before it takes
+        # the name back, and a class that another loaded manifest still lists
+        # keeps its full-path entries.
+        self.simple_name_providers: Dict[str, list[tuple[str, type, str | None]]] = {}
         # Loaded DataModule classes, keyed by DATA_MODULE_NAME (globally unique).
         # A `kind: data_module` capability entry registers here instead of into
         # loaded_plugin_nodes, and never appears in the node palette.
@@ -86,7 +92,7 @@ class NodeRegistry:
         dm_names = self._provided_data_module_names(cfg)
         if not node_names and not dm_names:
             return False
-        return all(n in self.loaded_plugin_nodes for n in node_names) and all(
+        return all(self._provides(name, n) for n in node_names) and all(
             d in self.data_modules for d in dm_names
         )
 
@@ -100,8 +106,20 @@ class NodeRegistry:
         if cfg is None:
             return False
         return any(
-            n in self.loaded_plugin_nodes for n in self._provided_class_names(cfg)
+            self._provides(name, n) for n in self._provided_class_names(cfg)
         ) or any(d in self.data_modules for d in self._provided_data_module_names(cfg))
+
+    def _provides(self, plugin: str, class_name: str) -> bool:
+        """Whether ``plugin`` has a class loaded under the simple name ``class_name``.
+
+        Answered from ``simple_name_providers`` when it knows the name, so a plugin
+        whose namesake another loaded plugin holds is not taken for loaded; a name
+        set in ``loaded_plugin_nodes`` by other means counts by its presence.
+        """
+        providers = self.simple_name_providers.get(class_name)
+        if providers:
+            return any(p[0] == plugin for p in providers)
+        return class_name in self.loaded_plugin_nodes
 
     @staticmethod
     def _class_path(node_class: type) -> str:
@@ -489,6 +507,15 @@ class NodeRegistry:
                 self.loaded_plugin_paths[self._class_path(node_class)] = node_class
                 if entry is not None:
                     self.loaded_plugin_paths[entry.class_name] = node_class
+                providers = [
+                    p
+                    for p in self.simple_name_providers.get(class_name, [])
+                    if p[0] != name
+                ]  # a plugin registered again moves to the end
+                providers.append(
+                    (name, node_class, entry.class_name if entry is not None else None)
+                )
+                self.simple_name_providers[class_name] = providers
                 logger.debug(f"Registered plugin node '{class_name}' from '{name}'")
 
     def _register_data_module(self, name, class_name, cls, entry) -> None:
@@ -537,6 +564,7 @@ class NodeRegistry:
         catalog_snapshot = dict(self.plugin_catalog)
         nodes_snapshot = dict(self.loaded_plugin_nodes)
         paths_snapshot = dict(self.loaded_plugin_paths)
+        providers_snapshot = {k: list(v) for k, v in self.simple_name_providers.items()}
         modules_snapshot = dict(self.data_modules)
         try:
             for name, config in resolved_plugins.items():
@@ -553,6 +581,8 @@ class NodeRegistry:
             self.loaded_plugin_nodes.update(nodes_snapshot)
             self.loaded_plugin_paths.clear()
             self.loaded_plugin_paths.update(paths_snapshot)
+            self.simple_name_providers.clear()
+            self.simple_name_providers.update(providers_snapshot)
             self.data_modules.clear()
             self.data_modules.update(modules_snapshot)
             raise
@@ -583,9 +613,10 @@ class NodeRegistry:
             logger.warning(f"Plugin '{name}' not loaded, nothing to unload")
             return
 
-        # Pop the plugin's classes from loaded_plugin_nodes. The catalog entry
-        # stays: the plugin is still *known*, just no longer loaded. pop(...,
-        # None) is defensive so a partially-loaded plugin still cleans up.
+        # Drop the plugin's classes from loaded_plugin_nodes and its full paths.
+        # The catalog entry stays: the plugin is still *known*, just no longer
+        # loaded. pop(..., None) is defensive so a partially-loaded plugin still
+        # cleans up.
         cfg = self.plugin_catalog[name]
         own: set[type] = set()
         own_paths: set[str] = set()
@@ -593,17 +624,48 @@ class NodeRegistry:
             if self._entry_kind(node) != "node":
                 continue
             own_paths.add(node.class_name)
-            node_class = self.loaded_plugin_paths.pop(node.class_name, None)
+            node_class = self.loaded_plugin_paths.get(node.class_name)
             if node_class is not None:
                 own.add(node_class)
-                self.loaded_plugin_paths.pop(self._class_path(node_class), None)
+                own_paths.add(self._class_path(node_class))
         for class_name in self._provided_class_names(cfg):
+            providers = self.simple_name_providers.get(class_name, [])
             holder = self.loaded_plugin_nodes.get(class_name)
-            # a namesake of another plugin that won the simple name stays loaded
-            if holder is not None and (
-                holder in own or self._class_path(holder) in own_paths
-            ):
+            if providers:
+                held_by_this_plugin = providers[-1][0] == name
+            else:  # registered outside register_plugins_installed
+                held_by_this_plugin = holder is not None and (
+                    holder in own or self._class_path(holder) in own_paths
+                )
+            remaining = [p for p in providers if p[0] != name]
+            if remaining:
+                self.simple_name_providers[class_name] = remaining
+            else:
+                self.simple_name_providers.pop(class_name, None)
+            if not held_by_this_plugin:
+                continue  # a namesake of another plugin holds the name and stays
+            if remaining:
+                fallback = remaining[-1]
+                self.loaded_plugin_nodes[class_name] = fallback[1]
+                if fallback[1] is not holder:
+                    logger.info(
+                        f"Simple name '{class_name}' falls back to "
+                        f"{self._class_path(fallback[1])} of plugin '{fallback[0]}'"
+                    )
+            else:
                 self.loaded_plugin_nodes.pop(class_name, None)
+        # full paths: drop this plugin's, keep those another loaded plugin lists
+        still_listed: dict[str, type] = {}
+        for providers in self.simple_name_providers.values():
+            for _plugin, node_class, manifest_path in providers:
+                still_listed[self._class_path(node_class)] = node_class
+                if manifest_path is not None:
+                    still_listed[manifest_path] = node_class
+        for path in own_paths:
+            if path in still_listed:
+                self.loaded_plugin_paths[path] = still_listed[path]
+            else:
+                self.loaded_plugin_paths.pop(path, None)
         for dm_name in self._provided_data_module_names(cfg):
             self.data_modules.pop(dm_name, None)
 
@@ -636,6 +698,7 @@ class NodeRegistry:
 
         self.loaded_plugin_nodes.clear()
         self.loaded_plugin_paths.clear()
+        self.simple_name_providers.clear()
         self.data_modules.clear()
         self.plugin_catalog.clear()
         logger.info("Cleared all plugins")
