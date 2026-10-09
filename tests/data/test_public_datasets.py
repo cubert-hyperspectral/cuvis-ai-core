@@ -130,7 +130,7 @@ def _write_files(path: Path, files: list[str]) -> None:
 
 
 def test_registry_specs_pin_cubert_datasets():
-    assert len(DATASETS) == 6
+    assert len(DATASETS) == 7
     names, aliases, dirs = set(), set(), set()
     for spec in DATASETS:
         assert spec.repo_id.startswith(f"{HF_ORG}/")
@@ -146,7 +146,7 @@ def test_registry_specs_pin_cubert_datasets():
         assert spec.target_dir not in dirs
         dirs.add(spec.target_dir)
     total_gib = sum(s.size_bytes for s in DATASETS) / 2**30
-    assert 250 < total_gib < 300  # the six cards add up to about 259 GiB
+    assert 350 < total_gib < 400  # the seven cards add up to about 375 GiB
 
 
 def test_get_spec_accepts_aliases_hyphens_and_case():
@@ -458,7 +458,7 @@ def test_cli_status_download_remove_json_shapes(cli_env, fake_hub):
     _validate("dataset_status", payload)
     assert {d["state"] for d in payload["datasets"]} == {"absent"} and len(
         payload["datasets"]
-    ) == 6
+    ) == len(DATASETS)
     downloaded = cli_env.runner.invoke(
         cli_env.cli, ["download", "lentils", "--data-dir", str(cli_env.data), "--json"]
     )
