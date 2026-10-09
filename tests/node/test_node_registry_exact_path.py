@@ -111,3 +111,71 @@ def test_unload_does_not_evict_a_still_loaded_namesake():
     )  # the namesake that won the name stays
     assert reg.get(C) is shadow_c.Shadowed
     assert reg._has_loaded_node("second") and "second" in reg.list_plugins()
+
+
+def test_unloading_the_holder_falls_back_to_the_remaining_namesake():
+    reg = NodeRegistry()
+    reg.register_plugins_installed(
+        {"first": _plugin("first", B), "second": _plugin("second", C)}
+    )
+    assert reg.get("Shadowed") is shadow_c.Shadowed  # the last loaded holds the name
+
+    reg.unload_plugin("second")
+
+    assert reg.get("Shadowed") is shadow_b.Shadowed  # back to the first
+    assert reg.get(B) is shadow_b.Shadowed
+    assert C not in reg.loaded_plugin_paths
+    assert "first" in reg.list_plugins() and "second" not in reg.list_plugins()
+
+    reg.unload_plugin("first")
+
+    assert "Shadowed" not in reg.loaded_plugin_nodes
+    assert reg.simple_name_providers == {} and reg.loaded_plugin_paths == {}
+
+
+def test_a_class_two_manifests_list_survives_unloading_one_of_them():
+    """The plain manifest of a package and a second one that adds an extra."""
+    reg = NodeRegistry()
+    reg.register_plugins_installed(
+        {"seg": _plugin("seg", B), "seg_trt": _plugin("seg_trt", B)}
+    )
+
+    reg.unload_plugin("seg_trt")
+
+    assert reg.get("Shadowed") is shadow_b.Shadowed
+    assert reg.loaded_plugin_paths[B] is shadow_b.Shadowed
+    assert "seg" in reg.list_plugins()
+
+
+def test_a_plugin_registered_again_holds_the_name_and_falls_back_in_order():
+    reg = NodeRegistry()
+    reg.register_plugins_installed(
+        {"first": _plugin("first", B), "second": _plugin("second", C)}
+    )
+    reg.register_plugins_installed({"first": _plugin("first", B)})
+    assert reg.get("Shadowed") is shadow_b.Shadowed
+    assert [p for p, _, _ in reg.simple_name_providers["Shadowed"]] == [
+        "second",
+        "first",
+    ]
+
+    reg.unload_plugin("first")
+
+    assert reg.get("Shadowed") is shadow_c.Shadowed
+
+
+def test_a_failed_set_rolls_the_providers_back():
+    reg = NodeRegistry()
+    reg.register_plugins_installed({"first": _plugin("first", B)})
+    before = {k: list(v) for k, v in reg.simple_name_providers.items()}
+
+    with pytest.raises(ModuleNotFoundError):
+        reg.register_plugins_installed(
+            {
+                "second": _plugin("second", C),
+                "broken": _plugin("broken", "tests.fixtures.no_such_module.Shadowed"),
+            }
+        )
+
+    assert reg.simple_name_providers == before
+    assert reg.get("Shadowed") is shadow_b.Shadowed

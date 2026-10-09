@@ -111,3 +111,66 @@ def test_no_warning_when_the_full_frame_was_already_below_the_cutoff(
 def test_no_warning_when_the_subsample_stays_above_the_cutoff(warnings_seen) -> None:
     warn_below_vectorized_cutoff("big", VECTORIZED_CUTOFF + 1, 1_000_000, {})
     assert warnings_seen == []
+
+
+# ---------------------------------------------------------------------------
+# topk_count / topk_mean: the one image-score rule
+# ---------------------------------------------------------------------------
+
+
+def _ceil_rule(numel: int, frac: float) -> int:
+    """The rule cuvis-ai's TwoStageBinaryDecider applied before it moved here."""
+    k = int(torch.ceil(torch.tensor(numel * frac, dtype=torch.float32)).item())
+    return max(1, k)
+
+
+@pytest.mark.parametrize(
+    ("numel", "expected"),
+    [(1_080_000, 1080), (270_000, 270), (576, 1)],
+    ids=["full frame", "quarter frame", "24x24 grid"],
+)
+def test_topk_count_at_the_deployed_sizes(numel: int, expected: int) -> None:
+    from cuvis_ai_core.node.metric_utils import topk_count
+
+    assert topk_count(numel, 0.001) == expected
+    assert topk_count(numel, 0.001) == _ceil_rule(numel, 0.001)
+    # the floor rule the patchcore plugin used gives the same k at these sizes
+    assert topk_count(numel, 0.001) == max(1, int(0.001 * numel))
+
+
+def test_topk_count_rounds_up_takes_at_least_one_and_never_more_than_all() -> None:
+    from cuvis_ai_core.node.metric_utils import topk_count
+
+    assert topk_count(1500, 0.001) == 2  # 1.5 rounds up (the floor rule gave 1)
+    assert topk_count(10, 0.0001) == 1  # a small map still averages its maximum
+    assert topk_count(1000, 0.007) == 7  # 7.000000000000001 in float64 stays 7
+    assert topk_count(5, 1.0) == 5
+    for numel in (1, 2, 3, 17, 1000, 1_080_000):
+        for frac in (0.0001, 0.001, 0.01, 0.1, 0.5, 1.0):
+            assert 1 <= topk_count(numel, frac) <= numel
+            assert topk_count(numel, frac) == min(_ceil_rule(numel, frac), numel)
+
+
+def test_check_topk_frac() -> None:
+    from cuvis_ai_core.node.metric_utils import check_topk_frac
+
+    assert check_topk_frac(1) == 1.0 and check_topk_frac("0.25") == 0.25
+    for bad in (0, -0.1, 1.5):
+        with pytest.raises(ValueError, match=r"\(0, 1\]"):
+            check_topk_frac(bad)
+
+
+def test_topk_mean_per_frame() -> None:
+    from cuvis_ai_core.node.metric_utils import topk_count, topk_mean
+
+    torch.manual_seed(0)
+    maps = torch.rand(3, 20, 30, 1)
+    got = topk_mean(maps, 0.01)
+    k = topk_count(600, 0.01)
+    expected = torch.stack(
+        [m.reshape(-1).sort(descending=True).values[:k].mean() for m in maps]
+    )
+    assert got.shape == (3,) and got.dtype == torch.float32
+    torch.testing.assert_close(got, expected)
+    half = topk_mean(maps.half(), 0.01)
+    assert half.dtype == torch.float32  # computed in float32 whatever comes in
