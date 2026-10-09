@@ -296,7 +296,7 @@ def _trained_pipeline(
 
 
 _LENTILS_REPO = f"{HF_ORG}/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils"
-_LENTILS_REVISION = "2e2c592b616d4b82de97ca3a26a061874e002303"
+_LENTILS_REVISION = "3602a04ea2a8a19494c4d1bc25bf804e942e9277"
 
 TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
     _trained_pipeline(
@@ -325,11 +325,11 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         repo_id=_LENTILS_REPO,
         revision=_LENTILS_REVISION,
         filename="dinomaly_cir_full_pipeline/dinomaly_cir.pt",
-        sha256="bf39bd966ed0079f591082e18388648441a21f9ccb4819801154d070597fd601",
-        size_bytes=592_005_300,
+        sha256="b30719616452b12b95fabfeb41b5c8c81b29e651ef8b482699b176c568360b93",
+        size_bytes=592_002_738,
         yaml_path="dinomaly_cir_full_pipeline/dinomaly_cir.yaml",
-        yaml_sha256="e9a8ebbea078bbe1fef8445caaed5b7f4c9030899fdb82ab4143e6197e0ba280",
-        yaml_size=2744,
+        yaml_sha256="81cf48ff6d33b31e1df6d27f1755328e829fec872e8731279a7dbec7ab41c306",
+        yaml_size=2748,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a CIR channel "
@@ -344,11 +344,11 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         repo_id=_LENTILS_REPO,
         revision=_LENTILS_REVISION,
         filename="dinomaly_custom_selector_full_pipeline/dinomaly_custom.pt",
-        sha256="d25f873dbaab0f7d9a80c0fad9a38f646f991f8cd0b41039949cfba95c2da2ef",
-        size_bytes=592_011_077,
+        sha256="4d181301f4adae09ffd781f6325a41933c98ef2b8b0e77c79346f0db222396e1",
+        size_bytes=592_003_673,
         yaml_path="dinomaly_custom_selector_full_pipeline/dinomaly_custom.yaml",
-        yaml_sha256="9b4a92a38d4e599e1709450314b8a883c9a24a0f7d38c83d8f6b0f8b2185080d",
-        yaml_size=2734,
+        yaml_sha256="b4bfccc2641e6e3f3336db57d6db5d47105f7173bc8e3bb5e8ff0a1f985301b9",
+        yaml_size=2865,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a custom channel "
@@ -363,11 +363,11 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         repo_id=_LENTILS_REPO,
         revision=_LENTILS_REVISION,
         filename="dinomaly_rgb_full_pipeline/dinomaly_rgb.pt",
-        sha256="94e9d292e86b1527710d8b007ef9380a425161feea02b04d5e94037b097f2bd3",
-        size_bytes=592_005_300,
+        sha256="b49e21cc66f8dbade7150fa0c5daba5475b2789b8777c13bd4637e466757df47",
+        size_bytes=592_002_738,
         yaml_path="dinomaly_rgb_full_pipeline/dinomaly_rgb.yaml",
-        yaml_sha256="35a5df5589f4c232374d03f92c407455f74fe47b182b47d956fdbc8611c038d5",
-        yaml_size=2770,
+        yaml_sha256="81165f3cef2f83640918b82f629c80a33225b35bb762cb175de758f48680a2d7",
+        yaml_size=2765,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a false-RGB "
