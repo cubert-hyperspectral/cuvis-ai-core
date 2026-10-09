@@ -123,6 +123,12 @@ _SAM3_REV = "3c879f39826c281e95690f02c7821c4de09afae7"
 _ETAM_REV = "9bdd8ab585b19ef95f9c9ed847ac9478301890b4"
 _ETAM_REPO = "yunyangx/efficient-track-anything"
 _DINOMALY_REPO_DIR = Path("D:/code-repos/cuvis-ai-dinomaly/cuvis-ai-dinomaly")
+_STEERVIT_REPO = "JonaRuthardt/SteerViT"
+_STEERVIT_REV = "4468b69138d397fd329df00e80093387c26c77b2"
+_TIMM_DINOV2_REPO = "timm/vit_base_patch14_dinov2.lvd142m"
+_TIMM_DINOV2_REV = "4685c99dabffe5affac90bd99dbffd25801ae58d"
+_ROBERTA_REPO = "FacebookAI/roberta-large"
+_ROBERTA_REV = "722cf37b1afa9454edce342e7895e588b6ff1d59"
 
 _SAM_LICENSE_TEXT = """\
 These files are Meta's "SAM Materials" and are distributed under the **SAM License**
@@ -165,6 +171,14 @@ _APACHE_TEXT = Template(
 Apache License 2.0. The `LICENSE` file is the upstream licence text taken verbatim
 from $origin at the mirror date. Copyright remains with the upstream authors; Cubert
 GmbH claims no rights in these files.
+"""
+)
+
+_MIT_TEXT = Template(
+    """\
+MIT License. The `LICENSE` file is the upstream licence text taken verbatim from
+$origin at the mirror date. Copyright remains with the upstream authors; Cubert GmbH
+claims no rights in these files.
 """
 )
 
@@ -455,6 +469,183 @@ MIRRORS: dict[str, Mirror] = {
                     url="https://raw.githubusercontent.com/caoyunkang/AdaCLIP/main/LICENSE",
                 ),
                 sha256="58bf3cbb252fb8ee158f71b5eefa0f93e24632f587926659eb2638aa0df6c618",
+            ),
+        ),
+    ),
+    "steervit": Mirror(
+        repo="steervit",
+        title="SteerViT, DINOv2 base checkpoint",
+        plugin="cuvis-ai-steervit",
+        license_id="apache-2.0",
+        license_name="Apache-2.0",
+        upstream_md=(
+            f"[`{_STEERVIT_REPO}`](https://huggingface.co/{_STEERVIT_REPO}) at revision "
+            f"`{_STEERVIT_REV}` (code: <https://github.com/manugaurdl/SteerViT>)"
+        ),
+        base_model=_STEERVIT_REPO,
+        extra_tags=("steervit", "vision-transformer", "image-feature-extraction"),
+        license_text=_APACHE_TEXT.substitute(
+            origin="<https://www.apache.org/licenses/LICENSE-2.0.txt> (the upstream "
+            "Hugging Face repository declares `license: apache-2.0` for its checkpoints "
+            "and ships no LICENSE file; the SteerViT code on GitHub declares the MIT "
+            "License)"
+        ),
+        files=(
+            MirrorFile(
+                name="steervit_dinov2_base.pth",
+                source=Source(
+                    "hf",
+                    repo_id=_STEERVIT_REPO,
+                    filename="steervit_dinov2_base.pth",
+                    revision=_STEERVIT_REV,
+                ),
+                sha256="3ee74e5fba5cdbcbbdc35042b59fc44d54a68864724186c0ba4f5e2174892e3a",
+                registry_name="steervit_dinov2_base",
+                description=(
+                    "SteerViT checkpoint, DINOv2 base variant: the prompt connector, the "
+                    "gated cross-attention layers and the head that SteerViTExtractor "
+                    "loads"
+                ),
+            ),
+            MirrorFile(
+                name="LICENSE",
+                source=Source(
+                    "url", url="https://www.apache.org/licenses/LICENSE-2.0.txt"
+                ),
+                sha256="cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            ),
+        ),
+    ),
+    "vit_base_patch14_dinov2.lvd142m": Mirror(
+        repo="vit_base_patch14_dinov2.lvd142m",
+        title="DINOv2 ViT-B/14 (timm, LVD-142M)",
+        plugin="cuvis-ai-steervit",
+        license_id="apache-2.0",
+        license_name="Apache-2.0",
+        upstream_md=(
+            f"[`{_TIMM_DINOV2_REPO}`](https://huggingface.co/{_TIMM_DINOV2_REPO}) at "
+            f"revision `{_TIMM_DINOV2_REV}` (original release: "
+            "<https://github.com/facebookresearch/dinov2>)"
+        ),
+        base_model=_TIMM_DINOV2_REPO,
+        extra_tags=("dinov2", "timm", "vision-transformer", "backbone"),
+        license_text=_APACHE_TEXT.substitute(
+            origin="<https://github.com/facebookresearch/dinov2> (the release the timm "
+            "repository converts; the timm repository declares `license: apache-2.0` "
+            "and ships no LICENSE file)"
+        ),
+        files=(
+            MirrorFile(
+                name="model.safetensors",
+                source=Source(
+                    "hf",
+                    repo_id=_TIMM_DINOV2_REPO,
+                    filename="model.safetensors",
+                    revision=_TIMM_DINOV2_REV,
+                ),
+                sha256="55cbb5d887b336d430e649c277b85a1429e724871f9d02ac16203235886d8c7b",
+                registry_name="vit_base_patch14_dinov2_lvd142m",
+                description=(
+                    "DINOv2 ViT-B/14 trunk that SteerViT steers, in timm's layout; timm "
+                    "builds it from config.json"
+                ),
+            ),
+            MirrorFile(
+                name="config.json",
+                source=Source(
+                    "hf",
+                    repo_id=_TIMM_DINOV2_REPO,
+                    filename="config.json",
+                    revision=_TIMM_DINOV2_REV,
+                ),
+                sha256="01050c8ec1abcd2fb980c33cae05468bde6aa6768dc1f8c8ba38f2e5f828f1a7",
+                aux_of="vit_base_patch14_dinov2_lvd142m",
+            ),
+            MirrorFile(
+                name="LICENSE",
+                source=Source(
+                    "url",
+                    url="https://raw.githubusercontent.com/facebookresearch/dinov2/main/LICENSE",
+                ),
+                sha256="600cc67cc4cb2f5ea317dcfc687ad1c74dc4bec8782bbe9db0afd83513b935b7",
+            ),
+        ),
+    ),
+    "roberta-large": Mirror(
+        repo="roberta-large",
+        title="RoBERTa-large",
+        plugin="cuvis-ai-steervit",
+        license_id="mit",
+        license_name="MIT",
+        upstream_md=(
+            f"[`{_ROBERTA_REPO}`](https://huggingface.co/{_ROBERTA_REPO}) at revision "
+            f"`{_ROBERTA_REV}` (original release: "
+            "<https://github.com/facebookresearch/fairseq>)"
+        ),
+        base_model=_ROBERTA_REPO,
+        extra_tags=("roberta", "text-encoder"),
+        license_text=_MIT_TEXT.substitute(
+            origin="<https://github.com/facebookresearch/fairseq> (where RoBERTa was "
+            "released; the Hugging Face repository declares `license: mit` and ships no "
+            "LICENSE file)"
+        ),
+        files=(
+            MirrorFile(
+                name="model.safetensors",
+                source=Source(
+                    "hf",
+                    repo_id=_ROBERTA_REPO,
+                    filename="model.safetensors",
+                    revision=_ROBERTA_REV,
+                ),
+                sha256="047c85f0b96269cd62e6f732644f067004eebd95af5b5d35965ae2528f13bf38",
+                registry_name="roberta_large",
+                description=(
+                    "RoBERTa-large text encoder that SteerViT encodes its prompts with, "
+                    "plus its config and tokenizer files"
+                ),
+            ),
+        )
+        + tuple(
+            MirrorFile(
+                name=fn,
+                source=Source(
+                    "hf", repo_id=_ROBERTA_REPO, filename=fn, revision=_ROBERTA_REV
+                ),
+                sha256=sha,
+                aux_of="roberta_large",
+            )
+            for fn, sha in (
+                (
+                    "config.json",
+                    "82ba49810e6441735e696033ac2512ee09da555507b2917ac3865b202d592cc3",
+                ),
+                (
+                    "vocab.json",
+                    "9e7f63c2d15d666b52e21d250d2e513b87c9b713cfa6987a82ed89e5e6e50655",
+                ),
+                (
+                    "merges.txt",
+                    "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5",
+                ),
+                (
+                    "tokenizer.json",
+                    "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e",
+                ),
+                (
+                    "tokenizer_config.json",
+                    "994f46754c5bf4014f1aa92d34b1374319c3a6b3f702105cd5b742beaecd18ce",
+                ),
+            )
+        )
+        + (
+            MirrorFile(
+                name="LICENSE",
+                source=Source(
+                    "url",
+                    url="https://raw.githubusercontent.com/facebookresearch/fairseq/main/LICENSE",
+                ),
+                sha256="52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
             ),
         ),
     ),

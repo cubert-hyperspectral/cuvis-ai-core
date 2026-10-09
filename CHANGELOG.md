@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (275 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
+- `tools/mirror_weights.py` mirrors the three files SteerViT downloads when its node is built: `cubert-gmbh/steervit` (`steervit_dinov2_base.pth` of `JonaRuthardt/SteerViT` at `4468b691`), `cubert-gmbh/vit_base_patch14_dinov2.lvd142m` (timm's DINOv2 ViT-B/14 trunk, `model.safetensors` with its `config.json`, at `4685c99d`) and `cubert-gmbh/roberta-large` (`FacebookAI/roberta-large` at `722cf37b`: `model.safetensors`, its config and the four tokenizer files the loaders read; the ONNX, TensorFlow, Flax and `.bin` copies are left out). Published on 2026-10-09 at `1a999b31`, `a1b5c7e5` and `65303b7c`; `check` passes on all three. Every file is pinned by sha256, including the small aux files and the licence texts. The SteerViT repository tags its checkpoints Apache-2.0 and ships no LICENSE file, so that mirror carries the Apache License 2.0 text from apache.org; the RoBERTa mirror carries fairseq's MIT LICENSE and the trunk mirror the DINOv2 one. The registry rows belong to the steervit plugin, which declares them.
 
 ## 0.18.4 - 2026-10-12
 
