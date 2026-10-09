@@ -8,7 +8,7 @@ from textwrap import dedent
 import pytest
 
 from cuvis_ai_schemas.plugin import LocalPluginSource
-from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
+from cuvis_ai_core.utils.plugin_resolver import _build_catalog, resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline import (
     NodeConfig,
     PipelineConfig,
@@ -216,3 +216,44 @@ def test_nonexistent_dirs_silently_skipped(plugins_dir: Path):
         pipeline, [plugins_dir.parent / "does_not_exist", plugins_dir]
     )
     assert "adaclip" in resolved
+
+
+# ---------------------------------------------------------------------------
+# _build_catalog: the same directory listed twice
+# ---------------------------------------------------------------------------
+
+
+def test_build_catalog_counts_the_same_directory_once(plugins_dir: Path) -> None:
+    """A packaged pipeline's auto-discovered catalog plus the same ``--plugins-dir``.
+
+    ``restore-pipeline`` discovers ``configs/plugins`` next to a packaged pipeline
+    and then appends every ``--plugins-dir``; the same directory under another
+    spelling must not raise ``Duplicate plugin name``.
+    """
+    same_dir_again = plugins_dir.parent / "plugins" / ".." / "plugins"
+
+    catalog = _build_catalog([plugins_dir, same_dir_again])
+
+    assert set(catalog) == {"cuvis_ai_builtin", "adaclip"}
+
+
+def test_build_catalog_still_rejects_one_name_from_two_directories(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "one"
+    second = tmp_path / "two"
+    for pdir in (first, second):
+        pdir.mkdir()
+        _write_manifest(
+            pdir / "demo.yaml",
+            """
+            name: demo
+            repo: "https://github.com/example/demo.git"
+            tag: "v1.0.0"
+            capabilities:
+              - class_name: demo.node.Demo
+            """,
+        )
+
+    with pytest.raises(ValueError, match="Duplicate plugin name 'demo'"):
+        _build_catalog([first, second])
