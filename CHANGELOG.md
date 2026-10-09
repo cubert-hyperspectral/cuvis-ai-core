@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.3 - 2026-10-09
 
 - `restore-pipeline` and `restore-trainrun` accept a `--plugins-dir` that names the catalog they already discovered next to a packaged pipeline (`cuvis_ai/configs/plugins`). The catalog builder counts a directory once by its resolved path (a lowercase drive letter or a `..` detour is the same directory), so the same catalog listed twice no longer fails with `Duplicate plugin name`. Two different directories that declare the same plugin name still fail.
 - Lock: fsspec 2026.1.0 to 2026.9.0 (CVE-2026-104851) and multidict 6.7.0 to 6.9.1 (CVE-2026-104874), the two advisories pip-audit started flagging on main after 0.18.2. Both are transitive (torch, lightning and huggingface-hub pull fsspec; aiohttp and yarl pull multidict), so no floor changes.
