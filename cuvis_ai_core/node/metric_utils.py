@@ -15,6 +15,14 @@ plugins compute the same thing:
 - :func:`warn_below_vectorized_cutoff` warns once when the subsample has
   dropped a frame below that 50k mark, so a stride chosen for memory is
   not silently also changing which code path torchmetrics takes.
+
+The image-level score of a dense score map is defined here once as well:
+
+- :func:`topk_count` is the one top-k rule, ``max(1, ceil(n * frac))`` with
+  the product rounded to float32 before the ceiling, so a decider's
+  threshold calibration and its runtime agree bit for bit.
+- :func:`topk_mean` is the per-frame mean of those top values, the frame
+  score a detector reports and a gate opens on.
 """
 
 from __future__ import annotations
@@ -96,3 +104,71 @@ def warn_below_vectorized_cutoff(
         "metric now costs far less memory, and its value comes from a "
         "different code path than an unsubsampled run."
     )
+
+
+def check_topk_frac(topk_frac: float) -> float:
+    """Return ``topk_frac`` as a float; raise ``ValueError`` unless it is in ``(0, 1]``.
+
+    Parameters
+    ----------
+    topk_frac : float
+        Fraction of a frame's values that enter its image score.
+
+    Returns
+    -------
+    float
+        ``topk_frac`` as a Python float.
+
+    Raises
+    ------
+    ValueError
+        If the fraction is not in ``(0, 1]``.
+    """
+    value = float(topk_frac)
+    if not 0.0 < value <= 1.0:
+        raise ValueError(f"topk_frac must be in (0, 1], got {topk_frac}")
+    return value
+
+
+def topk_count(numel: int, topk_frac: float) -> int:
+    """Number of top values in an image score: ``ceil(topk_frac * numel)``, at least 1.
+
+    The product is rounded to float32 before the ceiling, so a float64 product
+    that lands a hair above an integer does not add a value, and a small map
+    still averages at least its maximum.
+
+    Parameters
+    ----------
+    numel : int
+        Number of values in one frame's score map.
+    topk_frac : float
+        Fraction in ``(0, 1]``.
+
+    Returns
+    -------
+    int
+        ``k`` for :func:`torch.topk`, between 1 and ``numel``.
+    """
+    k = int(torch.ceil(torch.tensor(numel * topk_frac, dtype=torch.float32)).item())
+    return min(max(1, k), max(1, int(numel)))
+
+
+def topk_mean(values: torch.Tensor, topk_frac: float) -> torch.Tensor:
+    """Per-frame mean of the top ``topk_frac`` values of a ``[B, ...]`` tensor.
+
+    Parameters
+    ----------
+    values : torch.Tensor
+        Score maps, frames along dimension 0 and any number of further
+        dimensions (``[B, H, W]``, ``[B, H, W, 1]``, ...).
+    topk_frac : float
+        Fraction in ``(0, 1]``; ``k`` follows :func:`topk_count`.
+
+    Returns
+    -------
+    torch.Tensor
+        ``[B]`` float32: the mean of each frame's ``k`` largest values.
+    """
+    flat = values.reshape(values.shape[0], -1).float()
+    k = topk_count(flat.shape[1], topk_frac)
+    return torch.topk(flat, k, dim=1).values.mean(dim=1)
