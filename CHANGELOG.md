@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Lentils registry rows re-pinned to the Hub revisions published on 2026-10-09: the three `dinomaly_lentils_*` trained pipelines at `3602a04e` (restamped `.pt` files, metadata name equals the folder, team author; rewritten yamls with a bare `plugins:` list) and the `Industrial_FOD_Lentils` dataset at `ce3a213e` (73 files, 56.99 GB: splits without `leakage_check`, one README per day instead of fifteen per recording, day-level COCO with real image records). The old revisions stay reachable on the Hub.
+
 ## 0.18.3 - 2026-10-09
 
 - `restore-pipeline` and `restore-trainrun` accept a `--plugins-dir` that names the catalog they already discovered next to a packaged pipeline (`cuvis_ai/configs/plugins`). The catalog builder counts a directory once by its resolved path (a lowercase drive letter or a `..` detour is the same directory), so the same catalog listed twice no longer fails with `Duplicate plugin name`. Two different directories that declare the same plugin name still fail.
