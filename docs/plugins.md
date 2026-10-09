@@ -80,6 +80,36 @@ included (`cuvis-ai-rfdetr[tensorrt] @ git+https://github.com/cubert-hyperspectr
 The server logs the same merged requirement when it composes (`Composing for cuvis-ai-rfdetr[tensorrt]`),
 and the composed entry's `env_desc.md` records the plugin set.
 
+### TensorRT backends
+
+A node that runs its network through TensorRT builds the engine on the machine itself, in
+`Node.prepare_inference()` (the loaders call it once the device and the weights are final), with the
+helpers in `cuvis_ai_core.utils.trt_engine`. The plugin keeps the ONNX export and its own file name
+parts; the rules come from core:
+
+```python
+from cuvis_ai_core.utils import trt_engine as te
+
+trt = te.import_tensorrt("MyNode backend='tensorrt'")       # lazy: core has no TensorRT dependency
+fp = te.file_fingerprint(checkpoint)                         # or te.tensor_fingerprint(state_dict, extra)
+name = te.engine_file_name("fp16", f"r{resolution}", trt=trt)
+loc = te.engine_location(name, "myplugin", fp, preferred_dir=f"{checkpoint}.trt")
+path = te.find_engine(loc, {"checkpoint_md5": te.cached_file_md5(checkpoint)}) or te.build_engine_once(
+    loc, name, build=export_and_compile, command="python -m my_plugin.trt_engine build ...")
+engine = te.TensorRTEngine(path, "cuda")
+```
+
+- An engine folder is keyed by a fingerprint of the weights. A build goes to the node's preferred
+  folder (next to a checkpoint, an explicit `engine_dir`) and, when that is not writable, to
+  `<model cache>/trt_engines/<plugin>/<fingerprint>/` (`$CUVIS_MODEL_CACHE_DIR`, which a CuvisNEXT child
+  keeps across runs; `$CUVIS_AI_TRT_ENGINE_DIR` overrides the root). Flat folders of earlier releases
+  and `~/.cache/cuvis-ai/tensorrt/<plugin>` are still searched.
+- One file lock per engine: concurrent loads build it once. The engine and its JSON build record are
+  written under temporary names and moved into place, the record first. A failed build raises one
+  error that names the manual build command; an engine whose record names other weights is refused.
+- `te.build_serialized_network(onnx_path, fp16=..., tf32=...)` compiles an ONNX file; `fp16` needs
+  TensorRT 10 (TensorRT 11 dropped the builder flag).
+
 ### Register, then materialise
 
 Registering a plugin records its manifest as catalog metadata. It does **not** clone, install, or
