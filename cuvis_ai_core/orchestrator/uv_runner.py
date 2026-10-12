@@ -79,7 +79,9 @@ def _resolved_timeout(timeout: float | None) -> float:
     """An explicit ``timeout`` wins; otherwise the env knob, else the default."""
     if timeout is not None:
         return timeout
-    return number_from_env(_TIMEOUT_ENV, _DEFAULT_TIMEOUT, cast=float, allow_zero=False)
+    return number_from_env(
+        _TIMEOUT_ENV, float(_DEFAULT_TIMEOUT), cast=float, allow_zero=False
+    )
 
 
 def uv_lock(project_dir: Path, *, timeout: float | None = None) -> None:
