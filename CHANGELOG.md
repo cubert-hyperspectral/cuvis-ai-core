@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.4 - 2026-10-12
 
 - The composer's ceiling for one `uv lock` or `uv sync` is `CUVIS_UV_TIMEOUT_SECONDS` (default 1500 s; it was a fixed 600 s). A cold compose on a machine whose uv cache holds neither torch nor the CUDA wheels downloads about 5 GB, which the old ceiling killed; uv's own 30 s read timeout fails a stalled transfer long before the ceiling, so the ceiling is a backstop. Each invocation logs `uv sync finished after N s`, and the timeout message names the knob.
 - The spawner waits 600 s (it was 120 s) for the child runtime's endpoint file (`CUVIS_RUNTIME_ENDPOINT_TIMEOUT_SECONDS`): the first import of CUDA torch in a freshly composed venv on Windows took 118 s on a laptop whose disk was also serving a cache eviction. A child that exits is still reported the moment it does, the health deadline stays at 120 s, and the log records the seconds until the endpoint appeared.
