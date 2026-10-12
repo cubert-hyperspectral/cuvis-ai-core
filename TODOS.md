@@ -1,5 +1,18 @@
 # TODOs
 
+## The `dataset` CLI still stops at the first failed download
+
+- **What:** `download-model download NAME...` continues past a failed name and reports the
+  failures together at the end (exit 1, `error: <n> of <m> failed: ...`); the `dataset` CLI keeps
+  the old shape and aborts at the first `ModelDownloadError`.
+- **Why:** The two CLIs follow different rules for the same situation, and a script that drives
+  both has to handle both.
+- **Pros:** One contract; a connection blip on one dataset no longer costs the ones after it.
+- **Cons:** A second consumer check: CuvisNEXT reads the dataset CLI's events and exit code too.
+- **Context:** `cuvis_ai_core/data/_model_weights_cli.py` (the `download` loop, `_download_rows`
+  and the summary line) is the shape to copy; the `--json` rows reuse the `reason` field.
+- **Depends on / blocked by:** nothing.
+
 ## A run-cache eviction whose delete fails keeps a whole venv on disk for at least six hours
 
 - **What:** `evict_run_cache` renames the entry to `<digest>.evicting.<ts>.<tag>` and deletes it

@@ -166,6 +166,28 @@ them — a pipeline naming an unregistered plugin fails with `FAILED_PRECONDITIO
 [gRPC Plugin Management API](grpc_plugin_api.md) for the RPCs, message shapes, and a complete client
 workflow.
 
+### Environment knobs
+
+The server composes one venv per plugin set (`uv lock`, then `uv sync`, under the run cache
+`~/.cuvis_runs/<digest>`) and spawns the child runtime from it. The deadlines, each read at call
+time:
+
+| variable | default | bounds |
+|---|---|---|
+| `CUVIS_UV_TIMEOUT_SECONDS` | 1500 | one `uv lock` or `uv sync`; a backstop, since uv's own 30 s read timeout fails a stalled transfer first |
+| `CUVIS_RUNTIME_ENDPOINT_TIMEOUT_SECONDS` | 600 | the child's imports until it writes its endpoint file; a child that exits is reported at once |
+| `CUVIS_RUNTIME_HEALTH_TIMEOUT_SECONDS` | 120 | the child's health check once it listens |
+
+One `LoadPipeline` or `RestoreTrainRun` can therefore run for lock + sync + endpoint + health
+(3720 s) before the server gives up; a client deadline below that reports a slow but healthy
+compose as a timeout. The run cache is bounded by `CUVIS_RUN_CACHE_MAX_ENTRIES` (10),
+`CUVIS_RUN_CACHE_MAX_AGE_DAYS` (30) and the hot floor `CUVIS_RUN_CACHE_MIN_IDLE_SECONDS` (3600).
+The eviction pass that a publish calls for runs on the deleter thread once the child is up, at a
+low I/O priority, so its deletes and the `uv cache prune` behind them do not slow the child's first
+imports; the server repeats the pass hourly. A cache hit checks that the entry's python and the
+interpreter named in its `pyvenv.cfg` still exist and rebuilds the entry otherwise (an uninstall or
+an interpreter upgrade removes the uv store a composed venv borrows from).
+
 ## Keeping the catalog accurate
 
 A node entry's palette metadata (category, tags, icon, port specs) is regenerated from the live node
