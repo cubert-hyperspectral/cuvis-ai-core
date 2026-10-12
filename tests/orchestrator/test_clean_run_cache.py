@@ -41,7 +41,7 @@ def sandbox(monkeypatch, tmp_path):
     prune_calls: list[str] = []
     monkeypatch.setattr(cli_mod, "uv_cache_prune", lambda: prune_calls.append("cli"))
     monkeypatch.setattr(
-        composer_mod, "uv_cache_prune", lambda: prune_calls.append("deleter")
+        composer_mod, "uv_cache_prune", lambda **kw: prune_calls.append("deleter")
     )
     return prune_calls
 

@@ -53,6 +53,7 @@ from cuvis_ai_core.orchestrator.uv_runner import (
     uv_lock,
     uv_sync,
 )
+from cuvis_ai_core.orchestrator.venv_paths import venv_python
 
 _LOCK_TIMEOUT_SECONDS = 1800  # cold-start install can take a long time
 
@@ -151,6 +152,7 @@ def compose_env(
     core_source: CoreSource,
     cache_root: Path | None = None,
     active_data_module: str | None = None,
+    evict: bool = True,
 ) -> Path:
     """Materialise (or reuse) a cached venv for ``plugin_configs``.
 
@@ -160,7 +162,9 @@ def compose_env(
     adds the selected data module's (a tiff_paired run never pulls a cu3s
     module's ``cuvis`` extra). Manifests that install one package share one
     requirement with the union of their extras, while the cache key keeps one
-    entry per manifest.
+    entry per manifest. ``evict=False`` skips the eviction pass a publish
+    would run; the caller then owes a :func:`schedule_eviction` once it is
+    safe (the bridge: after its child is up).
     """
     resolved = resolve_plugin_sources(
         plugin_configs, active_data_module=active_data_module
@@ -202,12 +206,13 @@ def compose_env(
             pyproject_content=pyproject_content,
             plugins=resolved,
         )
-    if built:
+    if built and evict:
         # A publish is when the entry count can have grown. Run the pass
-        # AFTER the build lock releases — eviction must never extend the
-        # lock a concurrent hit is waiting on — and the pass itself only
-        # scans and renames; the multi-GB deletes happen on the deleter
-        # thread.
+        # AFTER the build lock releases (eviction must never extend the
+        # lock a concurrent hit is waiting on); the pass itself only scans
+        # and renames, the multi-GB deletes happen on the deleter thread.
+        # The bridge composes with evict=False and schedules the pass once
+        # its child is up, so not even the scan runs on its request path.
         evict_run_cache(root)
     return venv_path
 
@@ -227,8 +232,9 @@ def _build_or_reuse(
     against the lock before anything is installed.
     """
     ready = final_dir / _READY_MARKER
-    if ready.exists():
-        # The .ready mtime is the entry's last-used timestamp — eviction
+    defect = _entry_defect(venv_dir) if ready.exists() else f"has no {_READY_MARKER}"
+    if ready.exists() and defect is None:
+        # The .ready mtime is the entry's last-used timestamp: eviction
         # orders by it (LRU) and the hot floor reads it, so every hit must
         # touch it. Best-effort: a read-only cache still serves hits.
         try:
@@ -238,13 +244,15 @@ def _build_or_reuse(
         logger.info(f"Cache hit: {final_dir.name}")
         return venv_dir, False
 
-    # Defense in depth: a published directory without ``.ready`` is
-    # broken — rename it aside and rebuild.
+    # Defense in depth: a published directory without ``.ready``, or one
+    # whose interpreter went away (an uninstall or an interpreter upgrade
+    # removed the uv store it borrows from), is broken: rename it aside and
+    # rebuild.
     if final_dir.exists():
         broken = root / f"{final_dir.name}{_BROKEN_TAG}{int(time.time())}"
         logger.warning(
-            f"Cache dir {final_dir.name} exists without {_READY_MARKER}; moving to "
-            f"{broken.name} and rebuilding."
+            f"Cache dir {final_dir.name} {defect}; moving to {broken.name} and "
+            "rebuilding."
         )
         final_dir.rename(broken)
 
@@ -273,6 +281,36 @@ def _build_or_reuse(
     os.replace(build_dir, final_dir)
     logger.info(f"Published cache entry {final_dir.name}")
     return venv_dir, True
+
+
+def _entry_defect(venv_dir: Path) -> str | None:
+    """Why a published entry cannot serve a hit, or ``None`` when it can.
+
+    A composed venv borrows its interpreter from the uv store that built it
+    (the ``home`` line of ``pyvenv.cfg``); an uninstall or an interpreter
+    upgrade removes that directory while the entry stays published, and a
+    spawn from it dies before reporting an endpoint. Checked on every hit so
+    such an entry is rebuilt instead of handed to the spawner.
+    """
+    python = venv_python(venv_dir)
+    if not python.exists():
+        return f"lacks {python.relative_to(venv_dir.parent)}"
+    cfg = venv_dir / "pyvenv.cfg"
+    try:
+        lines = cfg.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return f"has an unreadable pyvenv.cfg ({exc})"
+    home = None
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "home":
+            home = value.strip()
+            break
+    if not home:
+        return "names no interpreter home in pyvenv.cfg"
+    if not Path(home).is_dir():
+        return f"points at the missing interpreter home {home}"
+    return None
 
 
 def _sweep_stale_partials(root: Path) -> None:
@@ -316,6 +354,10 @@ def _rmtree(path: Path) -> None:
 #   - .ready younger than the hot floor
 #   - any live same-user process executing from inside the entry (covers
 #     children that predate leases, mid-spawn children, torn leases)
+#
+# Triggers: a publish (compose_env; the bridge composes with evict=False and
+# schedules the pass once its child is up, see schedule_eviction), the
+# server's hourly maintenance pass, and clean-run-cache.
 # ---------------------------------------------------------------------------
 
 # One deleter worker per process: multi-GB rmtrees must never run on the
@@ -334,9 +376,53 @@ def _ensure_deleter() -> None:
         if _deleter_thread is not None and _deleter_thread.is_alive():
             return
         _deleter_thread = threading.Thread(
-            target=_deleter_loop, daemon=True, name="cuvis-cache-deleter"
+            target=_deleter_main, daemon=True, name="cuvis-cache-deleter"
         )
         _deleter_thread.start()
+
+
+# Windows: THREAD_MODE_BACKGROUND_BEGIN lowers the calling thread's I/O and
+# memory priority, so a multi-GB rmtree behind a child's cold start yields
+# the disk to the child's imports. Linux has no thread-level I/O class; the
+# prune child gets the idle class instead (uv_runner._lower_io_priority).
+_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
+
+
+def _enter_background_mode() -> bool:
+    """Lower the calling thread's I/O priority; ``False`` where unsupported."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        ok = kernel32.SetThreadPriority(
+            kernel32.GetCurrentThread(), _THREAD_MODE_BACKGROUND_BEGIN
+        )
+    except (AttributeError, OSError) as exc:
+        logger.debug(f"Cache deleter keeps its thread priority: {exc}")
+        return False
+    if not ok:
+        logger.debug("Cache deleter keeps its thread priority (SetThreadPriority).")
+        return False
+    return True
+
+
+def _deleter_main() -> None:
+    """Thread entry: background I/O priority, then drain the queue forever."""
+    _enter_background_mode()
+    _deleter_loop()
+
+
+def schedule_eviction(cache_root: Path) -> None:
+    """Queue one eviction pass of ``cache_root`` on the deleter thread.
+
+    For callers that composed with ``evict=False`` (the bridge): the pass,
+    its deletes and the prune behind them all run off the request path, and
+    only once the caller says so (after its child is up).
+    """
+    _ensure_deleter()
+    _deleter_queue.put(("evict", cache_root))
 
 
 def _deleter_loop() -> None:
@@ -346,6 +432,8 @@ def _deleter_loop() -> None:
         try:
             if kind == "rmtree":
                 _rmtree(Path(str(payload)))
+            elif kind == "evict":
+                evict_run_cache(Path(str(payload)))
             elif kind == "prune":
                 _run_uv_cache_prune()
             elif kind == "signal" and isinstance(payload, threading.Event):
@@ -359,7 +447,7 @@ def _deleter_loop() -> None:
 def _run_uv_cache_prune() -> None:
     """Run ``uv cache prune`` non-fatally (the global uv lock may be busy)."""
     try:
-        uv_cache_prune()
+        uv_cache_prune(low_priority=True)
         logger.info("uv cache prune completed after eviction batch.")
     except UvCacheBusyError as exc:
         # Expected on dev machines where a long-running uvx tool holds the

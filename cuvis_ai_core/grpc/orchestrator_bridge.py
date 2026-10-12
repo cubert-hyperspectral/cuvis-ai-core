@@ -63,7 +63,7 @@ from cuvis_ai_core.grpc.session_manager import (
 )
 from cuvis_ai_core.orchestrator import leases
 from cuvis_ai_core.orchestrator.cache_key import CoreSource, pyproject_sha256_of
-from cuvis_ai_core.orchestrator.composer import ComposerError
+from cuvis_ai_core.orchestrator.composer import ComposerError, schedule_eviction
 from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
 from cuvis_ai_core.orchestrator.runtime_project import RuntimeProjectError
 from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
@@ -207,9 +207,31 @@ _CRASH_PROBE_CODES = frozenset(
 # Type alias for the injectable composer seam.
 ComposerFn = Callable[..., Path]
 
+
+def _compose_for_child(
+    plugin_configs: Mapping[str, PluginManifest],
+    *,
+    core_source: CoreSource,
+    active_data_module: str | None = None,
+) -> Path:
+    """The bridge's composer: no eviction pass on the request path.
+
+    The pass a publish calls for is scheduled by :func:`ensure_child_for_session`
+    once the child is up (:func:`schedule_eviction`), so its multi-GB deletes and
+    the ``uv cache prune`` behind them cannot compete with the child's first
+    imports for the disk.
+    """
+    return _real_compose_env(
+        plugin_configs,
+        core_source=core_source,
+        active_data_module=active_data_module,
+        evict=False,
+    )
+
+
 # Default implementations. Tests override via set_composer / set_spawner;
 # production code never touches these globals after import.
-_composer: ComposerFn = _real_compose_env
+_composer: ComposerFn = _compose_for_child
 _spawner: ChildRuntimeSpawner | None = None
 
 
@@ -227,7 +249,7 @@ def set_composer(fn: ComposerFn) -> None:
 def reset_composer() -> None:
     """Restore the production composer."""
     global _composer
-    _composer = _real_compose_env
+    _composer = _compose_for_child
 
 
 def get_spawner() -> ChildRuntimeSpawner:
@@ -673,6 +695,11 @@ def ensure_child_for_session(
     session.child_install = {
         name: _install_identity(manifest) for name, manifest in resolved.items()
     }
+    if lease_root is not None:
+        # The eviction pass a publish calls for, now that the child is up and
+        # off the request path: its deletes and the uv cache prune behind them
+        # no longer compete with the child's first imports for the disk.
+        schedule_eviction(lease_root)
     return handle
 
 

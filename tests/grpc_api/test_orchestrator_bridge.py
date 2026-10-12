@@ -50,11 +50,15 @@ def test_set_composer_overrides_default():
 
 
 def test_reset_composer_restores_default():
-    from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
-
-    orchestrator_bridge.set_composer(MagicMock())
-    orchestrator_bridge.reset_composer()
-    assert orchestrator_bridge.get_composer() is _real_compose_env
+    previous = orchestrator_bridge.get_composer()
+    try:
+        orchestrator_bridge.set_composer(MagicMock())
+        orchestrator_bridge.reset_composer()
+        assert (
+            orchestrator_bridge.get_composer() is orchestrator_bridge._compose_for_child
+        )
+    finally:
+        orchestrator_bridge.set_composer(previous)
 
 
 def test_set_spawner_overrides_default():
@@ -1626,3 +1630,67 @@ def test_forward_load_pipeline_weights_leaves_a_bytes_request_alone():
         sm, sid, _InMemoryContext(), weights_bytes=b"blob"
     )
     assert forwarded == original
+
+
+# ---------------------------------------------------------------------------
+# Eviction scheduling: after the child is up, never on the compose path
+# ---------------------------------------------------------------------------
+
+
+def test_default_composer_composes_without_the_eviction_pass(monkeypatch):
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "_real_compose_env",
+        lambda plugins, **kwargs: seen.append(kwargs) or Path("venv"),
+    )
+    venv = orchestrator_bridge._compose_for_child(
+        {}, core_source="src", active_data_module="dm"
+    )
+    assert venv == Path("venv")
+    assert seen == [{"core_source": "src", "active_data_module": "dm", "evict": False}]
+
+
+def test_eviction_is_scheduled_after_the_child_handle_is_published(
+    tmp_path, monkeypatch
+):
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    root = _lease_env(tmp_path)
+    events: list = []
+
+    class _RecordingSpawner(_LeaseAwareSpawner):
+        def spawn(self, *args, **kwargs):
+            events.append("spawn")
+            return super().spawn(*args, **kwargs)
+
+    orchestrator_bridge.set_spawner(_RecordingSpawner(root))
+    monkeypatch.setattr(
+        orchestrator_bridge,
+        "schedule_eviction",
+        lambda cache_root: events.append(
+            ("evict", cache_root, sm.get_session(sid).child_handle is not None)
+        ),
+    )
+    orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert events == ["spawn", ("evict", root, True)]
+    sm.close_session(sid)
+
+
+def test_spawn_failure_schedules_no_eviction(tmp_path, monkeypatch):
+    sm = SessionManager()
+    sid = sm.create_session()
+    cfg = _register_resolvable_plugin(sm, sid)
+    _lease_env(tmp_path)
+    scheduled: list[Path] = []
+    monkeypatch.setattr(orchestrator_bridge, "schedule_eviction", scheduled.append)
+
+    class _BoomSpawner(_InMemorySpawner):
+        def spawn(self, *args, **kwargs):
+            raise RuntimeError("spawn exploded")
+
+    orchestrator_bridge.set_spawner(_BoomSpawner())
+    with pytest.raises(RuntimeError, match="spawn exploded"):
+        orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
+    assert scheduled == []

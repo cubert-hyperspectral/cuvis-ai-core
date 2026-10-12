@@ -83,11 +83,22 @@ def _payload(
     return {"schema_version": SCHEMA_VERSION, key: str(cache_dir), "models": models}
 
 
-def _status_rows(
-    statuses: list[mw.ModelStatus], *, downloaded: bool = False
+def _status_rows(statuses: list[mw.ModelStatus]) -> list[dict[str, Any]]:
+    return [{**s.weight.to_json_dict(), **s.to_json_dict()} for s in statuses]
+
+
+def _download_rows(
+    statuses: list[mw.ModelStatus], failures: dict[str, str]
 ) -> list[dict[str, Any]]:
-    extra = {"downloaded": True} if downloaded else {}
-    return [{**s.weight.to_json_dict(), **s.to_json_dict(), **extra} for s in statuses]
+    """Status rows after ``download``: ``downloaded`` per name, ``reason`` on a failure."""
+    rows = []
+    for s in statuses:
+        row = {**s.weight.to_json_dict(), **s.to_json_dict()}
+        row["downloaded"] = s.weight.name not in failures
+        if s.weight.name in failures:
+            row["reason"] = failures[s.weight.name]
+        rows.append(row)
+    return rows
 
 
 def build_cli() -> click.Group:
@@ -235,7 +246,7 @@ def build_cli() -> click.Group:
         except mw.ModelDownloadError as exc:
             _fail(exc)
             return
-        paths: list[Path] = []
+        failures: dict[str, str] = {}
         for weight in weights:
             try:
                 path = mw.ModelWeights.download_model(
@@ -246,18 +257,30 @@ def build_cli() -> click.Group:
                     progress=progress,
                 )
             except mw.ModelDownloadError as exc:
+                # One failed name does not abort the rest: the installer hands
+                # its whole selection to one process, and the names after a
+                # connection blip still land. The exit code and the summary
+                # below report the failures together.
+                failures[weight.name] = str(exc)
                 if progress is not None:
                     progress.error(weight.name, str(exc))
-                _fail(exc)
-                return
-            paths.append(path)
+                elif not as_json:
+                    click.echo(f"error: {weight.name}: {exc}", err=True)
+                continue
             if progress is not None:
                 progress.done(weight.name, path)
             elif not as_json:
                 click.echo(str(path))
         if as_json:
             statuses = mw.ModelWeights.status_all([w.name for w in weights], cache_dir)
-            emit_json(_payload(root, _status_rows(statuses, downloaded=True)))
+            emit_json(_payload(root, _download_rows(statuses, failures)))
+        if failures:
+            click.echo(
+                f"error: {len(failures)} of {len(weights)} failed: "
+                + "; ".join(f"{name} ({msg})" for name, msg in failures.items()),
+                err=True,
+            )
+            sys.exit(EXIT_ERROR)
 
     @cli.command()
     @click.option(

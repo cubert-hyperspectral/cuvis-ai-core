@@ -12,6 +12,8 @@ import contextlib
 import json
 import os
 import queue
+import shutil
+import sys
 import threading
 import time
 import tomllib
@@ -29,6 +31,7 @@ from cuvis_ai_core.orchestrator.cache_key import COMPOSER_SCHEMA_VERSION, CoreSo
 from cuvis_ai_core.orchestrator.composer import ComposerError, compose_env
 from cuvis_ai_core.orchestrator.runtime_project import RuntimeProjectError
 from cuvis_ai_core.orchestrator.uv_runner import UvCacheBusyError, UvRunnerError
+from cuvis_ai_core.orchestrator.venv_paths import venv_python
 from cuvis_ai_schemas.plugin import GitPluginSource
 
 
@@ -53,7 +56,7 @@ def _never_shell_to_real_uv_prune(monkeypatch):
     ``wait_for_deleter`` call in the suite. Tests that assert prune
     behaviour override this stub with their own recorder.
     """
-    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda: None)
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda **kw: None)
 
 
 def _simple_plugin() -> dict:
@@ -65,6 +68,18 @@ def _simple_plugin() -> dict:
             capabilities=[{"class_name": "p.Node"}],
         )
     }
+
+
+def _fake_venv(project_dir: Path, *, home: Path | None = None) -> None:
+    """Leave behind what ``uv sync`` leaves: the interpreter and its pyvenv.cfg."""
+    venv = project_dir / ".venv"
+    python = venv_python(venv)
+    python.parent.mkdir(parents=True, exist_ok=True)
+    python.write_bytes(b"")
+    home_dir = Path(sys.executable).parent if home is None else home
+    (venv / "pyvenv.cfg").write_text(
+        f"home = {home_dir}\nversion = 3.11.15\n", encoding="utf-8"
+    )
 
 
 def _patch_resolve_and_uv(*, sync_side_effect=None):
@@ -111,7 +126,7 @@ def test_compose_env_publishes_venv_path_and_writes_key_json(tmp_path: Path):
     with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
         # Make uv_sync also create .venv (real uv would do this).
         def fake_sync(project_dir: Path):
-            (project_dir / ".venv").mkdir(exist_ok=True)
+            _fake_venv(project_dir)
 
         sync_mock.side_effect = fake_sync
 
@@ -143,7 +158,7 @@ def test_compose_env_cache_hit_skips_uv(tmp_path: Path):
     # First call materialises the entry.
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         first = compose_env(
             _simple_plugin(),
             core_source=PYPI_CORE,
@@ -171,7 +186,7 @@ def test_compose_env_cache_hit_touches_ready_mtime(tmp_path: Path):
 
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         venv = compose_env(
             _simple_plugin(),
             core_source=PYPI_CORE,
@@ -191,7 +206,7 @@ def test_compose_env_cache_hit_survives_utime_failure(tmp_path: Path, monkeypatc
     """A read-only cache still serves hits: the touch is best-effort."""
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         first = compose_env(
             _simple_plugin(),
             core_source=PYPI_CORE,
@@ -219,10 +234,10 @@ def test_compose_env_half_built_recovery(tmp_path: Path):
         call_count["n"] += 1
         if call_count["n"] == 1:
             # First call: leave a half-built .venv then crash.
-            (project_dir / ".venv").mkdir(exist_ok=True)
+            _fake_venv(project_dir)
             raise UvRunnerError("simulated crash mid-sync")
         # Second call: succeed.
-        (project_dir / ".venv").mkdir(exist_ok=True)
+        _fake_venv(project_dir)
 
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
@@ -238,9 +253,7 @@ def test_compose_env_half_built_recovery(tmp_path: Path):
     # attempt must NOT reuse it as if ready.
     resolve_patch2, lock_patch2, sync_patch2 = _patch_resolve_and_uv()
     with resolve_patch2, lock_patch2 as lock_mock2, sync_patch2 as sync_mock2:
-        sync_mock2.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
-            exist_ok=True
-        )
+        sync_mock2.side_effect = lambda project_dir: _fake_venv(project_dir)
         venv = compose_env(
             _simple_plugin(),
             core_source=PYPI_CORE,
@@ -259,9 +272,7 @@ def test_compose_env_renames_published_dir_without_ready_aside(tmp_path: Path):
     # Pre-create a fake published dir that looks complete but has no .ready.
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
-            exist_ok=True
-        )
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
 
         # Compute the expected cache dir name by running compose once,
         # then deleting only .ready to simulate the failure state.
@@ -276,9 +287,7 @@ def test_compose_env_renames_published_dir_without_ready_aside(tmp_path: Path):
     # Next attempt should rename the broken dir aside and rebuild.
     resolve_patch2, lock_patch2, sync_patch2 = _patch_resolve_and_uv()
     with resolve_patch2, lock_patch2 as lock_mock2, sync_patch2 as sync_mock2:
-        sync_mock2.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
-            exist_ok=True
-        )
+        sync_mock2.side_effect = lambda project_dir: _fake_venv(project_dir)
         venv2 = compose_env(
             _simple_plugin(),
             core_source=PYPI_CORE,
@@ -332,7 +341,7 @@ def test_compose_env_two_threads_serialise_on_same_key(tmp_path: Path):
         # happen to land sequentially.
         with sync_calls_lock:
             sync_calls.append(project_dir)
-        (project_dir / ".venv").mkdir(exist_ok=True)
+        _fake_venv(project_dir)
 
     results = {}
     errors = {}
@@ -368,9 +377,7 @@ def test_compose_env_respects_env_var_for_cache_root(tmp_path: Path, monkeypatch
     monkeypatch.setenv("CUVIS_RUN_CACHE_DIR", str(tmp_path))
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
-            exist_ok=True
-        )
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         venv = compose_env(_simple_plugin(), core_source=PYPI_CORE)
     assert tmp_path in venv.parents
 
@@ -747,7 +754,9 @@ def test_evict_prunes_uv_cache_once_after_batch_drains(
     _make_entry(root, "two", age_seconds=90 * 86_400)
     events: list[str] = []
     monkeypatch.setattr(composer_mod, "_rmtree", lambda path: events.append("rmtree"))
-    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda: events.append("prune"))
+    monkeypatch.setattr(
+        composer_mod, "uv_cache_prune", lambda **kw: events.append("prune")
+    )
     evicted = _evict(root, max_age_days=30)
     assert sorted(evicted) == ["one", "two"]
     assert events == ["rmtree", "rmtree", "prune"]
@@ -758,7 +767,7 @@ def test_evict_prune_failure_is_non_fatal(tmp_path: Path, fast_snapshot, monkeyp
     root = _marked_root(tmp_path)
     _make_entry(root, "gone", age_seconds=90 * 86_400)
 
-    def _busy():
+    def _busy(**kw):
         raise UvRunnerError("uv cache lock busy")
 
     monkeypatch.setattr(composer_mod, "uv_cache_prune", _busy)
@@ -819,9 +828,7 @@ def test_compose_build_runs_eviction_pass_hit_does_not(tmp_path: Path, monkeypat
     )
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch, sync_patch as sync_mock:
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir(
-            exist_ok=True
-        )
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
     assert calls == [tmp_path]
 
@@ -880,7 +887,7 @@ def _root_with_unstatable(root: Path, name: str) -> Path:
 
 def test_run_uv_cache_prune_busy_lock_is_logged_and_swallowed(monkeypatch):
     # Pins the UvCacheBusyError branch: info-level skip, no warning, no raise.
-    def _busy():
+    def _busy(**kw):
         raise UvCacheBusyError("uv cache lock busy")
 
     monkeypatch.setattr(composer_mod, "uv_cache_prune", _busy)
@@ -1090,7 +1097,7 @@ def test_compose_env_pyproject_carries_manifest_extras_once_per_package(tmp_path
     resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
     with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
         lock_mock.side_effect = _lock_writer("tensorrt", "train")
-        sync_mock.side_effect = lambda project_dir: (project_dir / ".venv").mkdir()
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir)
         venv = compose_env(_trt_plugins(), core_source=PYPI_CORE, cache_root=tmp_path)
 
     doc = tomllib.loads((venv.parent / "pyproject.toml").read_text(encoding="utf-8"))
@@ -1116,3 +1123,111 @@ def test_compose_env_unknown_extra_fails_after_lock_and_before_sync(tmp_path: Pa
     assert lock_mock.call_count == 1
     assert sync_mock.call_count == 0
     assert not list(tmp_path.rglob(".ready"))
+
+
+# ---------------------------------------------------------------------------
+# Deferred eviction (compose_env(evict=False) + schedule_eviction), deleter
+# priority, and the cache-hit validation of the entry's interpreter
+# ---------------------------------------------------------------------------
+
+
+def test_compose_env_evict_false_runs_no_pass(tmp_path: Path, monkeypatch):
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        composer_mod, "evict_run_cache", lambda root, **kwargs: calls.append(root)
+    )
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch, sync_patch as sync_mock:
+        sync_mock.side_effect = _fake_venv
+        compose_env(
+            _simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path, evict=False
+        )
+    assert calls == []
+
+
+def test_schedule_eviction_runs_the_pass_on_the_deleter_thread(
+    tmp_path: Path, monkeypatch
+):
+    seen: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        composer_mod,
+        "evict_run_cache",
+        lambda root, **kwargs: seen.append((root, threading.current_thread().name)),
+    )
+    composer_mod.schedule_eviction(tmp_path)
+    assert composer_mod.wait_for_deleter(timeout=10.0)
+    assert seen == [(tmp_path, "cuvis-cache-deleter")]
+
+
+def test_run_uv_cache_prune_requests_low_priority(monkeypatch):
+    seen: list[dict] = []
+    monkeypatch.setattr(composer_mod, "uv_cache_prune", lambda **kw: seen.append(kw))
+    composer_mod._run_uv_cache_prune()
+    assert seen == [{"low_priority": True}]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows thread priorities")
+def test_enter_background_mode_lowers_the_thread_priority_on_windows(monkeypatch):
+    import ctypes
+
+    calls: list[tuple] = []
+    kernel32 = ctypes.windll.kernel32
+    monkeypatch.setattr(kernel32, "GetCurrentThread", lambda: "thread-handle")
+    monkeypatch.setattr(
+        kernel32, "SetThreadPriority", lambda h, p: calls.append((h, p)) or 1
+    )
+    assert composer_mod._enter_background_mode() is True
+    assert calls == [("thread-handle", 0x00010000)]
+
+
+def test_enter_background_mode_is_a_noop_elsewhere(monkeypatch):
+    monkeypatch.setattr(composer_mod.sys, "platform", "linux")
+    assert composer_mod._enter_background_mode() is False
+
+
+def _compose_once(tmp_path: Path, *, home: Path | None = None) -> Path:
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch, sync_patch as sync_mock:
+        sync_mock.side_effect = lambda project_dir: _fake_venv(project_dir, home=home)
+        return compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
+
+
+def _compose_again(tmp_path: Path) -> tuple[Path, int]:
+    resolve_patch, lock_patch, sync_patch = _patch_resolve_and_uv()
+    with resolve_patch, lock_patch as lock_mock, sync_patch as sync_mock:
+        sync_mock.side_effect = _fake_venv
+        venv = compose_env(_simple_plugin(), core_source=PYPI_CORE, cache_root=tmp_path)
+        return venv, lock_mock.call_count
+
+
+def test_cache_hit_with_intact_interpreter_reuses(tmp_path: Path):
+    home = tmp_path / "python-store"
+    home.mkdir()
+    first = _compose_once(tmp_path, home=home)
+    second, locks = _compose_again(tmp_path)
+    assert (first, locks) == (second, 0)
+
+
+def test_cache_hit_with_dangling_interpreter_home_rebuilds(tmp_path: Path):
+    home = tmp_path / "python-store"
+    home.mkdir()
+    first = _compose_once(tmp_path, home=home)
+    shutil.rmtree(home)  # an uninstall or an interpreter upgrade took it away
+    second, locks = _compose_again(tmp_path)
+    assert (first, locks) == (second, 1)
+    assert len([p for p in tmp_path.iterdir() if ".broken." in p.name]) == 1
+
+
+def test_cache_hit_with_missing_venv_python_rebuilds(tmp_path: Path):
+    first = _compose_once(tmp_path)
+    venv_python(first).unlink()
+    second, locks = _compose_again(tmp_path)
+    assert (first, locks) == (second, 1)
+    assert len([p for p in tmp_path.iterdir() if ".broken." in p.name]) == 1
+
+
+def test_cache_hit_with_unreadable_pyvenv_cfg_rebuilds(tmp_path: Path):
+    first = _compose_once(tmp_path)
+    (first / "pyvenv.cfg").unlink()
+    _second, locks = _compose_again(tmp_path)
+    assert locks == 1

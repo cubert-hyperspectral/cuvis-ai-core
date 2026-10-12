@@ -146,7 +146,7 @@ stored Hugging Face login is never sent to a mirror. Library methods never print
 |---|---|---|
 | `list [--json]` | the registry | table, or the `model_list` object |
 | `status [NAME...] [--json] [--verify] [--cache-dir]` | what the cache holds; never downloads | table, or the `status` object |
-| `download NAME... [--json \| --progress-json] [--force] [--cache-dir] [--out]` | provision, verified | one absolute path per line, `status` rows with `downloaded`, or progress events |
+| `download NAME... [--json \| --progress-json] [--force] [--cache-dir] [--out]` | provision, verified; a failed name does not stop the next | one absolute path per line, `status` rows with `downloaded` (and `reason` on a failed name), or progress events |
 | `download --repo-id R --filename F [--revision] [--token]` | the escape hatch for private or custom repos; forwards the token | the path |
 | `export --to DIR [NAME...]` | copy present weights into `DIR` in the cache layout plus `cuvis-model-weights.json` (`DIR` is itself a valid `HF_HUB_CACHE`); merges with an earlier export in the same folder | `export` object or lines |
 | `import DIR [NAME...]` | copy from an export folder: staged under `<cache>/.import-<uuid>/`, every file size- and sha-checked, then renamed into place; any mismatch leaves the cache unchanged | paths, `status` rows with `imported`, or progress events |
@@ -154,7 +154,11 @@ stored Hugging Face login is never sent to a mirror. Library methods never print
 | `schema NAME` | print a shipped JSON Schema | the schema |
 
 Every subcommand takes `--plugins-dir DIR` (repeatable, earlier wins). Exit codes: 0 ok, 1 an
-operation failed (`error: <cause>` is the last stderr line), 2 a usage error. Everything human goes
+operation failed (`error: <cause>` is the last stderr line), 2 a usage error. `download NAME...`
+with several names continues past a failed name: every name gets its terminal event or line, and
+the process then exits 1 with `error: <n> of <m> failed: <name> (<cause>); ...` as the last stderr
+line, so an installer that hands over its whole selection loses one weight to a connection blip,
+not the ones after it. Everything human goes
 to stderr. Writing operations hold `<root>/.cuvis-cache.lock`; a second instance waits ("another
 operation is using the cache; waiting...", and a `waiting` event in progress mode).
 
@@ -175,8 +179,10 @@ Error sentences a consumer can show verbatim: `'<repo>' was not found or is not 
 mis-pin)`, `'<repo>' is gated on Hugging Face; a Cubert mirror must be public and ungated`, `'<repo>'
 has no file '<f>' at revision <r>`, `'<name>' is not cached and the network is unavailable
 (HF_HUB_OFFLINE=...)`, `Hugging Face is rate-limiting or unavailable (HTTP 429); retry in a few
-minutes`, `sha256 mismatch for <path> ...; re-run with --force to re-download`, `another operation
-is using the cache (<lock>)`.
+minutes`, `the connection to huggingface.co was refused or reset; check proxy or VPN and retry`
+(after one silent retry: huggingface_hub 1.0 to 1.26 reported such a failure as `Cannot send a
+request, as the client has been closed`), `sha256 mismatch for <path> ...; re-run with --force to
+re-download`, `another operation is using the cache (<lock>)`.
 
 ## `weights.index.json`
 
