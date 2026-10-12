@@ -56,11 +56,14 @@ from cuvis_ai_core.orchestrator.env_config import number_from_env
 from cuvis_ai_core.orchestrator.model_cache import model_cache_env
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
 
-# Child-runtime startup deadlines (seconds). The two *_TIMEOUT defaults are
-# overridable via env so a slow cold start — e.g. the first CUDA-torch import in
-# a freshly composed venv on Windows — does not trip them before the child's gRPC
-# server comes up. Env unset / non-positive / invalid falls back to the default.
-_ENDPOINT_POLL_TIMEOUT_SECONDS = 120.0
+# Child-runtime startup deadlines (seconds), both overridable via env (unset,
+# non-positive or invalid falls back to the default). The endpoint deadline
+# covers the child's imports: the first CUDA-torch import in a freshly composed
+# venv on Windows took 118 s on a laptop whose disk was also serving a cache
+# eviction, so the default is 600 s. A child that exits is reported the moment
+# it does, whatever the deadline. The health deadline starts once the child
+# listens and stays at 120 s.
+_ENDPOINT_POLL_TIMEOUT_SECONDS = 600.0
 _ENDPOINT_POLL_TIMEOUT_ENV = "CUVIS_RUNTIME_ENDPOINT_TIMEOUT_SECONDS"
 _ENDPOINT_POLL_INTERVAL_SECONDS = 0.05
 _HEALTH_POLL_TIMEOUT_SECONDS = 120.0
@@ -571,7 +574,8 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         timeout_s = _timeout_from_env(
             _ENDPOINT_POLL_TIMEOUT_ENV, _ENDPOINT_POLL_TIMEOUT_SECONDS
         )
-        deadline = time.monotonic() + timeout_s
+        started = time.monotonic()
+        deadline = started + timeout_s
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 stderr = _read_stderr_log(stderr_log)
@@ -582,6 +586,10 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
             if endpoint_file.exists():
                 text = endpoint_file.read_text(encoding="utf-8").strip()
                 if text:
+                    logger.info(
+                        "Child runtime reported its endpoint after "
+                        f"{time.monotonic() - started:.1f}s"
+                    )
                     return text
             time.sleep(_ENDPOINT_POLL_INTERVAL_SECONDS)
         process.terminate()

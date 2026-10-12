@@ -299,3 +299,128 @@ def test_prune_decodes_stderr_as_utf8(pinned_uv):
         uv_cache_prune(busy_grace=0.01)
     assert popen.call_args.kwargs["encoding"] == "utf-8"
     assert popen.call_args.kwargs["errors"] == "replace"
+
+
+# ---------------------------------------------------------------------------
+# Timeout ceiling: CUVIS_UV_TIMEOUT_SECONDS, default 1500 s per invocation
+# ---------------------------------------------------------------------------
+
+
+def test_uv_lock_and_sync_default_timeout_is_1500(pinned_uv, monkeypatch):
+    monkeypatch.delenv("CUVIS_UV_TIMEOUT_SECONDS", raising=False)
+    with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run") as run:
+        uv_lock(Path("proj"))
+        uv_sync(Path("proj"))
+    assert [c.kwargs["timeout"] for c in run.call_args_list] == [1500, 1500]
+
+
+def test_uv_timeout_read_from_env_at_call_time(pinned_uv, monkeypatch):
+    monkeypatch.setenv("CUVIS_UV_TIMEOUT_SECONDS", "42.5")
+    with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run") as run:
+        uv_lock(Path("proj"))
+        uv_sync(Path("proj"))
+    assert [c.kwargs["timeout"] for c in run.call_args_list] == [42.5, 42.5]
+
+
+def test_uv_timeout_env_zero_falls_back_to_default(pinned_uv, monkeypatch):
+    monkeypatch.setenv("CUVIS_UV_TIMEOUT_SECONDS", "0")
+    with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run") as run:
+        uv_sync(Path("proj"))
+    assert run.call_args.kwargs["timeout"] == 1500
+
+
+def test_explicit_timeout_beats_the_env_knob(pinned_uv, monkeypatch):
+    monkeypatch.setenv("CUVIS_UV_TIMEOUT_SECONDS", "42.5")
+    with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run") as run:
+        uv_sync(Path("proj"), timeout=7)
+    assert run.call_args.kwargs["timeout"] == 7
+
+
+def test_uv_sync_logs_elapsed_seconds(pinned_uv):
+    from loguru import logger
+
+    messages: list[str] = []
+    handler = logger.add(
+        lambda msg: messages.append(msg.record["message"]), level="INFO"
+    )
+    try:
+        with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run"):
+            uv_sync(Path("proj"))
+    finally:
+        logger.remove(handler)
+    assert any("uv sync" in m and "finished after" in m for m in messages)
+
+
+def test_uv_timeout_message_names_the_knob(pinned_uv):
+    err = subprocess.TimeoutExpired(cmd=["uv", "sync"], timeout=5)
+    with patch("cuvis_ai_core.orchestrator.uv_runner.subprocess.run", side_effect=err):
+        with pytest.raises(UvRunnerError) as excinfo:
+            uv_sync(Path("proj"), timeout=5)
+    assert "timed out after 5s" in str(excinfo.value)
+    assert "CUVIS_UV_TIMEOUT_SECONDS" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Prune at a low I/O priority (the deleter runs it behind a cold child start)
+# ---------------------------------------------------------------------------
+
+
+def test_prune_low_priority_lowers_the_child_io_priority(pinned_uv, monkeypatch):
+    from cuvis_ai_core.orchestrator import uv_runner as uv_runner_mod
+
+    seen: list[int] = []
+    monkeypatch.setattr(uv_runner_mod, "_lower_io_priority", seen.append)
+    fake = _FakePrune(stderr="Removed 3 files\n")
+    fake.pid = 4242
+    with _patched_popen(fake):
+        uv_cache_prune(busy_grace=0.01, low_priority=True)
+    assert seen == [4242]
+
+
+def test_prune_keeps_normal_priority_by_default(pinned_uv, monkeypatch):
+    from cuvis_ai_core.orchestrator import uv_runner as uv_runner_mod
+
+    seen: list[int] = []
+    monkeypatch.setattr(uv_runner_mod, "_lower_io_priority", seen.append)
+    fake = _FakePrune(stderr="Removed 3 files\n")
+    fake.pid = 4242
+    with _patched_popen(fake):
+        uv_cache_prune(busy_grace=0.01)
+    assert seen == []
+
+
+def test_lower_io_priority_asks_psutil_for_the_lowest_class(monkeypatch):
+    import psutil
+
+    from cuvis_ai_core.orchestrator import uv_runner as uv_runner_mod
+
+    calls: list[tuple] = []
+
+    class _Proc:
+        def __init__(self, pid):
+            calls.append(("process", pid))
+
+        def ionice(self, *args):
+            calls.append(("ionice", args))
+
+    monkeypatch.setattr(uv_runner_mod.psutil, "Process", _Proc)
+    uv_runner_mod._lower_io_priority(7)
+    lowest = getattr(
+        psutil, "IOPRIO_LOW" if sys.platform == "win32" else "IOPRIO_CLASS_IDLE", None
+    )
+    if lowest is None:
+        pytest.skip("psutil has no I/O priority class on this platform")
+    assert calls == [("process", 7), ("ionice", (lowest,))]
+
+
+def test_lower_io_priority_swallows_psutil_errors(monkeypatch):
+    import psutil
+
+    from cuvis_ai_core.orchestrator import uv_runner as uv_runner_mod
+
+    class _Gone:
+        def __init__(self, pid):
+            raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(uv_runner_mod.psutil, "Process", _Gone)
+    uv_runner_mod._lower_io_priority(7)

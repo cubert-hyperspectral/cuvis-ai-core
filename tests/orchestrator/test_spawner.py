@@ -634,3 +634,32 @@ def test_wait_for_health_times_out_when_never_serving(monkeypatch):
     monkeypatch.setattr(handle, "stub", lambda: stub)
     with pytest.raises(SpawnError, match="did not become SERVING"):
         spawner._wait_for_health(handle)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint deadline: 600 s by default, the seconds until the file appeared logged
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_deadline_default_is_600_seconds():
+    from cuvis_ai_core.orchestrator import spawner as spawner_mod
+
+    assert spawner_mod._ENDPOINT_POLL_TIMEOUT_SECONDS == 600.0
+
+
+def test_wait_for_endpoint_logs_the_seconds_until_the_file_appeared(tmp_path: Path):
+    from loguru import logger
+
+    spawner = LocalChildRuntimeSpawner()
+    endpoint = tmp_path / "endpoint.txt"
+    endpoint.write_text("127.0.0.1:5555", encoding="utf-8")
+    proc = _fake_proc(poll=None)
+    messages: list[str] = []
+    handler = logger.add(
+        lambda msg: messages.append(msg.record["message"]), level="INFO"
+    )
+    try:
+        assert spawner._wait_for_endpoint(endpoint, proc) == "127.0.0.1:5555"
+    finally:
+        logger.remove(handler)
+    assert any("endpoint after" in m for m in messages)

@@ -9,13 +9,24 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
+import psutil
 from loguru import logger
 
-_DEFAULT_TIMEOUT = 600  # uv lock + sync of HF + torch can take minutes
+from cuvis_ai_core.orchestrator.env_config import number_from_env
+
+# Ceiling for one uv invocation. A cold compose downloads torch and the CUDA
+# wheels (about 5 GB) when the uv cache is empty; uv's own read timeout
+# (UV_HTTP_TIMEOUT, 30 s) fails a stalled transfer long before this, so the
+# ceiling is a backstop, not the progress check. CUVIS_UV_TIMEOUT_SECONDS
+# raises or lowers it for ``uv lock`` and ``uv sync``; one provisioning call
+# budgets lock + sync + the spawner's endpoint and health deadlines.
+_DEFAULT_TIMEOUT = 1500
+_TIMEOUT_ENV = "CUVIS_UV_TIMEOUT_SECONDS"
 # uv announces a held cache lock on stderr the moment it starts waiting and
 # prints nothing more until it acquires the lock. A prune whose most recent
 # stderr line is still that announcement after this many seconds is abandoned
@@ -64,29 +75,51 @@ def _uv_executable() -> str:
     )
 
 
-def uv_lock(project_dir: Path, *, timeout: int = _DEFAULT_TIMEOUT) -> None:
+def _resolved_timeout(timeout: float | None) -> float:
+    """An explicit ``timeout`` wins; otherwise the env knob, else the default."""
+    if timeout is not None:
+        return timeout
+    return number_from_env(_TIMEOUT_ENV, _DEFAULT_TIMEOUT, cast=float, allow_zero=False)
+
+
+def uv_lock(project_dir: Path, *, timeout: float | None = None) -> None:
     """Run ``uv lock --project <project_dir>``.
 
     Writes ``uv.lock`` next to the runtime ``pyproject.toml``. A
     repeat invocation on the same project is a no-op once the lock
-    exists.
+    exists. ``timeout`` defaults to ``CUVIS_UV_TIMEOUT_SECONDS``.
     """
-    _run_uv([_uv_executable(), "lock", "--project", str(project_dir)], timeout=timeout)
+    _run_uv(
+        [_uv_executable(), "lock", "--project", str(project_dir)],
+        timeout=_resolved_timeout(timeout),
+    )
 
 
-def uv_sync(project_dir: Path, *, timeout: int = _DEFAULT_TIMEOUT) -> None:
+def uv_sync(project_dir: Path, *, timeout: float | None = None) -> None:
     """Run ``uv sync --project <project_dir>``.
 
     Materialises ``<project_dir>/.venv`` against the lockfile uv
-    produced in :func:`uv_lock`.
+    produced in :func:`uv_lock`. ``timeout`` defaults to
+    ``CUVIS_UV_TIMEOUT_SECONDS``.
     """
-    _run_uv([_uv_executable(), "sync", "--project", str(project_dir)], timeout=timeout)
+    _run_uv(
+        [_uv_executable(), "sync", "--project", str(project_dir)],
+        timeout=_resolved_timeout(timeout),
+    )
 
 
 def uv_cache_prune(
-    *, timeout: int = _DEFAULT_TIMEOUT, busy_grace: float = _PRUNE_BUSY_GRACE_SECONDS
+    *,
+    timeout: int = _DEFAULT_TIMEOUT,
+    busy_grace: float = _PRUNE_BUSY_GRACE_SECONDS,
+    low_priority: bool = False,
 ) -> None:
     """Run ``uv cache prune`` to drop unreferenced blobs from uv's own cache.
+
+    ``low_priority`` runs the prune at the lowest I/O priority the platform
+    offers: the deleter asks for it, because a prune that walks a multi-GB
+    cache behind a child's cold start must not take the disk from the
+    child's imports.
 
     Under uv's default hardlink mode an evicted venv frees little disk
     until uv's cache releases its surviving links, so the eviction
@@ -127,6 +160,8 @@ def uv_cache_prune(
             f"Command: {' '.join(cmd)}\n"
             f"PATH={os.environ.get('PATH', '')}"
         ) from exc
+    if low_priority:
+        _lower_io_priority(proc.pid)
 
     stderr_lines: list[str] = []
     pump = threading.Thread(
@@ -161,6 +196,24 @@ def uv_cache_prune(
         )
 
 
+def _lower_io_priority(pid: int) -> None:
+    """Best effort: move ``pid`` to the lowest I/O priority class of the platform.
+
+    Windows has ``IOPRIO_LOW`` (``IOPRIO_VERYLOW`` is reserved for the
+    system); Linux has the idle class, which gets the disk only when nobody
+    else wants it. Any failure (the process already exited, an unsupported
+    platform) leaves the priority as it is.
+    """
+    try:
+        proc = psutil.Process(pid)
+        if sys.platform == "win32":
+            proc.ionice(psutil.IOPRIO_LOW)
+        elif hasattr(psutil, "IOPRIO_CLASS_IDLE"):
+            proc.ionice(psutil.IOPRIO_CLASS_IDLE)
+    except (psutil.Error, OSError, AttributeError, ValueError) as exc:
+        logger.debug(f"uv cache prune keeps its I/O priority: {exc}")
+
+
 def _pump_lines(stream, sink: list[str]) -> None:
     """Drain ``stream`` into ``sink`` so the child never blocks on a full pipe."""
     with stream:
@@ -168,9 +221,10 @@ def _pump_lines(stream, sink: list[str]) -> None:
             sink.append(line)
 
 
-def _run_uv(cmd: list[str], *, timeout: int) -> None:
+def _run_uv(cmd: list[str], *, timeout: float) -> None:
     """Execute one uv command, mapping every failure to ``UvRunnerError``."""
     logger.debug(f"uv invocation: {' '.join(cmd)}")
+    started = time.monotonic()
     try:
         subprocess.run(
             cmd,
@@ -190,7 +244,8 @@ def _run_uv(cmd: list[str], *, timeout: int) -> None:
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise UvRunnerError(
-            f"uv timed out after {timeout}s. Command: {' '.join(cmd)}"
+            f"uv timed out after {timeout:g}s ({_TIMEOUT_ENV} raises the ceiling). "
+            f"Command: {' '.join(cmd)}"
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise UvRunnerError(
@@ -198,3 +253,4 @@ def _run_uv(cmd: list[str], *, timeout: int) -> None:
             f"Command: {' '.join(cmd)}\n"
             f"stderr: {exc.stderr.strip() if exc.stderr else '<empty>'}"
         ) from exc
+    logger.info(f"uv {cmd[1]} finished after {time.monotonic() - started:.0f}s")
