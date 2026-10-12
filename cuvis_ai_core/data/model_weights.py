@@ -84,6 +84,11 @@ from cuvis_ai_core.data._provisioning import (
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
+# huggingface_hub 1.0 to 1.26 closes its shared httpx client inside its own
+# connection-error retry loop and then retries on the closed object, so a
+# refused or reset connection surfaces as this RuntimeError (fixed in 1.27.0).
+_CLOSED_CLIENT_MARKER = "client has been closed"
+
 HF_ORG = "cubert-gmbh"
 """Hugging Face organisation that hosts every registry entry."""
 
@@ -916,7 +921,8 @@ class ModelWeights:
             )
             try:
                 fetched = Path(
-                    hf_hub_download(
+                    cls._hub_download(
+                        hf_hub_download,
                         repo_id=entry.repo_id,
                         filename=fname,
                         revision=entry.revision,
@@ -977,7 +983,8 @@ class ModelWeights:
         )
         try:
             resolved = Path(
-                hf_hub_download(
+                cls._hub_download(
+                    hf_hub_download,
                     repo_id=repo_id,
                     filename=filename,
                     revision=revision,
@@ -1371,6 +1378,24 @@ class ModelWeights:
             "RevisionNotFoundError": RevisionNotFoundError,
         }
 
+    @staticmethod
+    def _hub_download(hf_hub_download: Callable[..., str], **kwargs: Any) -> str:
+        """``hf_hub_download`` with one retry for the hub's closed-client error.
+
+        The hub's retry loop can close its own client (see
+        ``_CLOSED_CLIENT_MARKER``); the next call builds a fresh one, so one
+        retry turns a single connection blip into a download. A second
+        failure reaches :meth:`_map_hf_error`, which names the connection as
+        the cause instead of the client.
+        """
+        try:
+            return hf_hub_download(**kwargs)
+        except RuntimeError as exc:
+            if _CLOSED_CLIENT_MARKER not in str(exc):
+                raise
+            log("Hub client closed by its own connection retry; trying once more")
+            return hf_hub_download(**kwargs)
+
     @classmethod
     def _map_hf_error(
         cls,
@@ -1435,6 +1460,12 @@ class ModelWeights:
                 f"Download of '{repo_id}/{filename}' failed"
                 + (f" (HTTP {status})" if status is not None else "")
                 + f": {exc}"
+            )
+        if isinstance(exc, RuntimeError) and _CLOSED_CLIENT_MARKER in str(exc):
+            return ModelDownloadError(
+                f"Download of '{repo_id}/{filename}' failed: the connection to "
+                "huggingface.co was refused or reset; check proxy or VPN and retry "
+                f"(hub client: {exc})"
             )
         return ModelDownloadError(f"Download of '{repo_id}/{filename}' failed: {exc}")
 

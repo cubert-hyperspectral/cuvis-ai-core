@@ -1323,3 +1323,135 @@ def test_remove_deletes_a_symlinked_snapshot_entry_and_its_blob(tmp_path, regist
     assert not primary.exists() and not primary.is_symlink()
     assert not blob.exists()
     assert not repo_dir.exists()  # pruned once empty
+
+
+# ---------------------------------------------------------------------------
+# Continue past a failed name (CLI) and the hub's closed-client retry
+# ---------------------------------------------------------------------------
+
+CLOSED_CLIENT = "Cannot send a request, as the client has been closed."
+
+
+def _fails_for(fake, failing: str, exc: BaseException):
+    """A hub stand-in that raises ``exc`` for ``filename`` and delegates otherwise."""
+
+    def _hub(repo_id, filename, **kwargs):
+        if Path(filename).name == failing:
+            raise exc
+        return fake(repo_id, filename, **kwargs)
+
+    return _hub
+
+
+def _closed_once(fake, attempts: list[str]):
+    """A hub stand-in whose first call raises the closed-client error."""
+
+    def _hub(repo_id, filename, **kwargs):
+        attempts.append(filename)
+        if len(attempts) == 1:
+            raise RuntimeError(CLOSED_CLIENT)
+        return fake(repo_id, filename, **kwargs)
+
+    return _hub
+
+
+def test_cli_download_continues_past_a_failed_name(cli_env, fake_hub, monkeypatch):
+    utils = pytest.importorskip("huggingface_hub.utils")
+    fake = fake_hub()
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download",
+        _fails_for(fake, "sam3.pt", _hub_error(utils.HfHubHTTPError, 429)),
+    )
+    result = cli_env.runner.invoke(
+        cli_env.cli,
+        ["download", "sam3", "efficienttam_s", "--progress-json", *cli_env.common],
+    )
+    assert result.exit_code == 1
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    terminal = [
+        (e["event"], e["name"]) for e in events if e["event"] in ("error", "done")
+    ]
+    assert terminal == [("error", "sam3"), ("done", "efficienttam_s")]
+    summary = result.stderr.rstrip().splitlines()[-1]
+    assert summary.startswith("error: 1 of 2 failed: sam3 (") and "HTTP 429" in summary
+
+
+def test_cli_download_all_names_failing_reports_the_count(cli_env, fake_hub):
+    utils = pytest.importorskip("huggingface_hub.utils")
+    fake_hub(fail=_hub_error(utils.HfHubHTTPError, 429))
+    result = cli_env.runner.invoke(
+        cli_env.cli, ["download", "sam3", "efficienttam_s", *cli_env.common]
+    )
+    assert result.exit_code == 1
+    summary = result.stderr.rstrip().splitlines()[-1]
+    assert summary.startswith("error: 2 of 2 failed: sam3 (")
+    assert "efficienttam_s (" in summary
+
+
+def test_cli_download_json_reports_each_name_after_a_failure(
+    cli_env, fake_hub, monkeypatch
+):
+    utils = pytest.importorskip("huggingface_hub.utils")
+    fake = fake_hub()
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download",
+        _fails_for(fake, "sam3.pt", _hub_error(utils.HfHubHTTPError, 429)),
+    )
+    result = cli_env.runner.invoke(
+        cli_env.cli, ["download", "sam3", "efficienttam_s", "--json", *cli_env.common]
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    _validate("status", payload)
+    rows = {m["name"]: m for m in payload["models"]}
+    assert rows["sam3"]["downloaded"] is False
+    assert "HTTP 429" in rows["sam3"]["reason"]
+    assert rows["efficienttam_s"]["downloaded"] is True
+    assert "reason" not in rows["efficienttam_s"]
+
+
+def test_download_retries_once_when_the_hub_client_was_closed(
+    tmp_path, registry, fake_hub, monkeypatch
+):
+    attempts: list[str] = []
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download", _closed_once(fake_hub(), attempts)
+    )
+    path = ModelWeights.download("sam3", tmp_path)
+    assert path == _snapshot_dir(tmp_path, registry["sam3"]) / "sam3.pt"
+    assert attempts[:2] == ["sam3.pt", "sam3.pt"]
+
+
+def test_download_maps_a_persistent_closed_client_to_the_connection_sentence(
+    tmp_path, registry, fake_hub
+):
+    fake = fake_hub(fail=RuntimeError(CLOSED_CLIENT))
+    with pytest.raises(
+        ModelDownloadError, match="connection to huggingface.co was refused or reset"
+    ):
+        ModelWeights.download("sam3", tmp_path)
+    assert len(fake.calls) == 2
+
+
+def test_custom_repo_download_retries_once_when_the_hub_client_was_closed(
+    cli_env, fake_hub, monkeypatch
+):
+    attempts: list[str] = []
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download",
+        _closed_once(fake_hub(content={"f.bin": b"f"}), attempts),
+    )
+    result = cli_env.runner.invoke(
+        cli_env.cli,
+        [
+            "download",
+            "--repo-id",
+            "x/y",
+            "--filename",
+            "f.bin",
+            "--json",
+            *cli_env.common,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert attempts == ["f.bin", "f.bin"]

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cuvis.ai/schemas/download-model/status.schema.json",
   "title": "download-model status / download / import --json",
-  "description": "Rows are the SPEC of model_list.schema.json plus the STATUS fields; download adds `downloaded`, import adds `imported` (and `reason` for skipped rows).",
+  "description": "Rows are the SPEC of model_list.schema.json plus the STATUS fields; download adds `downloaded` (and `reason` for failed rows), import adds `imported` (and `reason` for skipped rows).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "cache_dir", "models"],
