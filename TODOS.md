@@ -18,13 +18,15 @@
 - **What:** Both plugins import `huggingface_hub` and declare it without a version floor, so an
   environment that resolves them alone can land on 1.0 to 1.26, whose retry on a closed client
   reports a refused or reset connection as `Cannot send a request, as the client has been closed`
-  (fixed upstream in 1.27.0; this package floors `huggingface-hub>=1.27.0,<2` since 0.18.4).
-- **Why:** A composed child environment inherits core's floor, but a plugin installed on its own
-  (a notebook, the plugin's own tests) does not.
+  (fixed upstream in 1.27.0; this package's `hf` extra requires `huggingface-hub>=1.27.0,<3`).
+  cuvis-ai declares `huggingface-hub>=1.12.0`, also below the fix.
+- **Why:** Nothing carries core's floor to them: a composed child environment pins plain
+  `cuvis-ai-core` without the `hf` extra, and a plugin installed on its own (a notebook, the
+  plugin's own tests) never sees it.
 - **Pros:** One floor everywhere, and the dependency audit sees it.
-- **Cons:** Two small plugin releases.
-- **Context:** the `pyproject.toml` dependencies of `cuvis-ai-sam3` and `cuvis-ai-adaclip`;
-  `audit-plugin-deps --check plugins` is where a missing floor would show.
+- **Cons:** Two small plugin releases and a cuvis-ai floor bump.
+- **Context:** the `pyproject.toml` dependencies of `cuvis-ai-sam3`, `cuvis-ai-adaclip` and
+  `cuvis-ai`; `audit-plugin-deps --check plugins` is where a missing floor would show.
 - **Depends on / blocked by:** nothing.
 
 ## A run-cache eviction whose delete fails keeps a whole venv on disk for at least six hours
