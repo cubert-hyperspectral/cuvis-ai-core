@@ -474,6 +474,9 @@ def test_real_engine_built_once_and_run(monkeypatch, tmp_path, fp16, atol) -> No
     assert te.find_engine(loc, {"fingerprint": fp}) == path
     engine = te.TensorRTEngine(path, "cuda")
     assert tuple(engine.input_shape) == (1, 3, 16, 16)
+    assert engine.device.index is not None  # bound to its GPU, not to the current one
+    with pytest.raises(ValueError, match=r"\(1, 3, 16, 16\).*\(1, 3, 8, 8\)"):
+        engine(torch.rand(1, 3, 8, 8, device="cuda"))
     x = torch.rand(1, 3, 16, 16, device="cuda")
     out = engine(x)
     with torch.no_grad():

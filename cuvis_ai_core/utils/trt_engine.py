@@ -695,7 +695,8 @@ class TensorRTEngine:
     path : str or os.PathLike
         The engine file.
     device : torch.device or str
-        The CUDA device it runs on.
+        The CUDA device it runs on; ``"cuda"`` without an index is the current
+        device at construction, and the engine stays there.
     rebuild_hint : str
         Appended to the error when the engine does not load on this machine (for
         example the plugin's build command).
@@ -710,6 +711,8 @@ class TensorRTEngine:
         trt = import_tensorrt()
         self.path = str(path)
         self.device = torch.device(device)
+        if self.device.type == "cuda" and self.device.index is None:
+            self.device = torch.device("cuda", torch.cuda.current_device())
         dtypes = {
             getattr(trt, name): dtype
             for name, dtype in (
@@ -768,7 +771,18 @@ class TensorRTEngine:
         -------
         dict of str to Tensor
             The output buffers by output name (reused by the next call).
+
+        Raises
+        ------
+        ValueError
+            If ``x`` does not have the engine's input shape (TensorRT would read
+            past a smaller tensor).
         """
+        if tuple(x.shape) != self.input_shape:
+            raise ValueError(
+                f"{self.path} takes input of shape {self.input_shape}, "
+                f"got {tuple(x.shape)}."
+            )
         x = x.to(device=self.device, dtype=self.input_dtype).contiguous()
         self._context.set_tensor_address(self.input_name, x.data_ptr())
         current = torch.cuda.current_stream(self.device)
