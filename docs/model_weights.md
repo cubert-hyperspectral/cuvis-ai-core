@@ -194,11 +194,13 @@ it, so a stale pin cannot ship silently.
 
 ## Datasets
 
-`cuvis_ai_core.data.public_datasets.PublicDatasets` mirrors the same design for the six public
+`cuvis_ai_core.data.public_datasets.PublicDatasets` mirrors the same design for the public
 `cubert-gmbh` datasets: typed `DatasetSpec` rows pinned to a dataset revision with exact
 `size_bytes`, `file_count`, task `tags` (`Anomaly detection`, `Segmentation`, `Tracking`,
-`Statistical`) and `camera` (`XMR`, `X4 SWIR`). The only fact `status` reads is the marker
-`<data_dir>/<target_dir>/.cuvis-dataset.json`:
+`Statistical`) and `camera` (`XMR`, `X4 SWIR`). `size_bytes` and `file_count` count the
+dataset's own files at that revision, without the repository's `.gitattributes`; the `complete`
+marker counts every file the download wrote, so its totals are one file and a few hundred bytes
+higher. The only fact `status` reads is the marker `<data_dir>/<target_dir>/.cuvis-dataset.json`:
 
 | marker | state |
 |---|---|

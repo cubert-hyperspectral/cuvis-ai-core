@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (276 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
+- `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (275 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
 
 ## 0.18.4 - 2026-10-12
 
