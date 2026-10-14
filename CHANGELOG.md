@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (276 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
+
 ## 0.18.4 - 2026-10-12
 
 - The composer's ceiling for one `uv lock` or `uv sync` is `CUVIS_UV_TIMEOUT_SECONDS` (default 1500 s; it was a fixed 600 s). A cold compose on a machine whose uv cache holds neither torch nor the CUDA wheels downloads about 5 GB, which the old ceiling killed; uv's own 30 s read timeout fails a stalled transfer long before the ceiling, so the ceiling is a backstop. Each invocation logs `uv sync finished after N s`, and the timeout message names the knob.
@@ -9,7 +13,6 @@
 - `download-model download NAME...` continues past a failed name: every name gets its `done` or `error` event (or path line), the `--json` rows carry `downloaded: false` and a `reason` for the failed ones, and the process exits 1 at the end with `error: <n> of <m> failed: <name> (<cause>); ...` as the last stderr line. One connection blip no longer costs the installer every weight after the failed one. The explicit `--repo-id` form and `download_many` are unchanged.
 - One retry when the hub raises `Cannot send a request, as the client has been closed.`: huggingface_hub 1.0 to 1.26 close their shared client inside their own connection-error retry and then retry on it (fixed upstream in 1.27.0). A second failure is reported as `the connection to huggingface.co was refused or reset; check proxy or VPN and retry`. Requires `huggingface-hub>=1.27.0,<2` (lock: huggingface-hub 1.8.0 to 1.33.0 and hf-xet 1.4.2 to 1.7.0; typer, shellingham and annotated-doc leave the lock with the hub's old CLI dependency).
 
-- `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (276 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
 - Lentils registry rows re-pinned to the Hub revisions published on 2026-10-09: the three `dinomaly_lentils_*` trained pipelines at `3602a04e` (restamped `.pt` files, metadata name equals the folder, team author; rewritten yamls with a bare `plugins:` list) and the `Industrial_FOD_Lentils` dataset at `ce3a213e` (73 files, 56.99 GB: splits without `leakage_check`, one README per day instead of fifteen per recording, day-level COCO with real image records). The old revisions stay reachable on the Hub.
 
 ## 0.18.3 - 2026-10-09
