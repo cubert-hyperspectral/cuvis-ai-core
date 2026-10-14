@@ -79,9 +79,10 @@ dependencies = [
 [project.optional-dependencies]
 hf = [
     # 1.27.0 fixes the hub retry on a closed client after a connection error (1.0
-    # to 1.26 raised "Cannot send a request, as the client has been closed");
-    # 2.x swaps the HTTP stack (httpx2) and is untested here.
-    "huggingface-hub>=1.27.0,<2",
+    # to 1.26 raised "Cannot send a request, as the client has been closed").
+    # 2.x (httpx2, OS certificate store) passes the suite plus live download,
+    # offline-cache and dead-proxy checks against 1.33; 3.x is untested.
+    "huggingface-hub>=1.27.0,<3",
 ]
 
 dev = [
