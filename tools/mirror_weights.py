@@ -123,8 +123,6 @@ _SAM3_REV = "3c879f39826c281e95690f02c7821c4de09afae7"
 _ETAM_REV = "9bdd8ab585b19ef95f9c9ed847ac9478301890b4"
 _ETAM_REPO = "yunyangx/efficient-track-anything"
 _DINOMALY_REPO_DIR = Path("D:/code-repos/cuvis-ai-dinomaly/cuvis-ai-dinomaly")
-_STEERVIT_REPO = "JonaRuthardt/SteerViT"
-_STEERVIT_REV = "4468b69138d397fd329df00e80093387c26c77b2"
 _TIMM_DINOV2_REPO = "timm/vit_base_patch14_dinov2.lvd142m"
 _TIMM_DINOV2_REV = "4685c99dabffe5affac90bd99dbffd25801ae58d"
 _ROBERTA_REPO = "FacebookAI/roberta-large"
@@ -469,50 +467,6 @@ MIRRORS: dict[str, Mirror] = {
                     url="https://raw.githubusercontent.com/caoyunkang/AdaCLIP/main/LICENSE",
                 ),
                 sha256="58bf3cbb252fb8ee158f71b5eefa0f93e24632f587926659eb2638aa0df6c618",
-            ),
-        ),
-    ),
-    "steervit": Mirror(
-        repo="steervit",
-        title="SteerViT, DINOv2 base checkpoint",
-        plugin="cuvis-ai-steervit",
-        license_id="apache-2.0",
-        license_name="Apache-2.0",
-        upstream_md=(
-            f"[`{_STEERVIT_REPO}`](https://huggingface.co/{_STEERVIT_REPO}) at revision "
-            f"`{_STEERVIT_REV}` (code: <https://github.com/manugaurdl/SteerViT>)"
-        ),
-        base_model=_STEERVIT_REPO,
-        extra_tags=("steervit", "vision-transformer", "image-feature-extraction"),
-        license_text=_APACHE_TEXT.substitute(
-            origin="<https://www.apache.org/licenses/LICENSE-2.0.txt> (the upstream "
-            "Hugging Face repository declares `license: apache-2.0` for its checkpoints "
-            "and ships no LICENSE file; the SteerViT code on GitHub declares the MIT "
-            "License)"
-        ),
-        files=(
-            MirrorFile(
-                name="steervit_dinov2_base.pth",
-                source=Source(
-                    "hf",
-                    repo_id=_STEERVIT_REPO,
-                    filename="steervit_dinov2_base.pth",
-                    revision=_STEERVIT_REV,
-                ),
-                sha256="3ee74e5fba5cdbcbbdc35042b59fc44d54a68864724186c0ba4f5e2174892e3a",
-                registry_name="steervit_dinov2_base",
-                description=(
-                    "SteerViT checkpoint, DINOv2 base variant: the prompt connector, the "
-                    "gated cross-attention layers and the head that SteerViTExtractor "
-                    "loads"
-                ),
-            ),
-            MirrorFile(
-                name="LICENSE",
-                source=Source(
-                    "url", url="https://www.apache.org/licenses/LICENSE-2.0.txt"
-                ),
-                sha256="cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
             ),
         ),
     ),

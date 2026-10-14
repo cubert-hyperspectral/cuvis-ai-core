@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (275 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
-- `tools/mirror_weights.py` mirrors the three files `SteerViTExtractor` downloads when it is built: `cubert-gmbh/steervit` (the DINOv2-base checkpoint), `cubert-gmbh/vit_base_patch14_dinov2.lvd142m` (timm's trunk with its `config.json`) and `cubert-gmbh/roberta-large` (model, config and tokenizer files only). Every file, the licence texts included, is pinned by sha256.
+- `tools/mirror_weights.py` mirrors the DINOv2 trunk and the text encoder that `SteerViTExtractor` downloads when it is built: `cubert-gmbh/vit_base_patch14_dinov2.lvd142m` (timm's trunk with its `config.json`) and `cubert-gmbh/roberta-large` (model, config and tokenizer files only). Every file, the licence texts included, is pinned by sha256.
 
 ## 0.18.4 - 2026-10-12
 
