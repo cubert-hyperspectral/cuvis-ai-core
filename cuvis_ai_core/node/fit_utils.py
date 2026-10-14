@@ -1,10 +1,10 @@
-"""Helpers for nodes that fit statistics in Phase 1 (``statistical_initialization``).
+"""Helpers for nodes that fit statistics in ``statistical_initialization``.
 
 - :func:`random_cap` is a seeded row cap that bounds the memory of a fit, the
   same subset for the same seed on every machine.
 - :func:`require_fitted` is the guard at the top of a fitted node's
-  ``forward``: a node that has neither run its Phase 1 nor received fitted
-  weights fails with one clear message instead of computing on its initial
+  ``forward``: a node that has neither run its statistical initialization nor
+  received fitted weights fails with one clear message instead of computing on its initial
   buffers.
 """
 
@@ -27,7 +27,8 @@ def random_cap(
     max_rows : int
         Largest number of rows to keep.
     generator : torch.Generator
-        Source of the permutation. It is drawn from only when rows are
+        A CPU generator (``torch.randperm`` draws on the CPU; the picked
+        indices then move to ``rows``' device). It is drawn from only when rows are
         dropped, so a fit that stays within the cap does not shift the
         generator's state for later draws.
 
@@ -44,7 +45,7 @@ def random_cap(
 
 
 def require_fitted(node: Node) -> None:
-    """Raise ``RuntimeError`` when a fitted node runs before Phase 1 or a weights load.
+    """Raise ``RuntimeError`` when a fitted node runs before its fit or a weights load.
 
     Parameters
     ----------
@@ -58,6 +59,6 @@ def require_fitted(node: Node) -> None:
     """
     if not node._statistically_initialized:
         raise RuntimeError(
-            f"{type(node).__name__} requires statistical_initialization() (Phase 1) "
-            "or loaded weights before forward()."
+            f"{type(node).__name__} requires statistical_initialization() or "
+            "loaded weights before forward()."
         )

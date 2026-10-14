@@ -94,8 +94,10 @@ trt = te.import_tensorrt("MyNode backend='tensorrt'")       # lazy: core has no 
 fp = te.file_fingerprint(checkpoint)                         # or te.tensor_fingerprint(state_dict, extra)
 name = te.engine_file_name("fp16", f"r{resolution}", trt=trt)
 loc = te.engine_location(name, "myplugin", fp, preferred_dir=f"{checkpoint}.trt")
-path = te.find_engine(loc, {"checkpoint_md5": te.cached_file_md5(checkpoint)}) or te.build_engine_once(
-    loc, name, build=export_and_compile, command="python -m my_plugin.trt_engine build ...")
+expected = {"checkpoint_md5": te.cached_file_md5(checkpoint)}  # checked again under the lock
+path = te.find_engine(loc, expected) or te.build_engine_once(
+    loc, name, build=export_and_compile, command="python -m my_plugin.trt_engine build ...",
+    expected=expected)
 engine = te.TensorRTEngine(path, "cuda")
 ```
 

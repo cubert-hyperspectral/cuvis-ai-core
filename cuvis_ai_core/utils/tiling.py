@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from types import EllipsisType
 
 import torch
 import torch.nn.functional as F
@@ -29,7 +30,7 @@ from torch import Tensor
 
 def _pad_hw_centered(
     x: Tensor, target_h: int, target_w: int
-) -> tuple[Tensor, tuple[slice, ...]]:
+) -> tuple[Tensor, tuple[EllipsisType, slice, slice]]:
     """Center-pad the last two dims of ``x`` with zeros to ``(target_h, target_w)``.
 
     Returns the padded tensor and the slices that revert an output of the padded
@@ -48,7 +49,7 @@ def _pad_hw_centered(
 
 def pad_hw_to_multiple(
     x: Tensor, grid_hw: tuple[int, int]
-) -> tuple[Tensor, tuple[slice, ...]]:
+) -> tuple[Tensor, tuple[EllipsisType, slice, slice]]:
     """Center-pad H, W with zeros to the next multiple of ``grid_hw``."""
     gh, gw = grid_hw
     H, W = x.shape[-2], x.shape[-1]
@@ -57,7 +58,7 @@ def pad_hw_to_multiple(
 
 def pad_hw_to_min(
     x: Tensor, min_hw: tuple[int, int]
-) -> tuple[Tensor, tuple[slice, ...]]:
+) -> tuple[Tensor, tuple[EllipsisType, slice, slice]]:
     """Center-pad H, W with zeros so each is at least ``min_hw``."""
     H, W = x.shape[-2], x.shape[-1]
     return _pad_hw_centered(x, max(H, min_hw[0]), max(W, min_hw[1]))

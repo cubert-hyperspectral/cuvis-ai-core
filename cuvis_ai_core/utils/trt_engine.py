@@ -592,7 +592,10 @@ def build_engine_once(
     first and then loads its result. ``build`` returns the serialized engine and the
     plugin's part of the build record; this function adds the engine name, the
     TensorRT, torch and GPU fields and the build time, and writes both with
-    :func:`write_engine_and_record`. Start and end are logged.
+    :func:`write_engine_and_record`. Start and end are logged. TensorRT builds for
+    the current CUDA device and the record names it, so a node on another GPU
+    calls this under ``torch.cuda.device(<its device>)``, the device its
+    :func:`engine_file_name` was given.
 
     Parameters
     ----------
