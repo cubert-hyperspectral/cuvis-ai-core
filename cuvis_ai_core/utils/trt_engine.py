@@ -518,9 +518,11 @@ def write_engine_and_record(
 ) -> None:
     """Write an engine and its build record so that neither is ever seen half-written.
 
-    Both files are written under temporary names in the target folder; then the
-    record and, last, the engine are moved into place. A visible engine always has
-    its record.
+    Both files are written under temporary names in the target folder; then an
+    engine from an earlier build is removed, and the record and, last, the engine
+    are moved into place. A visible engine always has its record, and a new record
+    is never seen next to the old engine: in between a reader finds no engine and
+    waits on the build lock.
 
     Parameters
     ----------
@@ -547,6 +549,7 @@ def write_engine_and_record(
             moves.append((tmp, Path(f"{engine_path}{suffix}")))
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
+        engine_path.unlink(missing_ok=True)  # a --force build replaces an engine
         for tmp, final in moves:  # the record first, the engine last
             os.replace(tmp, final)
     finally:

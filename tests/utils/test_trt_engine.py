@@ -399,6 +399,33 @@ def test_write_engine_and_record_is_one_unit(tmp_path) -> None:
     assert sorted(p.name for p in tmp_path.iterdir()) == ["e.engine", "e.engine.json"]
 
 
+def test_a_rewrite_never_pairs_a_new_record_with_the_old_engine(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "e.engine"
+    te.write_engine_and_record(path, b"old", {"fingerprint": "old"})
+    te.write_engine_and_record(path, b"new", {"fingerprint": "new"})  # a --force build
+    assert path.read_bytes() == b"new"
+    assert json.loads(Path(f"{path}.json").read_text()) == {"fingerprint": "new"}
+
+    real_replace = os.replace
+
+    def replace(src, dst):  # the record moves, the engine move fails
+        if not str(dst).endswith(".json"):
+            raise OSError("engine in use")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(te.os, "replace", replace)
+    with pytest.raises(OSError, match="engine in use"):
+        te.write_engine_and_record(path, b"newer", {"fingerprint": "newer"})
+    # no engine is left to pass the newer record's check; the next load builds again
+    assert not path.exists()
+    assert (
+        te.find_engine(te.EngineLocation((path,), ()), {"fingerprint": "newer"}) is None
+    )
+    assert _files(tmp_path) == ["e.engine.json"]
+
+
 @pytest.mark.parametrize(
     ("fp16", "tf32", "events", "info"),
     [
