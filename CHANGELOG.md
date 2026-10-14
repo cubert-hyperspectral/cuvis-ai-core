@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `Industrial_FOD_Walnuts` in the public dataset registry (`dataset download Industrial_FOD_Walnuts`): `cubert-gmbh/XMR_Industrial_Foreign_Object_Detection_Walnuts` at `8e9e8604` (275 files, 124.96 GB: 90 XMR recordings of walnut kernels and shell fragments with foreign objects, COCO masks for 7 classes, the foreign-object and shell segmentation splits). The fitted pipelines are the `cuvis-ai-patchcore` weight rows in `cubert-gmbh/Industrial_Foreign_Object_Detection_Walnuts`.
+
 ## 0.18.4 - 2026-10-12
 
 - The composer's ceiling for one `uv lock` or `uv sync` is `CUVIS_UV_TIMEOUT_SECONDS` (default 1500 s; it was a fixed 600 s). A cold compose on a machine whose uv cache holds neither torch nor the CUDA wheels downloads about 5 GB, which the old ceiling killed; uv's own 30 s read timeout fails a stalled transfer long before the ceiling, so the ceiling is a backstop. Each invocation logs `uv sync finished after N s`, and the timeout message names the knob.
