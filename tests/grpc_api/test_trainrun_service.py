@@ -132,10 +132,19 @@ def test_save_train_run_keeps_an_older_checkpoint_intact_and_names_it(
     def fail(*_args, **_kwargs):
         raise OSError("disk full")
 
+    real_replace = os.replace
+
+    def fail_weights_move(src, dst, *args, **kwargs):
+        # The yaml writes are staged through os.replace as well; only the
+        # checkpoint's move into place fails here.
+        if str(dst).endswith(".pt"):
+            raise OSError("disk full")
+        return real_replace(src, dst, *args, **kwargs)
+
     if failing == "torch.save":
         monkeypatch.setattr(torch, "save", fail)
     else:
-        monkeypatch.setattr(os, "replace", fail)
+        monkeypatch.setattr(os, "replace", fail_weights_move)
 
     ctx = Mock()
     resp = service.save_train_run(

@@ -1,4 +1,11 @@
-"""Custom PyTorch Lightning callbacks for streaming gRPC progress."""
+"""Custom PyTorch Lightning callbacks for streaming gRPC progress.
+
+``ProgressStreamCallback`` turns the fit into Train stream responses: per-batch losses,
+per-epoch metrics, and one typed :class:`~cuvis_ai_core.training.post_fit.TrainEvent` at
+each lifecycle hook a client switches on (fit start, validation end, epoch end, fit end).
+The post-fit steps after the last epoch report through the same event type from
+:class:`~cuvis_ai_core.training.post_fit.PostFitCallback`.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +15,17 @@ from typing import Any
 
 from pytorch_lightning import Callback, LightningModule, Trainer
 
+from cuvis_ai_core.training.calibration import calibration_pending
+from cuvis_ai_core.training.post_fit import TrainEvent, TrainHook
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
+
+ProgressHandler = Callable[
+    [Context, dict[str, float], dict[str, float], str, "TrainEvent | None"], None
+]
+"""``(context, losses, metrics, status, event)``: one Train stream response."""
+
+_STAGE_PREFIXES = ("train", "val", "test")
 
 
 class StopTrainingCallback(Callback):
@@ -54,21 +70,44 @@ class StopTrainingCallback(Callback):
 
 
 class ProgressStreamCallback(Callback):
-    """Callback that forwards training progress to a handler function."""
+    """Callback that forwards training progress to a handler function.
 
-    def __init__(
-        self,
-        progress_handler: Callable[
-            [Context, dict[str, float], dict[str, float], str], None
-        ],
-    ) -> None:  # noqa: E501
+    The handler receives the context, the losses, the metrics, the status string
+    and the lifecycle event of the emission (``None`` for the per-batch
+    emissions). The validation hooks stay quiet during Lightning's sanity check,
+    so no sanity-check value ever reaches a chip.
+    """
+
+    def __init__(self, progress_handler: ProgressHandler) -> None:
         super().__init__()
         self.progress_handler = progress_handler
         self._current_epoch = 0
         self._current_batch = 0
         self._global_step = 0
 
+    @property
+    def last_epoch(self) -> int:
+        """The epoch of the last emission; the post-fit events keep it."""
+        return self._current_epoch
+
+    @property
+    def last_global_step(self) -> int:
+        """The global step of the last emission; the post-fit events keep it."""
+        return self._global_step
+
     # ----------------------------- Lifecycle hooks -----------------------------
+    def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Announce the fit and whether a decider still waits for its calibration."""
+        pipeline = getattr(pl_module, "pipeline", None)
+        pending = calibration_pending(pipeline) if pipeline is not None else False
+        self._emit_progress(
+            ExecutionStage.TRAIN,
+            {},
+            {},
+            "running",
+            TrainEvent(TrainHook.FIT_START, calibration_pending=pending),
+        )
+
     def on_train_epoch_start(
         self, trainer: Trainer, pl_module: LightningModule
     ) -> None:
@@ -92,6 +131,8 @@ class ProgressStreamCallback(Callback):
     def on_validation_epoch_start(
         self, trainer: Trainer, pl_module: LightningModule
     ) -> None:
+        if getattr(trainer, "sanity_checking", False):
+            return
         self._emit_progress(ExecutionStage.VAL, {}, {}, "running")
 
     def on_validation_batch_end(
@@ -102,6 +143,8 @@ class ProgressStreamCallback(Callback):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        if getattr(trainer, "sanity_checking", False):
+            return
         losses = self._extract_losses(outputs)
         metrics = self._extract_metrics(trainer, "val")
         self._emit_progress(ExecutionStage.VAL, losses, metrics, "running")
@@ -112,15 +155,29 @@ class ProgressStreamCallback(Callback):
         # Epoch-aggregated emission INCLUDING losses: per-batch emissions carry
         # only that batch's loss, and _extract_metrics deliberately skips loss
         # keys, so without this hook an epoch-level val_loss never reaches the
-        # stream — a live loss curve needs the train and val loss per epoch.
+        # stream. A live loss curve needs the train and val loss per epoch.
+        if getattr(trainer, "sanity_checking", False):
+            return
         losses = self._extract_epoch_losses(trainer)
         metrics = self._extract_metrics(trainer, "val")
-        self._emit_progress(ExecutionStage.VAL, losses, metrics, "running")
+        self._emit_progress(
+            ExecutionStage.VAL,
+            losses,
+            metrics,
+            "running",
+            TrainEvent(TrainHook.VALIDATION_END),
+        )
 
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
         losses = self._extract_epoch_losses(trainer)
         metrics = self._extract_metrics(trainer, "train")
-        self._emit_progress(ExecutionStage.TRAIN, losses, metrics, "running")
+        self._emit_progress(
+            ExecutionStage.TRAIN,
+            losses,
+            metrics,
+            "running",
+            TrainEvent(TrainHook.EPOCH_END),
+        )
 
     def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         self._emit_progress(ExecutionStage.TEST, {}, {}, "running")
@@ -138,7 +195,10 @@ class ProgressStreamCallback(Callback):
         self._emit_progress(ExecutionStage.TEST, losses, metrics, "running")
 
     def on_train_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        self._emit_progress(ExecutionStage.TRAIN, {}, {}, "complete")
+        """The last epoch is done; the post-fit steps follow, so the status stays running."""
+        self._emit_progress(
+            ExecutionStage.TRAIN, {}, {}, "running", TrainEvent(TrainHook.FIT_END)
+        )
 
     # ----------------------------- Helpers -----------------------------
     def _extract_losses(self, outputs: Any) -> dict[str, float]:
@@ -181,19 +241,24 @@ class ProgressStreamCallback(Callback):
         return losses
 
     def _extract_metrics(self, trainer: Trainer, stage: str) -> dict[str, float]:
-        """Extract metrics from trainer.callback_metrics."""
+        """Extract metrics from trainer.callback_metrics.
+
+        Every stage prefix (``train``, ``val``, ``test`` with ``_`` or ``/``) is
+        stripped, not only the current stage's: the metrics map names the metric,
+        the context names the stage.
+        """
         metrics: dict[str, float] = {}
         callback_metrics = getattr(trainer, "callback_metrics", {}) or {}
 
         for key, value in callback_metrics.items():
-            key_lower = key.lower()
-            if "loss" in key_lower:
+            if "loss" in key.lower():
                 continue
 
-            if stage in key_lower:
-                metric_name = key.replace(f"{stage}_", "").replace(f"{stage}/", "")
-            else:
-                metric_name = key
+            metric_name = key
+            for prefix in _STAGE_PREFIXES:
+                metric_name = metric_name.replace(f"{prefix}_", "").replace(
+                    f"{prefix}/", ""
+                )
 
             try:
                 metrics[metric_name] = float(value.item())
@@ -211,6 +276,7 @@ class ProgressStreamCallback(Callback):
         losses: dict[str, float],
         metrics: dict[str, float],
         status: str,
+        event: TrainEvent | None = None,
     ) -> None:
         context = Context(
             stage=stage,
@@ -218,7 +284,7 @@ class ProgressStreamCallback(Callback):
             batch_idx=self._current_batch,
             global_step=self._global_step,
         )
-        self.progress_handler(context, losses, metrics, status)
+        self.progress_handler(context, losses, metrics, status, event)
 
 
-__all__ = ["ProgressStreamCallback", "StopTrainingCallback"]
+__all__ = ["ProgressHandler", "ProgressStreamCallback", "StopTrainingCallback"]

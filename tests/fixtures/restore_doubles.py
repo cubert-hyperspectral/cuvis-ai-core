@@ -203,6 +203,7 @@ class RecordingTrainer:
     all_instances: list["RecordingTrainer"] = []
 
     def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
         self.calls: list[str] = []
         self.eval_ckpt_paths: list[str | None] = []
         self.__class__.all_instances.append(self)

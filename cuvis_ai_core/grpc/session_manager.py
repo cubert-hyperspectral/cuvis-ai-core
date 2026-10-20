@@ -83,6 +83,12 @@ class SessionState:
     trainrun_config: TrainRunConfig | None = None
     search_paths: list[str] = field(default_factory=default_search_paths)
     trainer: Any | None = None
+    # Where the pipeline's trained weights came from: the weights file a
+    # RestoreTrainRun or LoadPipelineWeights loaded, or ``"fit"`` after a
+    # trainer phase completed in this session. ``None`` means the pipeline
+    # holds construction-time weights; the standalone calibration phase
+    # refuses such a session, since there is nothing to calibrate.
+    weights_source: str | None = None
     # Cooperative-cancel flag for the session's training run. Set by StopTrain
     # (or a dropped Train stream); checked per batch / between statistical
     # nodes / at Train-stream entry. Cleared ONLY at SetTrainRunConfig (the run

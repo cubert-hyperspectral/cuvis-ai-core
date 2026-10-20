@@ -6,6 +6,7 @@ and PluginService.
 """
 
 import json
+import pytest
 from unittest.mock import Mock, patch
 
 import grpc
@@ -23,6 +24,15 @@ from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.session_service import SessionService
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.training import CalibrationOutcome
+from cuvis_ai_core.training.post_fit import (
+    EvaluationOutcome,
+    EvaluationStatus,
+    PostFitCallback,
+    PostFitResult,
+    TrainEvent,
+    TrainHook,
+)
+from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 
 
@@ -678,10 +688,64 @@ class TestTrainingServiceStatus:
         assert response.latest_progress.message == "done"
 
 
-def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatch):
-    """The gradient Train RPC seeds, derives callbacks from the config, and constructs
-    the trainer before streaming. A mocked GradientTrainer makes fit() instant so the
-    progress generator drains cleanly (no real training)."""
+def _fake_post_fit(outcome, events=()):
+    """A PostFitCallback stand-in: emits ``events`` through the sink and returns ``outcome``."""
+
+    class _FakePostFit:
+        instances: list = []
+
+        def __init__(
+            self,
+            *,
+            emit=None,
+            stop_event=None,
+            release_cuda_cache=False,
+            metric_nodes=None,
+        ):
+            self.emit = emit
+            self.stop_event = stop_event
+            self.release_cuda_cache = release_cuda_cache
+            self.metric_nodes = metric_nodes
+            self.result = None
+            self.runs: list[bool] = []
+            type(self).instances.append(self)
+
+        def run(
+            self,
+            pipeline,
+            datamodule,
+            *,
+            module=None,
+            restore=True,
+            epoch=0,
+            global_step=0,
+        ):
+            self.runs.append(restore)
+            for event in events:
+                self.emit(event)
+            self.result = PostFitResult(None, outcome, {})
+            return self.result
+
+    return _FakePostFit
+
+
+def _calibrated_outcome(
+    knob: str = "threshold", before: float = 0.5, after: float = 0.42
+):
+    return CalibrationOutcome(
+        split="val",
+        applicable=True,
+        reports={"dec": {"class": "Mock", knob: {"old": before, "new": after}}},
+    )
+
+
+def test_train_gradient_streams_the_post_fit_events_and_reports_the_calibration(
+    monkeypatch,
+):
+    """The gradient Train RPC seeds, builds its callbacks (progress, stop, post-fit, then
+    the config-derived ones) and constructs the trainer. The mocked trainer's fit stands in
+    for Lightning: it hands the post-fit callback its result, the way on_train_end would.
+    The results travel as events; the COMPLETE response keeps an empty metrics map."""
     import threading
 
     service = TrainingService(SessionManager())
@@ -691,102 +755,89 @@ def test_train_gradient_seeds_builds_callbacks_and_constructs_trainer(monkeypatc
     training_config = TrainingConfig(seed=7, max_epochs=1)
     # A bare Mock's stop_event.is_set() would be truthy; the session needs the
     # real (unset) event so the drained stream is not reported as cancelled.
-    session = Mock(stop_event=threading.Event())
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    outcome = _calibrated_outcome()
 
-    outcome = CalibrationOutcome(
-        split="val",
-        applicable=True,
-        reports={"dec": {"threshold": {"old": 0.5, "new": 0.42}}},
-    )
-    with (
-        patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
-        patch(
-            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
-            return_value=outcome,
-        ),
-    ):
+    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
+
+        def fit() -> None:
+            post_fit = next(
+                c
+                for c in mock_gt.call_args.kwargs["callbacks"]
+                if isinstance(c, PostFitCallback)
+            )
+            post_fit.emit(
+                TrainEvent(
+                    TrainHook.CALIBRATION_END,
+                    split=ExecutionStage.VAL,
+                    calibration=outcome,
+                )
+            )
+            post_fit.result = PostFitResult(None, outcome, {})
+
+        mock_gt.return_value.fit.side_effect = fit
         responses = list(service._train_gradient(session, Mock(), training_config))
 
     mock_gt.assert_called_once()
-    # The (mocked) trainer's fit ran on the worker thread and the stream drained to
-    # completion.
     assert mock_gt.return_value.fit.called
-    assert responses
-    # The post-fit calibration outcome rides on the completion message, and a
-    # calibrated pipeline drops the cached config so the save re-serializes it.
+    registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
+    assert registered[:3] == [
+        "ProgressStreamCallback",
+        "StopTrainingCallback",
+        "PostFitCallback",
+    ]
+    # The memory log and the cache release are installed by the trainer itself.
+    assert "CudaMemoryLogCallback" not in registered
+
+    event_responses = [r for r in responses if r.HasField("event")]
+    assert [r.event.hook for r in event_responses] == [
+        cuvis_ai_pb2.TRAIN_HOOK_CALIBRATION_END
+    ]
+    assert event_responses[0].status == cuvis_ai_pb2.TRAIN_STATUS_RUNNING
+    calibration = event_responses[0].event.calibration
+    assert calibration.applicable and calibration.phase_skip == (
+        cuvis_ai_pb2.CALIBRATION_PHASE_SKIP_NONE
+    )
+    (decider,) = calibration.deciders
+    assert decider.name == "dec"
+    assert decider.status == cuvis_ai_pb2.DECIDER_CALIBRATION_STATUS_CALIBRATED
+    assert decider.thresholds["threshold"].before == pytest.approx(0.5)
+    assert decider.thresholds["threshold"].after == pytest.approx(0.42)
+
+    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+    assert not responses[-1].metrics and not responses[-1].HasField("event")
     assert responses[-1].message == (
         "Gradient training complete; thresholds calibrated on val: dec (threshold 0.42)"
     )
     assert session.pipeline_config is None
-    # The runtime callbacks travel with the explicit list, and the config-derived
-    # ones are still appended after them.
-    registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
-    assert "CudaMemoryLogCallback" in registered
-    assert "CudaCacheReleaseCallback" not in registered  # opt-in, off by default
+    assert session.weights_source == "fit"
 
 
-def test_calibrate_session_deciders_message_and_cache_drop():
-    """Not-calibrated outcomes keep the cached config and still reach the message; a
-    pipeline without a calibratable decider stays silent; no pipeline, no phase."""
+def test_train_gradient_without_a_post_fit_result_reports_plain_completion(monkeypatch):
+    """A mocked fit that never reaches on_train_end leaves no result: no calibration clause,
+    the cached config stays."""
     import threading
 
     service = TrainingService(SessionManager())
-    target = "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders"
-
-    session = Mock(stop_event=threading.Event())
+    monkeypatch.setattr(
+        service, "_configure_gradient_components", lambda *a, **k: ([], [])
+    )
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
     cached = session.pipeline_config
-    skipped = CalibrationOutcome(
-        split="val", applicable=True, reason="val split is single-class (0/3 frames)"
-    )
-    with patch(target, return_value=skipped):
-        suffix = service._calibrate_session_deciders(session, Mock())
-    assert suffix == (
-        "; thresholds not calibrated: val split is single-class (0/3 frames)"
-    )
+
+    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer"):
+        responses = list(
+            service._train_gradient(
+                session, Mock(), TrainingConfig(seed=7, max_epochs=1)
+            )
+        )
+
+    assert responses[-1].message == "Gradient training complete"
     assert session.pipeline_config is cached
 
-    silent = CalibrationOutcome(split="val", applicable=False)
-    with patch(target, return_value=silent):
-        assert service._calibrate_session_deciders(session, Mock()) == ""
 
-    with patch(target) as mock_phase:
-        assert service._calibrate_session_deciders(Mock(pipeline=None), Mock()) == ""
-    mock_phase.assert_not_called()
-
-
-def test_train_statistical_calibrates_and_reports_on_completion():
-    """The statistical Train path runs the same post-fit calibration as the gradient
-    path and the CLI, and its completion message carries the outcome."""
-    import threading
-
-    service = TrainingService(SessionManager())
-    session = Mock(stop_event=threading.Event())
-    outcome = CalibrationOutcome(
-        split="val",
-        applicable=True,
-        reports={"dec": {"quantile": {"old": 0.99, "new": 0.995}}},
-    )
-    with (
-        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
-        patch(
-            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
-            return_value=outcome,
-        ) as mock_phase,
-    ):
-        responses = list(service._train_statistical(session, Mock()))
-
-    assert mock_st.return_value.fit.called
-    mock_phase.assert_called_once()
-    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
-    assert responses[-1].message == (
-        "Statistical training complete; thresholds calibrated on val: "
-        "dec (quantile 0.995)"
-    )
-    assert session.pipeline_config is None
-
-
-def test_train_gradient_registers_the_cache_release_when_the_config_asks(monkeypatch):
-    """``release_cuda_cache_on_validation`` reaches the trainer's callback list."""
+def test_train_gradient_passes_the_cache_release_to_the_post_fit_callback(monkeypatch):
+    """``release_cuda_cache_on_validation`` reaches the post-fit callback with the stop event."""
     import threading
 
     service = TrainingService(SessionManager())
@@ -796,19 +847,249 @@ def test_train_gradient_registers_the_cache_release_when_the_config_asks(monkeyp
     training_config = TrainingConfig(
         seed=7, max_epochs=1, release_cuda_cache_on_validation=True
     )
-    session = Mock(stop_event=threading.Event())
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
 
-    with (
-        patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
-        patch(
-            "cuvis_ai_core.grpc.training_service.calibrate_pipeline_deciders",
-            return_value=CalibrationOutcome(split="val", applicable=False),
-        ),
-    ):
+    with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
         list(service._train_gradient(session, Mock(), training_config))
 
-    registered = [type(c).__name__ for c in mock_gt.call_args.kwargs["callbacks"]]
-    assert "CudaCacheReleaseCallback" in registered
+    post_fit = next(
+        c
+        for c in mock_gt.call_args.kwargs["callbacks"]
+        if isinstance(c, PostFitCallback)
+    )
+    assert post_fit.release_cuda_cache is True
+    assert post_fit.stop_event is session.stop_event
+
+
+def test_train_statistical_runs_the_post_fit_steps_only_for_a_statistical_only_run():
+    """A statistical-only run calibrates and evaluates after its fit, streaming the events;
+    a statistical phase followed by a gradient phase ends after the fit."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    outcome = _calibrated_outcome("quantile", 0.99, 0.995)
+    fake = _fake_post_fit(
+        outcome,
+        events=[
+            TrainEvent(
+                TrainHook.CALIBRATION_END, split=ExecutionStage.VAL, calibration=outcome
+            )
+        ],
+    )
+
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
+        patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
+    ):
+        responses = list(service._train_statistical(session, Mock(), post_fit=True))
+
+    assert mock_st.return_value.fit.called
+    assert fake.instances[-1].runs == [
+        False
+    ]  # no checkpoint restore after a statistical fit
+    assert [r.event.hook for r in responses if r.HasField("event")] == [
+        cuvis_ai_pb2.TRAIN_HOOK_CALIBRATION_END
+    ]
+    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+    assert responses[-1].message == (
+        "Statistical training complete; thresholds calibrated on val: dec (quantile 0.995)"
+    )
+    assert session.pipeline_config is None
+    assert session.weights_source == "fit"
+
+    fake.instances.clear()
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    cached = session.pipeline_config
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer"),
+        patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
+    ):
+        responses = list(service._train_statistical(session, Mock(), post_fit=False))
+
+    assert fake.instances == []
+    assert responses[-1].message == "Statistical training complete"
+    assert not any(r.HasField("event") for r in responses)
+    assert session.pipeline_config is cached
+
+
+def test_train_calibration_runs_the_steps_without_a_fit():
+    """The standalone phase streams the same events and never calls a trainer."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    outcome = _calibrated_outcome()
+    evaluation = EvaluationOutcome(
+        split=ExecutionStage.VAL,
+        status=EvaluationStatus.EVALUATED,
+        frames=3,
+        metrics={"m/f1": 0.5},
+    )
+    fake = _fake_post_fit(
+        outcome,
+        events=[
+            TrainEvent(
+                TrainHook.CALIBRATION_END, split=ExecutionStage.VAL, calibration=outcome
+            ),
+            TrainEvent(
+                TrainHook.EVALUATION_END,
+                split=ExecutionStage.VAL,
+                evaluation=evaluation,
+            ),
+            TrainEvent(TrainHook.POST_FIT_END),
+        ],
+    )
+    session = Mock(
+        stop_event=threading.Event(), trainrun_config=None, weights_source="run.pt"
+    )
+
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
+        patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
+        patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
+    ):
+        responses = list(service._train_calibration(session, Mock()))
+
+    assert not mock_st.called and not mock_gt.called
+    assert fake.instances[-1].runs == [False]
+    assert responses[0].status == cuvis_ai_pb2.TRAIN_STATUS_RUNNING
+    assert responses[0].message == "Starting calibration"
+    event_responses = [r for r in responses if r.HasField("event")]
+    assert [r.event.hook for r in event_responses] == [
+        cuvis_ai_pb2.TRAIN_HOOK_CALIBRATION_END,
+        cuvis_ai_pb2.TRAIN_HOOK_EVALUATION_END,
+        cuvis_ai_pb2.TRAIN_HOOK_POST_FIT_END,
+    ]
+    evaluated = event_responses[1].event.evaluation
+    assert evaluated.status == cuvis_ai_pb2.EVALUATION_STATUS_EVALUATED
+    assert evaluated.split == cuvis_ai_pb2.EXECUTION_STAGE_VAL
+    assert evaluated.frames == 3 and evaluated.metrics["m/f1"] == pytest.approx(0.5)
+    assert event_responses[1].context.stage == cuvis_ai_pb2.EXECUTION_STAGE_VAL
+    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+    assert responses[-1].message == (
+        "Calibration complete; thresholds calibrated on val: dec (threshold 0.42)"
+    )
+    assert session.pipeline_config is None
+
+
+def test_calibration_precondition_names_the_missing_weights_and_the_unfitted_nodes():
+    service = TrainingService(SessionManager())
+
+    class _Stat:
+        def __init__(self, name: str, fitted: bool) -> None:
+            self.name = name
+            self.requires_initial_fit = True
+            self._statistically_initialized = fitted
+
+    pipeline = Mock()
+    pipeline.nodes.return_value = [_Stat("norm", False)]
+    session = Mock(weights_source=None, pipeline=pipeline)
+    refusal = service._calibration_precondition(session)
+    assert refusal is not None and refusal.startswith(
+        "The session holds no trained weights"
+    )
+
+    session.weights_source = "run.pt"
+    refusal = service._calibration_precondition(session)
+    assert refusal is not None and "norm" in refusal
+
+    pipeline.nodes.return_value = [_Stat("norm", True)]
+    assert service._calibration_precondition(session) is None
+
+
+def test_train_refuses_a_required_decisions_consumer_of_an_uncalibrated_decider():
+    """The pre-fit check names the consumer and the decider, before any trainer runs."""
+    from types import SimpleNamespace
+
+    service = TrainingService(SessionManager())
+    pair = (SimpleNamespace(name="sink"), SimpleNamespace(name="dec"))
+    with patch(
+        "cuvis_ai_core.grpc.training_service.uncalibrated_required_consumers",
+        return_value=[pair],
+    ):
+        with pytest.raises(ValueError, match="sink reads decisions from dec"):
+            service._refuse_uncalibrated_consumers(Mock())
+    with patch(
+        "cuvis_ai_core.grpc.training_service.uncalibrated_required_consumers",
+        return_value=[],
+    ):
+        service._refuse_uncalibrated_consumers(Mock())
+
+
+def test_event_to_proto_maps_every_enum_by_name():
+    """Every Python enum member has its proto twin; a drift fails here, not on the wire."""
+    from cuvis_ai_core.grpc.training_service import _event_to_proto
+    from cuvis_ai_core.training.calibration import (
+        CalibrationPhaseSkip,
+        DeciderCalibration,
+        DeciderCalibrationStatus,
+        DeciderSkip,
+        ThresholdChange,
+    )
+    from cuvis_ai_core.training.post_fit import CheckpointRestored, FrameProgress
+
+    for hook in TrainHook:
+        assert _event_to_proto(TrainEvent(hook)).hook == getattr(
+            cuvis_ai_pb2, f"TRAIN_HOOK_{hook.name}"
+        )
+    for status in EvaluationStatus:
+        assert getattr(cuvis_ai_pb2, f"EVALUATION_STATUS_{status.name}")
+    for skip in CalibrationPhaseSkip:
+        assert getattr(cuvis_ai_pb2, f"CALIBRATION_PHASE_SKIP_{skip.name}")
+    for skip in DeciderSkip:
+        assert getattr(cuvis_ai_pb2, f"DECIDER_SKIP_{skip.name}")
+
+    skipped = CalibrationOutcome(
+        split="val",
+        applicable=True,
+        deciders=(
+            DeciderCalibration(
+                name="dec",
+                class_name="TwoStageBinaryDecider",
+                status=DeciderCalibrationStatus.SKIPPED,
+                skip=DeciderSkip.CALIBRATE_FAILED,
+                skip_detail="ValueError: boom",
+                thresholds={"image_threshold": ThresholdChange(before=None, after=2.5)},
+                metrics={"f1": 0.9},
+                thresholds_present=False,
+            ),
+        ),
+        phase_skip=CalibrationPhaseSkip.SINGLE_CLASS,
+        frames=4,
+        anomalous_frames=0,
+    )
+    proto = _event_to_proto(
+        TrainEvent(
+            TrainHook.CALIBRATION_END,
+            split=ExecutionStage.VAL,
+            progress=FrameProgress(4, 4),
+            checkpoint=CheckpointRestored(
+                True, path="b.ckpt", epoch=2, monitor="m", score=0.7
+            ),
+            calibration=skipped,
+        )
+    )
+    assert proto.split == cuvis_ai_pb2.EXECUTION_STAGE_VAL
+    assert (proto.progress.done, proto.progress.total) == (4, 4)
+    assert proto.checkpoint.restored and proto.checkpoint.score == pytest.approx(0.7)
+    assert proto.checkpoint.HasField("score")
+    outcome = proto.calibration
+    assert outcome.phase_skip == cuvis_ai_pb2.CALIBRATION_PHASE_SKIP_SINGLE_CLASS
+    assert (outcome.frames, outcome.anomalous_frames) == (4, 0)
+    (decider,) = outcome.deciders
+    assert decider.skip == cuvis_ai_pb2.DECIDER_SKIP_CALIBRATE_FAILED
+    assert decider.skip_detail == "ValueError: boom"
+    assert not decider.thresholds["image_threshold"].HasField("before")
+    assert decider.thresholds["image_threshold"].after == pytest.approx(2.5)
+    assert decider.metrics["f1"] == pytest.approx(0.9)
+    assert decider.thresholds_present is False
+    kept = _event_to_proto(
+        TrainEvent(
+            TrainHook.CHECKPOINT_RESTORED,
+            checkpoint=CheckpointRestored(False, reason="no checkpoint was saved"),
+        )
+    )
+    assert not kept.checkpoint.HasField("score") and kept.checkpoint.reason
 
 
 class TestRunOutcome:
@@ -865,3 +1146,57 @@ class TestRunOutcome:
             logger.remove(sink_id)
 
         assert records == []
+
+
+def test_save_train_run_failed_yaml_write_leaves_the_previous_file(tmp_path):
+    """A save into an existing run folder stages its yaml: a failing dump leaves the old
+    trainrun yaml intact and no staging file behind."""
+    from cuvis_ai_core.grpc.trainrun_service import TrainRunService
+
+    manager = SessionManager()
+    service = TrainRunService(manager)
+    session_id = manager.create_session()
+    session = manager.get_session(session_id)
+    mock_pipeline = Mock()
+    mock_pipeline.nodes.return_value = []
+    mock_pipeline.name = "test"
+    session.pipeline = mock_pipeline
+    session.trainrun_config = TrainRunConfig(
+        name="first",
+        pipeline=None,
+        data=DataConfig(),
+        training=TrainingConfig(),
+        loss_nodes=[],
+        metric_nodes=[],
+        freeze_nodes=[],
+        unfreeze_nodes=[],
+        output_dir=".",
+        tags={},
+    )
+    request = cuvis_ai_pb2.SaveTrainRunRequest(
+        session_id=session_id, trainrun_path=str(tmp_path / "trainrun.yaml")
+    )
+
+    first = service.save_train_run(request, Mock())
+    assert first.success is True
+    saved = (tmp_path / "trainrun.yaml").read_text(encoding="utf-8")
+    assert "name: first" in saved
+
+    session.trainrun_config = session.trainrun_config.model_copy(
+        update={"name": "second"}
+    )
+    ctx = Mock()
+    with patch(
+        "cuvis_ai_core.grpc.trainrun_service.yaml.dump",
+        side_effect=OSError("disk full"),
+    ):
+        second = service.save_train_run(request, ctx)
+
+    assert second.success is False
+    ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
+    assert (tmp_path / "trainrun.yaml").read_text(encoding="utf-8") == saved
+    # No staging file survives; the pipeline sibling is the only other file.
+    assert {p.name for p in tmp_path.iterdir()} == {
+        "trainrun.yaml",
+        "trainrun_pipeline.yaml",
+    }
