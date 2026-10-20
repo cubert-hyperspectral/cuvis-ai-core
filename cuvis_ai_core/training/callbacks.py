@@ -14,6 +14,7 @@ Neither callback does anything without CUDA, so a CPU run pays nothing.
 from __future__ import annotations
 
 import gc
+import threading
 import os
 from typing import Any
 
@@ -22,6 +23,7 @@ from loguru import logger
 from pytorch_lightning import Callback, LightningModule, Trainer
 
 from cuvis_ai_core.training.config import TrainingConfig
+from cuvis_ai_core.training.post_fit import EmitFn, PostFitCallback
 
 # Soft cap on the process's share of the device, read when the log callback
 # starts a fit. See CudaMemoryLogCallback.on_fit_start for what "soft" means.
@@ -207,24 +209,43 @@ class CudaCacheReleaseCallback(Callback):
         torch.cuda.empty_cache()
 
 
-def build_runtime_callbacks(training_config: TrainingConfig | None) -> list[Callback]:
+def build_runtime_callbacks(
+    training_config: TrainingConfig | None,
+    *,
+    emit: EmitFn | None = None,
+    stop_event: threading.Event | None = None,
+) -> list[Callback]:
     """Build the callbacks every gradient run gets, regardless of its config.
 
     The memory log is always on: it costs a handful of log lines and is the
     only evidence a run leaves when it dies of memory. The cache release is
-    added only when the trainrun asks for it.
+    added only when the trainrun asks for it. The post-fit lifecycle (restore
+    the best checkpoint, calibrate, evaluate) is always on as well; ``emit``
+    and ``stop_event`` are the gRPC stream's sink and cancel flag, the CLI
+    leaves both unset and gets the log. ``GradientTrainer._build_trainer``
+    installs these itself, skipping any type the caller passed explicitly.
 
     Parameters
     ----------
     training_config : TrainingConfig, optional
-        The run's trainer config. ``None`` yields the log callback alone.
+        The run's trainer config. ``None`` yields the defaults.
+    emit : callable, optional
+        Where the post-fit events go.
+    stop_event : threading.Event, optional
+        The run's cooperative cancel flag.
 
     Returns
     -------
     list[Callback]
-        Callbacks to prepend to the run's callback list.
+        Callbacks to add to the run's callback list.
     """
+    release = bool(
+        training_config is not None and training_config.release_cuda_cache_on_validation
+    )
     callbacks: list[Callback] = [CudaMemoryLogCallback()]
-    if training_config is not None and training_config.release_cuda_cache_on_validation:
+    if release:
         callbacks.append(CudaCacheReleaseCallback())
+    callbacks.append(
+        PostFitCallback(emit=emit, stop_event=stop_event, release_cuda_cache=release)
+    )
     return callbacks

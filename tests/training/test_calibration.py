@@ -18,6 +18,14 @@ from cuvis_ai_core.deciders.base_decider import BinaryDecider
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import CalibrationOutcome, calibrate_pipeline_deciders
+from cuvis_ai_core.training.calibration import (
+    CalibrationPhaseSkip,
+    DeciderCalibrationStatus,
+    DeciderSkip,
+    ThresholdChange,
+    uncalibrated_required_consumers,
+)
+from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_core.utils.restore import _log_calibration_outcome
 from cuvis_ai_schemas.pipeline import PortSpec
 
@@ -103,7 +111,11 @@ class _MockCalibratableDecider(BinaryDecider):
         self.calibrated_with = (tuple(scores.shape), tuple(targets.shape))
         self.threshold = 0.42
         self.hparams["threshold"] = 0.42
-        return {"class": type(self).__name__, "threshold": {"old": 0.5, "new": 0.42}}
+        self.calibrated_report = {
+            "class": type(self).__name__,
+            "threshold": {"old": 0.5, "new": 0.42},
+        }
+        return self.calibrated_report
 
 
 class _RaisingDecider(_MockCalibratableDecider):
@@ -452,3 +464,195 @@ def test_cli_log_line_matches_the_outcome(monkeypatch):
         ("info", "  Calibration: thresholds calibrated on val: dec (t 2)"),
         ("warning", "  Calibration: thresholds not calibrated: no val split"),
     ]
+
+
+def test_outcome_carries_structured_records():
+    """The phase reports data: counts, and one record per decider with the knobs it moved."""
+    dec = _MockCalibratableDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val"
+    )
+
+    assert outcome.phase_skip is None and outcome.phase_detail == ""
+    assert (outcome.frames, outcome.anomalous_frames) == (3, 2)
+    (record,) = outcome.deciders
+    assert record.name == "dec"
+    assert record.class_name == "_MockCalibratableDecider"
+    assert record.status is DeciderCalibrationStatus.CALIBRATED
+    assert record.skip is None and record.skip_detail == ""
+    assert record.thresholds == {"threshold": ThresholdChange(before=0.5, after=0.42)}
+    assert record.metrics == {}
+    assert record.thresholds_present is True
+    assert outcome.reports == {"dec": dec.calibrated_report}
+
+
+def test_phase_skips_carry_their_enum_and_counts():
+    dec = _MockCalibratableDecider(name="dec")
+    normals = [_batch(0.0, False), _batch(0.0, False)]
+    single = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(normals), split="val"
+    )
+    assert single.phase_skip is CalibrationPhaseSkip.SINGLE_CLASS
+    assert (single.frames, single.anomalous_frames) == (2, 0)
+    (record,) = single.deciders
+    assert record.status is DeciderCalibrationStatus.SKIPPED
+    assert record.skip is None  # the phase reason applies, not a per-decider one
+    assert record.thresholds_present is True
+    assert single.skipped == {}
+
+    dm = _ListDataModule(_MIXED)
+    dm.val_ds = None
+    missing = calibrate_pipeline_deciders(_pipeline(dec), dm, split="val")
+    assert missing.phase_skip is CalibrationPhaseSkip.NO_SPLIT
+    assert (missing.frames, missing.anomalous_frames) == (0, 0)
+
+    failing = calibrate_pipeline_deciders(
+        _pipeline(dec, source=_FailingSource(name="src")),
+        _ListDataModule(_MIXED),
+        split="val",
+    )
+    assert failing.phase_skip is CalibrationPhaseSkip.INFERENCE_FAILED
+    assert failing.phase_detail == "RuntimeError: boom at inference"
+    assert (
+        failing.reason == "inference over val failed: RuntimeError: boom at inference"
+    )
+
+    first = _ScoreMaskSource(name="first")
+    second = _ScoreMaskSource(name="second")
+    echo = _MaskEcho(name="echo")
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(first.outputs.scores, dec.inputs.logits)
+    pipe.connect(second.outputs.mask, echo.inputs.mask)
+    ambiguous = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+    assert ambiguous.phase_skip is CalibrationPhaseSkip.AMBIGUOUS_MASK
+    assert "first" in ambiguous.phase_detail and "second" in ambiguous.phase_detail
+
+
+def test_decider_skips_carry_their_enum():
+    raising = calibrate_pipeline_deciders(
+        _pipeline(_RaisingDecider(name="bad")), _ListDataModule(_MIXED), split="val"
+    )
+    (record,) = raising.deciders
+    assert record.status is DeciderCalibrationStatus.SKIPPED
+    assert record.skip is DeciderSkip.CALIBRATE_FAILED
+    assert record.skip_detail == "ValueError: scores must be finite"
+    assert record.thresholds == {} and record.thresholds_present is True
+
+    declining = calibrate_pipeline_deciders(
+        _pipeline(_DecliningDecider(name="dec")), _ListDataModule(_MIXED), split="val"
+    )
+    assert declining.deciders[0].skip is DeciderSkip.NO_REPORT
+
+    wired = _MockCalibratableDecider(name="wired")
+    loose = _MockCalibratableDecider(name="loose")
+    pipe = _pipeline(wired)
+    pipe._assign_counter_and_add_node(loose)
+    batches = [dict(batch, logits=batch["scores"]) for batch in _MIXED]
+    both = calibrate_pipeline_deciders(pipe, _ListDataModule(batches), split="val")
+    by_name = {record.name: record for record in both.deciders}
+    assert by_name["loose"].skip is DeciderSkip.NOTHING_WIRED
+    assert by_name["wired"].status is DeciderCalibrationStatus.CALIBRATED
+
+    listy = calibrate_pipeline_deciders(
+        _pipeline(
+            _TolerantDecider(name="dec"),
+            source=_ListScoresSource(name="src"),
+            strict=False,
+        ),
+        _ListDataModule(_MIXED),
+        split="val",
+    )
+    (record,) = listy.deciders
+    assert record.skip is DeciderSkip.NO_SCORES
+    assert record.skip_detail == "src.scores produced no tensor over val"
+
+
+def test_records_extract_knobs_and_metrics_from_a_two_stage_report():
+    class _TwoStageLike(_MockCalibratableDecider):
+        def calibrate(self, scores, targets):
+            self.calibrated_with = (tuple(scores.shape), tuple(targets.shape))
+            return {
+                "class": "TwoStageBinaryDecider",
+                "image_threshold": {"old": None, "new": 2.5},
+                "pixel_threshold": {"old": 0.9, "new": 2.4999998},
+                "on_point": {"image_threshold": 2.0, "pixel_threshold": 2.1},
+                "image_f1": 0.93,
+                "pixel_iou": 0.4,
+                "joint": {"f1": 0.9},
+            }
+
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(_TwoStageLike(name="gate")), _ListDataModule(_MIXED), split="val"
+    )
+    (record,) = outcome.deciders
+    assert record.class_name == "TwoStageBinaryDecider"
+    assert record.thresholds == {
+        "image_threshold": ThresholdChange(before=None, after=2.5),
+        "pixel_threshold": ThresholdChange(before=0.9, after=2.4999998),
+    }
+    assert record.metrics == {"image_f1": 0.93, "pixel_iou": 0.4}
+    assert outcome.summary() == (
+        "thresholds calibrated on val: gate (image_threshold 2.5, pixel_threshold 2.5)"
+    )
+
+
+def test_on_batch_reports_frames_per_batch():
+    seen: list[tuple[int, int]] = []
+    calibrate_pipeline_deciders(
+        _pipeline(_MockCalibratableDecider(name="dec")),
+        _ListDataModule(_MIXED),
+        split="val",
+        on_batch=lambda done, total: seen.append((done, total)),
+    )
+    assert seen == [(1, 0), (2, 0), (3, 0)]
+
+
+def test_uncalibrated_required_consumers_names_the_graph_that_would_fail():
+    """A node that needs decisions at a training stage from a decider without thresholds."""
+
+    class _UncalibratedDecider(_MockCalibratableDecider):
+        @property
+        def is_calibrated(self) -> bool:
+            return False
+
+    class _Consumer(Node):
+        INPUT_SPECS = {"decisions": _DECISIONS}
+        OUTPUT_SPECS = {"count": PortSpec(dtype=torch.int64, shape=())}
+        EXECUTION_STAGES = {ExecutionStage.VAL, ExecutionStage.TEST}
+
+        def forward(self, decisions, **_):
+            return {"count": decisions.sum()}
+
+    class _OptionalConsumer(_Consumer):
+        INPUT_SPECS = {
+            "decisions": PortSpec(
+                dtype=torch.bool, shape=(-1, -1, -1, 1), optional=True
+            )
+        }
+
+        def forward(self, decisions=None, **_):
+            return {"count": torch.tensor(0)}
+
+    class _InferenceConsumer(_Consumer):
+        EXECUTION_STAGES = {ExecutionStage.INFERENCE}
+
+    def graph(decider, consumer):
+        pipe = _pipeline(decider)
+        pipe.connect(decider.outputs.decisions, consumer.inputs.decisions)
+        return pipe
+
+    dec = _UncalibratedDecider(name="dec")
+    sink = _Consumer(name="sink")
+    assert uncalibrated_required_consumers(graph(dec, sink)) == [(sink, dec)]
+    assert (
+        uncalibrated_required_consumers(graph(dec, _OptionalConsumer(name="sink")))
+        == []
+    )
+    assert (
+        uncalibrated_required_consumers(graph(dec, _InferenceConsumer(name="sink")))
+        == []
+    )
+    calibrated = _MockCalibratableDecider(name="dec")
+    assert (
+        uncalibrated_required_consumers(graph(calibrated, _Consumer(name="sink"))) == []
+    )

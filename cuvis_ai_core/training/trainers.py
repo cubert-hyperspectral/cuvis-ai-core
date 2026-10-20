@@ -1,6 +1,7 @@
 """External trainer orchestrators for cuvis.ai graphs."""
 
 import threading
+from pathlib import Path
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -15,28 +16,16 @@ from cuvis_ai_core.training.config import (
     TrainingConfig,
     create_callbacks_from_config,
 )
+from cuvis_ai_core.training.evaluation import (
+    EvaluationSummary,
+    TrainingCancelled,
+    default_metric_nodes,
+    evaluate_split,
+)
+from cuvis_ai_core.training.callbacks import build_runtime_callbacks
+from cuvis_ai_core.training.post_fit import CheckpointRestored
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context, InputStream
-
-
-class TrainingCancelled(Exception):
-    """A training run was stopped cooperatively via the session's stop event.
-
-    Raised by :class:`StatisticalTrainer` at batch / node boundaries. A node
-    interrupted mid-initialization is left partially fitted; the cancelled run
-    must not be treated as trained.
-
-    ``swallowed_error`` carries the exception the run raised when the stop
-    had already been requested, so the cancelled answer can still name the
-    failure instead of hiding it.
-    """
-
-    def __init__(
-        self, *args: object, swallowed_error: BaseException | None = None
-    ) -> None:
-        """Store the optional error this cancellation took precedence over."""
-        super().__init__(*args)
-        self.swallowed_error = swallowed_error
 
 
 class GradientTrainer(pl.LightningModule):
@@ -182,6 +171,70 @@ class GradientTrainer(pl.LightningModule):
         self.trainer = self._build_trainer()
         self.trainer.fit(model=self, datamodule=self.datamodule)
 
+    def load_best_checkpoint(self) -> CheckpointRestored:
+        """Load the best checkpoint of this fit into the live nodes.
+
+        Reads the checkpoint callback's ``best_model_path`` and, before touching the
+        model, checks the file's state dict against this module's: the same keys and the
+        same shape per key. A missing callback or file, an unreadable file or a mismatch
+        leaves the final epoch's weights in place and says why in the returned record.
+        The copy goes through ``nn.Module.load_state_dict`` into the modules the pipeline
+        nodes share (``pipeline_modules`` aliases them), so ``Node.load_state_dict`` is
+        not involved and the fitted flags this process set stay. A failure during the
+        copy is fatal for the run: the pre-checks make it unreachable for a checkpoint
+        this module wrote, and a half-loaded model must never be calibrated or saved.
+        """
+        # LightningModule.trainer raises when no trainer is attached; read the slot.
+        trainer = getattr(self, "_trainer", None)
+        callback = (
+            getattr(trainer, "checkpoint_callback", None)
+            if trainer is not None
+            else None
+        )
+        if callback is None:
+            return CheckpointRestored(False, reason="no checkpoint callback")
+        path = str(getattr(callback, "best_model_path", "") or "")
+        if not path or not Path(path).is_file():
+            return CheckpointRestored(False, reason="no checkpoint was saved")
+        try:
+            checkpoint = torch.load(
+                path, map_location=self.pipeline.device, weights_only=True
+            )
+            state = checkpoint["state_dict"]
+        except Exception as exc:  # noqa: BLE001 - the final epoch's weights stay
+            logger.warning(
+                f"Best checkpoint {path} could not be read ({exc!r}); keeping the final epoch."
+            )
+            return CheckpointRestored(
+                False, path=path, reason=f"{type(exc).__name__}: {exc}"
+            )
+        current = self.state_dict()
+        if set(state) != set(current):
+            return CheckpointRestored(
+                False, path=path, reason="checkpoint keys differ from the model"
+            )
+        mismatched = [
+            key for key in state if tuple(state[key].shape) != tuple(current[key].shape)
+        ]
+        if mismatched:
+            return CheckpointRestored(
+                False,
+                path=path,
+                reason=f"shape mismatch for {', '.join(mismatched[:3])}",
+            )
+        self.load_state_dict(state, strict=True)
+        score = getattr(callback, "best_model_score", None)
+        logger.info(
+            f"Best checkpoint restored from {path} (epoch {checkpoint.get('epoch')})"
+        )
+        return CheckpointRestored(
+            True,
+            path=path,
+            epoch=int(checkpoint.get("epoch", -1)),
+            monitor=str(getattr(callback, "monitor", "") or ""),
+            score=float(score) if score is not None else None,
+        )
+
     def _build_trainer(self) -> pl.Trainer:
         """Construct a ``pl.Trainer`` from the stored training configuration.
 
@@ -195,11 +248,24 @@ class GradientTrainer(pl.LightningModule):
         trainer_kwargs = self.training_config.to_lightning_kwargs()
 
         # Callbacks: explicit ones passed to __init__ win (e.g. the gRPC progress
-        # stream); otherwise build them from the config.
+        # stream); otherwise build them from the config. The runtime callbacks
+        # (memory log, cache release, the post-fit lifecycle) are installed here
+        # for every fit, so a direct fit() gets them too; a type the caller
+        # already passed (the gRPC PostFitCallback with its queue sink) is kept
+        # and not doubled.
         if self.callbacks:
-            trainer_kwargs["callbacks"] = self.callbacks
+            callbacks = list(self.callbacks)
         elif config_callbacks is not None:
-            trainer_kwargs["callbacks"] = create_callbacks_from_config(config_callbacks)
+            callbacks = list(create_callbacks_from_config(config_callbacks))
+        else:
+            callbacks = []
+        present = {type(callback) for callback in callbacks}
+        callbacks.extend(
+            callback
+            for callback in build_runtime_callbacks(self.training_config)
+            if type(callback) not in present
+        )
+        trainer_kwargs["callbacks"] = callbacks
 
         # Automatic checkpointing: enable whenever a checkpoint callback is
         # configured, independent of how callbacks were supplied.
@@ -565,6 +631,7 @@ class StatisticalTrainer:
         pipeline: CuvisPipeline,
         datamodule: pl.LightningDataModule,
         stop_event: threading.Event | None = None,
+        metric_nodes: Sequence[Node] | None = None,
     ) -> None:
         """Initialize statistical trainer.
 
@@ -578,10 +645,14 @@ class StatisticalTrainer:
             Cooperative-cancel flag. Checked between statistical nodes and
             before each batch; when set, ``fit()`` raises
             :class:`TrainingCancelled`.
+        metric_nodes : sequence of Node, optional
+            The nodes ``validate()`` and ``test()`` reduce; every node with a
+            ``metrics`` output port by default.
         """
         self.pipeline = pipeline
         self.datamodule = datamodule
         self.stop_event = stop_event
+        self.metric_nodes = list(metric_nodes) if metric_nodes is not None else None
 
     def _raise_if_cancelled(self) -> None:
         """Raise TrainingCancelled when the stop event has fired."""
@@ -637,41 +708,40 @@ class StatisticalTrainer:
 
         self._raise_if_cancelled()
 
-    def validate(self) -> None:
-        """Run every validation batch through the pipeline at the VAL stage.
+    def validate(self) -> EvaluationSummary:
+        """Run the validation split through the pipeline at the VAL stage and reduce it.
 
-        Outputs are not returned: metric and sink nodes consume them inside the
-        forward. Runs under ``torch.no_grad()`` (no autograd graph is kept for
-        an evaluation pass) and lets the forward release intermediate ports.
+        Shares the loop of :func:`~cuvis_ai_core.training.evaluation.forward_split`
+        with the post-fit steps: eval mode, no gradients, the stop check before each
+        batch. Sink nodes consume their inputs inside the forward as before; the metric
+        nodes are reduced the way the gradient trainer logs them, keyed
+        ``<node>/<metric>``.
         """
         self.datamodule.setup(stage="val")
-        val_loader = self.datamodule.val_dataloader()
-        self._run_evaluation_pass(val_loader, ExecutionStage.VAL)
+        return self._evaluate(self.datamodule.val_dataloader(), ExecutionStage.VAL)
 
-    def test(self) -> None:
-        """Run every test batch through the pipeline at the TEST stage.
+    def test(self) -> EvaluationSummary:
+        """Run the test split through the pipeline at the TEST stage and reduce it.
 
-        Same contract as :meth:`validate`: outputs are consumed by the pipeline's
-        own metric and sink nodes, nothing is returned, gradients are disabled.
+        Same contract as :meth:`validate`.
         """
         self.datamodule.setup(stage="test")
-        test_loader = self.datamodule.test_dataloader()
-        self._run_evaluation_pass(test_loader, ExecutionStage.TEST)
+        return self._evaluate(self.datamodule.test_dataloader(), ExecutionStage.TEST)
 
-    def _run_evaluation_pass(self, loader, stage: ExecutionStage) -> None:
-        """Forward each batch of ``loader`` at ``stage`` without gradients."""
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(loader):
-                batch = self.pipeline.move_batch_to_device(batch)
-                context = Context(
-                    stage=stage,
-                    epoch=0,
-                    batch_idx=batch_idx,
-                    global_step=batch_idx,
-                )
-                self.pipeline.forward(
-                    batch=batch, context=context, free_consumed_ports=True
-                )
+    def _evaluate(self, loader, stage: ExecutionStage) -> EvaluationSummary:
+        """Reduce the metric nodes over ``loader`` at ``stage``."""
+        nodes = (
+            self.metric_nodes
+            if self.metric_nodes is not None
+            else default_metric_nodes(self.pipeline)
+        )
+        return evaluate_split(
+            self.pipeline,
+            loader,
+            stage=stage,
+            metric_nodes=nodes,
+            stop_event=self.stop_event,
+        )
 
     def _create_input_stream(self, target_node, dataloader) -> InputStream:
         """Create port-based input stream for statistical node.
