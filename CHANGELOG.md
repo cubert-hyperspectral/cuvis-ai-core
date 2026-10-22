@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.6 - 2026-10-20
+## 0.18.6 - 2026-10-22
 
 - The post-fit lifecycle: after any fit the trained weights are finished in one place, `training.post_fit.PostFitCallback`, which restores the best checkpoint when a checkpoint callback saved one, calibrates the calibratable deciders on the validation split when it exists, and evaluates the validation and test splits when they exist. Nothing in a trainrun declares or disables the steps; each runs when its inputs are there. The gradient trainer runs them at Lightning's `on_train_end` (the model is still on its device there; the teardown that precedes `on_fit_end` moves it to the CPU), the statistical trainer and the standalone calibration phase call `run()` directly. A cancelled fit runs none of them.
 - The Train stream reports every lifecycle hook as a typed `TrainResponse.event` (cuvis-ai-schemas 0.14.2): fit start with `calibration_pending`, validation end, epoch end, fit end, the checkpoint restore, the calibration with one `CalibrationOutcome` as data (phase skip enum with detail and frame counts, one record per decider with its status, skip, thresholds before and after, metrics and `thresholds_present`), one evaluation outcome per split with its metrics and frame count, per-batch progress in frames, and post-fit end. The COMPLETE response keeps an empty `metrics` map; `message` stays a human sentence.
