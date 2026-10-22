@@ -19,11 +19,20 @@ from cuvis_ai_core.training.config import (
 from cuvis_ai_core.training.evaluation import (
     EvaluationSummary,
     TrainingCancelled,
+    batch_frames,
     default_metric_nodes,
     evaluate_split,
+    frame_total,
 )
 from cuvis_ai_core.training.callbacks import build_runtime_callbacks
-from cuvis_ai_core.training.post_fit import CheckpointRestored
+from cuvis_ai_core.training.post_fit import (
+    CheckpointRestored,
+    EmitFn,
+    FrameProgress,
+    TrainEvent,
+    TrainHook,
+    log_event,
+)
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context, InputStream
 
@@ -632,6 +641,7 @@ class StatisticalTrainer:
         datamodule: pl.LightningDataModule,
         stop_event: threading.Event | None = None,
         metric_nodes: Sequence[Node] | None = None,
+        emit: EmitFn | None = None,
     ) -> None:
         """Initialize statistical trainer.
 
@@ -648,11 +658,18 @@ class StatisticalTrainer:
         metric_nodes : sequence of Node, optional
             The nodes ``validate()`` and ``test()`` reduce; every node with a
             ``metrics`` output port by default.
+        emit : callable, optional
+            Where the fit's events go (one ``STATISTICAL_NODE_START`` with the frame
+            total of the train split, one ``STATISTICAL_PROGRESS`` per batch the node
+            reads, one ``STATISTICAL_NODE_END``); the log by default, which prints
+            one line per node's start and end. A node's own compute after its last
+            batch emits nothing until its end event.
         """
         self.pipeline = pipeline
         self.datamodule = datamodule
         self.stop_event = stop_event
         self.metric_nodes = list(metric_nodes) if metric_nodes is not None else None
+        self.emit: EmitFn = emit if emit is not None else log_event
 
     def _raise_if_cancelled(self) -> None:
         """Raise TrainingCancelled when the stop event has fired."""
@@ -680,6 +697,7 @@ class StatisticalTrainer:
             return
 
         logger.info(f"Training {len(stat_nodes)} statistical nodes...")
+        total = frame_total(train_loader)
 
         # The fit walks the sorted graph and runs partial forwards; a node connected
         # meanwhile would corrupt both. Keep an outer freeze (a GradientTrainer
@@ -693,13 +711,22 @@ class StatisticalTrainer:
                     continue
 
                 self._raise_if_cancelled()
-                logger.info(f"  Training {type(node).__name__}...")
+                self.emit(
+                    TrainEvent(
+                        TrainHook.STATISTICAL_NODE_START,
+                        node=node.name,
+                        progress=FrameProgress(0, total),
+                    )
+                )
 
                 # Create port-based input stream using upto_node
-                input_stream = self._create_input_stream(node, train_loader)
+                input_stream = self._create_input_stream(
+                    node, train_loader, total=total
+                )
 
                 # Initialize the node from data
                 node.statistical_initialization(input_stream)
+                self.emit(TrainEvent(TrainHook.STATISTICAL_NODE_END, node=node.name))
         finally:
             if outer_owner is None:
                 self.pipeline.unfreeze_structure()
@@ -743,12 +770,16 @@ class StatisticalTrainer:
             stop_event=self.stop_event,
         )
 
-    def _create_input_stream(self, target_node, dataloader) -> InputStream:
+    def _create_input_stream(
+        self, target_node, dataloader, *, total: int = 0
+    ) -> InputStream:
         """Create port-based input stream for statistical node.
 
         Uses graph.forward() with upto_node to get clean transformed inputs and
         gathers the target's inputs exactly as a forward would: batch keys by port
         name, predecessor outputs through the edges, a variadic port as a list.
+        One ``STATISTICAL_PROGRESS`` event per batch counts the frames handed to
+        the node, from 0 for every node.
 
         Parameters
         ----------
@@ -756,6 +787,8 @@ class StatisticalTrainer:
             Node to create input stream for
         dataloader : DataLoader
             Source dataloader providing batches
+        total : int
+            The frames of the train split, 0 when unknown
 
         Yields
         ------
@@ -768,6 +801,7 @@ class StatisticalTrainer:
             If a required input's predecessor produced nothing in the partial
             forward (the predecessor does not run at the inference stage).
         """
+        done = 0
         for batch in dataloader:
             self._raise_if_cancelled()
 
@@ -782,6 +816,14 @@ class StatisticalTrainer:
             )
 
             self._require_predecessor_outputs(target_node, outputs)
+            done += batch_frames(batch)
+            self.emit(
+                TrainEvent(
+                    TrainHook.STATISTICAL_PROGRESS,
+                    node=target_node.name,
+                    progress=FrameProgress(done, total),
+                )
+            )
             yield self.pipeline._gather_node_inputs(target_node, outputs, batch)
 
     def _require_predecessor_outputs(self, target_node, outputs: dict) -> None:

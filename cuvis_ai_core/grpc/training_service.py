@@ -81,11 +81,16 @@ def _run_outcome(
     stop_set_now : bool
         Whether the stop event is set now that the run has finished.
 
+    A :class:`TrainingCancelled` the run raised itself (the statistical fit at a
+    batch boundary) is the cancellation, not noise, and is returned as it is.
+
     Returns
     -------
     Exception or None
         The exception to raise, or ``None`` when the run completed.
     """
+    if isinstance(training_error, TrainingCancelled):
+        return training_error
     if training_error is not None and not stop_set_at_failure:
         return training_error
     if not stop_set_now:
@@ -573,17 +578,25 @@ class TrainingService:
             message="Starting statistical training",
         )
 
+        progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
+        fit_context = Context(
+            stage=ExecutionStage.TRAIN, epoch=0, batch_idx=0, global_step=0
+        )
         trainer = StatisticalTrainer(
             pipeline=session.pipeline,
             datamodule=datamodule,
             stop_event=session.stop_event,
             metric_nodes=self._metric_nodes(session),
+            emit=lambda event: progress_queue.put(
+                self._event_response(fit_context, event)
+            ),
         )
 
-        # Fit the pipeline (initializes normalizers, selectors, PCA, RX).
-        # Raises TrainingCancelled when the stop event fires; train() maps it
-        # to the terminal CANCELLED response.
-        trainer.fit()
+        # Fit the pipeline (initializes normalizers, selectors, PCA, RX) on a
+        # worker thread, so each node's start, batches and end reach the stream
+        # while it runs. A StopTrain raises TrainingCancelled inside the fit;
+        # the drain re-raises it and train() maps it to the CANCELLED response.
+        yield from self._drain_worker(trainer.fit, progress_queue, session.stop_event)
         session.trainer = trainer
         session.weights_source = "fit"
 
@@ -640,13 +653,16 @@ class TrainingService:
             event: TrainEvent | None = None,
         ) -> None:
             """Queue one progress response for the streaming reply."""
+            message = (_event_message(event) if event is not None else "") or (
+                "Gradient training"
+            )
             progress_queue.put(
                 self._create_progress_response(
                     context_obj,
                     losses,
                     metrics,
                     status=status,
-                    message="Gradient training",
+                    message=message,
                     event=event,
                 )
             )
@@ -1027,14 +1043,28 @@ _SPLIT_STAGES = {
 }
 
 
+_PASS_NAMES = {
+    TrainHook.EPOCH_START: "Training",
+    TrainHook.TRAIN_PROGRESS: "Training",
+    TrainHook.VALIDATION_START: "Validating",
+    TrainHook.VALIDATION_PROGRESS: "Validating",
+    TrainHook.CALIBRATION_PROGRESS: "Calibrating decider thresholds",
+}
+
+
 def _event_message(event: TrainEvent) -> str:
-    """The status line of an event response; progress hooks carry the frame counts."""
+    """The status line of an event response; the hooks with progress carry the counts."""
     if event.progress is not None:
-        what = (
-            "Calibrating decider thresholds"
-            if event.hook is TrainHook.CALIBRATION_PROGRESS
-            else f"Evaluating {event.split.value if event.split else 'split'}"
-        )
+        if event.hook in (
+            TrainHook.STATISTICAL_NODE_START,
+            TrainHook.STATISTICAL_PROGRESS,
+        ):
+            what = f"Fitting {event.node}"
+        else:
+            what = _PASS_NAMES.get(
+                event.hook,
+                f"Evaluating {event.split.value if event.split else 'split'}",
+            )
         done, total = event.progress.done, event.progress.total
         counts = f"{done}/{total}" if total else f"{done}"
         return f"{what} ({counts})"
@@ -1052,6 +1082,11 @@ def _event_to_proto(event: TrainEvent) -> cuvis_ai_pb2.TrainEvent:
     if event.progress is not None:
         proto.progress.done = event.progress.done
         proto.progress.total = event.progress.total
+    if event.epochs is not None:
+        proto.epochs.current = event.epochs.current
+        proto.epochs.total = event.epochs.total
+    if event.node:
+        proto.node = event.node
     if event.checkpoint is not None:
         restored = event.checkpoint
         proto.checkpoint.restored = restored.restored

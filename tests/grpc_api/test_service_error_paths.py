@@ -913,6 +913,124 @@ def test_train_statistical_runs_the_post_fit_steps_only_for_a_statistical_only_r
     assert session.pipeline_config is cached
 
 
+class _FakeStatisticalTrainer:
+    """Drives the sink it was built with the way a fit over one node would."""
+
+    instances: list = []
+    events: list = []
+    raise_cancelled = False
+
+    def __init__(
+        self, pipeline, datamodule, stop_event=None, metric_nodes=None, emit=None
+    ):
+        self.emit = emit
+        self.stop_event = stop_event
+        type(self).instances.append(self)
+
+    def fit(self):
+        for event in type(self).events:
+            self.emit(event)
+        if type(self).raise_cancelled:
+            self.stop_event.set()
+            raise TrainingCancelled("Statistical training stopped via StopTrain")
+
+
+def test_train_statistical_streams_the_node_events_while_the_fit_runs():
+    """The statistical fit reports each node through the typed sink, the events reach the
+    stream before the post-fit steps, and the opening sentence and COMPLETE carry none."""
+    import threading
+
+    from cuvis_ai_core.training.post_fit import FrameProgress
+
+    service = TrainingService(SessionManager())
+    outcome = _calibrated_outcome("quantile", 0.99, 0.995)
+    fake_post_fit = _fake_post_fit(
+        outcome,
+        events=[
+            TrainEvent(
+                TrainHook.CALIBRATION_END, split=ExecutionStage.VAL, calibration=outcome
+            )
+        ],
+    )
+    fake_trainer = type(
+        "_Trainer",
+        (_FakeStatisticalTrainer,),
+        {
+            "instances": [],
+            "events": [
+                TrainEvent(
+                    TrainHook.STATISTICAL_NODE_START,
+                    node="norm",
+                    progress=FrameProgress(0, 4),
+                ),
+                TrainEvent(
+                    TrainHook.STATISTICAL_PROGRESS,
+                    node="norm",
+                    progress=FrameProgress(4, 4),
+                ),
+                TrainEvent(TrainHook.STATISTICAL_NODE_END, node="norm"),
+            ],
+        },
+    )
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer", fake_trainer),
+        patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake_post_fit),
+    ):
+        responses = list(service._train_statistical(session, Mock(), post_fit=True))
+
+    assert fake_trainer.instances[-1].stop_event is session.stop_event
+    assert responses[0].message == "Starting statistical training"
+    assert not responses[0].HasField("event")
+    events = [r for r in responses if r.HasField("event")]
+    assert [r.event.hook for r in events] == [
+        cuvis_ai_pb2.TRAIN_HOOK_STATISTICAL_NODE_START,
+        cuvis_ai_pb2.TRAIN_HOOK_STATISTICAL_PROGRESS,
+        cuvis_ai_pb2.TRAIN_HOOK_STATISTICAL_NODE_END,
+        cuvis_ai_pb2.TRAIN_HOOK_CALIBRATION_END,
+    ]
+    assert [r.message for r in events[:3]] == [
+        "Fitting norm (0/4)",
+        "Fitting norm (4/4)",
+        "Fitted norm",
+    ]
+    assert events[0].event.node == "norm"
+    assert (events[1].event.progress.done, events[1].event.progress.total) == (4, 4)
+    assert all(not r.event.HasField("epochs") for r in events)
+    assert all(r.status == cuvis_ai_pb2.TRAIN_STATUS_RUNNING for r in events)
+    assert all(
+        r.context.stage == cuvis_ai_pb2.EXECUTION_STAGE_TRAIN for r in events[:3]
+    )
+    assert responses[-1].status == cuvis_ai_pb2.TRAIN_STATUS_COMPLETE
+    assert not responses[-1].HasField("event")
+    assert session.weights_source == "fit"
+
+
+def test_train_statistical_cancellation_surfaces_through_the_worker():
+    """A StopTrain during the statistical fit still ends the phase as a cancellation."""
+    import threading
+
+    service = TrainingService(SessionManager())
+    fake_trainer = type(
+        "_Trainer",
+        (_FakeStatisticalTrainer,),
+        {"instances": [], "events": [], "raise_cancelled": True},
+    )
+    session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    with (
+        patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer", fake_trainer),
+        patch(
+            "cuvis_ai_core.grpc.training_service.PostFitCallback",
+            _fake_post_fit(_calibrated_outcome()),
+        ),
+        pytest.raises(TrainingCancelled) as raised,
+    ):
+        list(service._train_statistical(session, Mock(), post_fit=True))
+
+    # The fit's own cancellation passes through: no swallowed error, no warning.
+    assert raised.value.swallowed_error is None
+
+
 def test_train_calibration_runs_the_steps_without_a_fit():
     """The standalone phase streams the same events and never calls a trainer."""
     import threading
@@ -960,6 +1078,10 @@ def test_train_calibration_runs_the_steps_without_a_fit():
         cuvis_ai_pb2.TRAIN_HOOK_EVALUATION_END,
         cuvis_ai_pb2.TRAIN_HOOK_POST_FIT_END,
     ]
+    # No fit in this phase: no epoch pair and no node on any of its events.
+    assert all(
+        not r.event.HasField("epochs") and r.event.node == "" for r in event_responses
+    )
     evaluated = event_responses[1].event.evaluation
     assert evaluated.status == cuvis_ai_pb2.EVALUATION_STATUS_EVALUATED
     assert evaluated.split == cuvis_ai_pb2.EXECUTION_STAGE_VAL
@@ -1092,11 +1214,112 @@ def test_event_to_proto_maps_every_enum_by_name():
     assert not kept.checkpoint.HasField("score") and kept.checkpoint.reason
 
 
+def test_event_message_words_the_fit_progress_hooks():
+    """The status line of a fit event names the pass and the frame counts; a total of 0
+    shows the count alone; a node's end is one line."""
+    from cuvis_ai_core.grpc.training_service import _event_message
+    from cuvis_ai_core.training.post_fit import EpochProgress, FrameProgress
+
+    epochs = EpochProgress(1, 2)
+    cases = [
+        (
+            TrainEvent(
+                TrainHook.EPOCH_START, epochs=epochs, progress=FrameProgress(0, 124)
+            ),
+            "Training (0/124)",
+        ),
+        (
+            TrainEvent(
+                TrainHook.TRAIN_PROGRESS, epochs=epochs, progress=FrameProgress(12, 124)
+            ),
+            "Training (12/124)",
+        ),
+        (
+            TrainEvent(
+                TrainHook.VALIDATION_START,
+                epochs=epochs,
+                split=ExecutionStage.VAL,
+                progress=FrameProgress(0, 48),
+            ),
+            "Validating (0/48)",
+        ),
+        (
+            TrainEvent(
+                TrainHook.VALIDATION_PROGRESS,
+                split=ExecutionStage.VAL,
+                progress=FrameProgress(3, 48),
+            ),
+            "Validating (3/48)",
+        ),
+        (
+            TrainEvent(
+                TrainHook.STATISTICAL_NODE_START,
+                node="norm",
+                progress=FrameProgress(0, 124),
+            ),
+            "Fitting norm (0/124)",
+        ),
+        (
+            TrainEvent(
+                TrainHook.STATISTICAL_PROGRESS,
+                node="norm",
+                progress=FrameProgress(8, 0),
+            ),
+            "Fitting norm (8)",
+        ),
+        (TrainEvent(TrainHook.STATISTICAL_NODE_END, node="norm"), "Fitted norm"),
+        (
+            TrainEvent(
+                TrainHook.CALIBRATION_PROGRESS,
+                split=ExecutionStage.VAL,
+                progress=FrameProgress(2, 48),
+            ),
+            "Calibrating decider thresholds (2/48)",
+        ),
+    ]
+    for event, expected in cases:
+        assert _event_message(event) == expected, event.hook
+
+
+def test_event_to_proto_carries_the_epoch_pair_and_the_node():
+    from cuvis_ai_core.grpc.training_service import _event_to_proto
+    from cuvis_ai_core.training.post_fit import EpochProgress, FrameProgress
+
+    proto = _event_to_proto(
+        TrainEvent(
+            TrainHook.TRAIN_PROGRESS,
+            epochs=EpochProgress(3, 20),
+            progress=FrameProgress(4, 14),
+        )
+    )
+    assert proto.HasField("epochs")
+    assert (proto.epochs.current, proto.epochs.total) == (3, 20)
+    assert proto.node == ""
+
+    fitting = _event_to_proto(
+        TrainEvent(
+            TrainHook.STATISTICAL_NODE_START, node="norm", progress=FrameProgress(0, 4)
+        )
+    )
+    assert fitting.node == "norm" and not fitting.HasField("epochs")
+
+    unlimited = _event_to_proto(
+        TrainEvent(TrainHook.FIT_END, epochs=EpochProgress(3, 0))
+    )
+    assert unlimited.HasField("epochs") and unlimited.epochs.total == 0
+
+
 class TestRunOutcome:
     """``_run_outcome``: a stop must never hide a failure that came first."""
 
     def test_clean_run_raises_nothing(self):
         assert _run_outcome(None, False, False) is None
+
+    def test_a_cancellation_the_run_raised_itself_passes_through(self):
+        """A statistical fit raises TrainingCancelled at a batch boundary: that is the
+        cancellation, not an error a stop happened to swallow."""
+        cancelled = TrainingCancelled("Statistical training stopped via StopTrain")
+        assert _run_outcome(cancelled, True, True) is cancelled
 
     def test_plain_stop_is_a_cancellation(self):
         outcome = _run_outcome(None, False, True)

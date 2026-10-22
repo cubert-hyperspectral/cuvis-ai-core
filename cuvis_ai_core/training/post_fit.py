@@ -60,6 +60,14 @@ class TrainHook(Enum):
     EVALUATION_PROGRESS = "evaluation_progress"
     EVALUATION_END = "evaluation_end"
     POST_FIT_END = "post_fit_end"
+    # The fit itself: one pass per statistical node, the epochs and their batches.
+    STATISTICAL_NODE_START = "statistical_node_start"
+    STATISTICAL_PROGRESS = "statistical_progress"
+    STATISTICAL_NODE_END = "statistical_node_end"
+    EPOCH_START = "epoch_start"
+    TRAIN_PROGRESS = "train_progress"
+    VALIDATION_START = "validation_start"
+    VALIDATION_PROGRESS = "validation_progress"
 
 
 class EvaluationStatus(Enum):
@@ -72,9 +80,26 @@ class EvaluationStatus(Enum):
 
 @dataclass(frozen=True)
 class FrameProgress:
-    """Frames seen so far over a split and the split's total (0 when unknown)."""
+    """Frames seen so far over a pass and the pass's total.
+
+    ``total`` is 0 when unknown: the loader has no sized dataset, or the trainer limits
+    the pass so the split's length would overstate it.
+    """
 
     done: int
+    total: int
+
+
+@dataclass(frozen=True)
+class EpochProgress:
+    """The epoch counter of a gradient fit, one-based for display.
+
+    ``current`` is the epoch under way (the first reads 1 of ``total``); on ``FIT_END`` it
+    is the number of completed epochs, which an early stop leaves below the total.
+    ``total`` is the trainer's ``max_epochs`` when above 0, else 0 (unlimited).
+    """
+
+    current: int
     total: int
 
 
@@ -112,6 +137,8 @@ class TrainEvent:
     calibration: CalibrationOutcome | None = None
     evaluation: EvaluationOutcome | None = None
     calibration_pending: bool = False
+    epochs: EpochProgress | None = None
+    node: str = ""
 
 
 EmitFn = Callable[[TrainEvent], None]
@@ -133,8 +160,16 @@ _SPLITS: tuple[tuple[str, ExecutionStage], ...] = (
 
 
 def describe_event(event: TrainEvent) -> str | None:
-    """One log line for an event, or ``None`` for the per-batch progress hooks."""
+    """One log line for an event, or ``None`` for the hooks that fire per batch or open a pass.
+
+    The statistical hooks give the CLI its one line per node's start and end; the epoch
+    and validation starts and every progress hook stay silent.
+    """
     hook = event.hook
+    if hook is TrainHook.STATISTICAL_NODE_START:
+        return f"Fitting {event.node}"
+    if hook is TrainHook.STATISTICAL_NODE_END:
+        return f"Fitted {event.node}"
     if hook is TrainHook.CHECKPOINT_RESTORED and event.checkpoint is not None:
         restored = event.checkpoint
         if restored.restored:
@@ -371,6 +406,7 @@ class PostFitCallback(Callback):
 __all__ = [
     "CheckpointRestored",
     "EmitFn",
+    "EpochProgress",
     "EvaluationOutcome",
     "EvaluationStatus",
     "FrameProgress",

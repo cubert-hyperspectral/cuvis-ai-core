@@ -683,7 +683,10 @@ def restore_trainrun(
 
     # Create trainers (both will be used based on mode)
     stat_trainer = StatisticalTrainer(
-        pipeline=pipeline, datamodule=datamodule, metric_nodes=metric_nodes or None
+        pipeline=pipeline,
+        datamodule=datamodule,
+        metric_nodes=metric_nodes or None,
+        emit=_log_post_fit_event,
     )
     grad_trainer = None
 

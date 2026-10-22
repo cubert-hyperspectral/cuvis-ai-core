@@ -1,9 +1,12 @@
 """Custom PyTorch Lightning callbacks for streaming gRPC progress.
 
-``ProgressStreamCallback`` turns the fit into Train stream responses: per-batch losses,
-per-epoch metrics, and one typed :class:`~cuvis_ai_core.training.post_fit.TrainEvent` at
-each lifecycle hook a client switches on (fit start, validation end, epoch end, fit end).
-The post-fit steps after the last epoch report through the same event type from
+``ProgressStreamCallback`` turns the fit into Train stream responses, each with one typed
+:class:`~cuvis_ai_core.training.post_fit.TrainEvent` a client switches on: the fit start
+with the epoch count, the epoch start with the train frame total, one event per train
+batch (frames so far, on the response that carries the batch losses), the validation
+start and one per validation batch, the validation end with the epoch's metrics, the
+epoch end and the fit end with the completed-epoch count. The post-fit steps after the
+last epoch report through the same event type from
 :class:`~cuvis_ai_core.training.post_fit.PostFitCallback`.
 """
 
@@ -16,7 +19,13 @@ from typing import Any
 from pytorch_lightning import Callback, LightningModule, Trainer
 
 from cuvis_ai_core.training.calibration import calibration_pending
-from cuvis_ai_core.training.post_fit import TrainEvent, TrainHook
+from cuvis_ai_core.training.evaluation import batch_frames, frame_total
+from cuvis_ai_core.training.post_fit import (
+    EpochProgress,
+    FrameProgress,
+    TrainEvent,
+    TrainHook,
+)
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 
@@ -73,9 +82,11 @@ class ProgressStreamCallback(Callback):
     """Callback that forwards training progress to a handler function.
 
     The handler receives the context, the losses, the metrics, the status string
-    and the lifecycle event of the emission (``None`` for the per-batch
-    emissions). The validation hooks stay quiet during Lightning's sanity check,
-    so no sanity-check value ever reaches a chip.
+    and the lifecycle event of the emission; every emission of a fit carries one
+    (the hooks of a Lightning ``test()`` pass carry none). The validation hooks
+    stay quiet during Lightning's sanity check, so no sanity-check value ever
+    reaches a chip. Frame totals come from the loaders the trainer runs, read when
+    a pass starts; 0 stands for unknown.
     """
 
     def __init__(self, progress_handler: ProgressHandler) -> None:
@@ -84,6 +95,11 @@ class ProgressStreamCallback(Callback):
         self._current_epoch = 0
         self._current_batch = 0
         self._global_step = 0
+        self._completed_epochs = 0
+        self._train_done = 0
+        self._train_total = 0
+        self._val_done = 0
+        self._val_total = 0
 
     @property
     def last_epoch(self) -> int:
@@ -97,7 +113,10 @@ class ProgressStreamCallback(Callback):
 
     # ----------------------------- Lifecycle hooks -----------------------------
     def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        """Announce the fit and whether a decider still waits for its calibration."""
+        """Announce the fit, its epoch count and whether a decider waits for its calibration.
+
+        No frame total here: Lightning builds its loaders after this hook.
+        """
         pipeline = getattr(pl_module, "pipeline", None)
         pending = calibration_pending(pipeline) if pipeline is not None else False
         self._emit_progress(
@@ -105,14 +124,31 @@ class ProgressStreamCallback(Callback):
             {},
             {},
             "running",
-            TrainEvent(TrainHook.FIT_START, calibration_pending=pending),
+            TrainEvent(
+                TrainHook.FIT_START,
+                calibration_pending=pending,
+                epochs=self._epoch_progress(trainer),
+            ),
         )
 
     def on_train_epoch_start(
         self, trainer: Trainer, pl_module: LightningModule
     ) -> None:
+        """Open the epoch with the train frame total of the loader the fit runs."""
         self._current_epoch = trainer.current_epoch
-        self._emit_progress(ExecutionStage.TRAIN, {}, {}, "running")
+        self._train_done = 0
+        self._train_total = self._split_frame_total(trainer, "train")
+        self._emit_progress(
+            ExecutionStage.TRAIN,
+            {},
+            {},
+            "running",
+            TrainEvent(
+                TrainHook.EPOCH_START,
+                epochs=self._epoch_progress(trainer),
+                progress=FrameProgress(0, self._train_total),
+            ),
+        )
 
     def on_train_batch_end(
         self,
@@ -122,18 +158,43 @@ class ProgressStreamCallback(Callback):
         batch: Any,
         batch_idx: int,
     ) -> None:
+        """The batch losses and the frames seen so far, on one response."""
         self._current_batch = batch_idx
         self._global_step = trainer.global_step
+        self._train_done += batch_frames(batch)
         losses = self._extract_losses(outputs)
         metrics = self._extract_metrics(trainer, "train")
-        self._emit_progress(ExecutionStage.TRAIN, losses, metrics, "running")
+        self._emit_progress(
+            ExecutionStage.TRAIN,
+            losses,
+            metrics,
+            "running",
+            TrainEvent(
+                TrainHook.TRAIN_PROGRESS,
+                epochs=self._epoch_progress(trainer),
+                progress=FrameProgress(self._train_done, self._train_total),
+            ),
+        )
 
     def on_validation_epoch_start(
         self, trainer: Trainer, pl_module: LightningModule
     ) -> None:
         if getattr(trainer, "sanity_checking", False):
             return
-        self._emit_progress(ExecutionStage.VAL, {}, {}, "running")
+        self._val_done = 0
+        self._val_total = self._split_frame_total(trainer, "val")
+        self._emit_progress(
+            ExecutionStage.VAL,
+            {},
+            {},
+            "running",
+            TrainEvent(
+                TrainHook.VALIDATION_START,
+                split=ExecutionStage.VAL,
+                epochs=self._epoch_progress(trainer),
+                progress=FrameProgress(0, self._val_total),
+            ),
+        )
 
     def on_validation_batch_end(
         self,
@@ -145,9 +206,20 @@ class ProgressStreamCallback(Callback):
     ) -> None:
         if getattr(trainer, "sanity_checking", False):
             return
+        self._val_done += batch_frames(batch)
         losses = self._extract_losses(outputs)
         metrics = self._extract_metrics(trainer, "val")
-        self._emit_progress(ExecutionStage.VAL, losses, metrics, "running")
+        self._emit_progress(
+            ExecutionStage.VAL,
+            losses,
+            metrics,
+            "running",
+            TrainEvent(
+                TrainHook.VALIDATION_PROGRESS,
+                split=ExecutionStage.VAL,
+                progress=FrameProgress(self._val_done, self._val_total),
+            ),
+        )
 
     def on_validation_epoch_end(
         self, trainer: Trainer, pl_module: LightningModule
@@ -165,10 +237,15 @@ class ProgressStreamCallback(Callback):
             losses,
             metrics,
             "running",
-            TrainEvent(TrainHook.VALIDATION_END),
+            TrainEvent(
+                TrainHook.VALIDATION_END,
+                split=ExecutionStage.VAL,
+                epochs=self._epoch_progress(trainer),
+            ),
         )
 
     def on_train_epoch_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._completed_epochs += 1
         losses = self._extract_epoch_losses(trainer)
         metrics = self._extract_metrics(trainer, "train")
         self._emit_progress(
@@ -176,7 +253,7 @@ class ProgressStreamCallback(Callback):
             losses,
             metrics,
             "running",
-            TrainEvent(TrainHook.EPOCH_END),
+            TrainEvent(TrainHook.EPOCH_END, epochs=self._epoch_progress(trainer)),
         )
 
     def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -195,12 +272,62 @@ class ProgressStreamCallback(Callback):
         self._emit_progress(ExecutionStage.TEST, losses, metrics, "running")
 
     def on_train_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        """The last epoch is done; the post-fit steps follow, so the status stays running."""
+        """The last epoch is done; the post-fit steps follow, so the status stays running.
+
+        The epoch pair counts the epochs that completed, which an early stop leaves
+        below the total.
+        """
         self._emit_progress(
-            ExecutionStage.TRAIN, {}, {}, "running", TrainEvent(TrainHook.FIT_END)
+            ExecutionStage.TRAIN,
+            {},
+            {},
+            "running",
+            TrainEvent(
+                TrainHook.FIT_END,
+                epochs=EpochProgress(
+                    self._completed_epochs, self._epoch_total(trainer)
+                ),
+            ),
         )
 
     # ----------------------------- Helpers -----------------------------
+    @staticmethod
+    def _epoch_total(trainer: Trainer) -> int:
+        """The trainer's ``max_epochs`` when above 0, else 0 (Lightning's -1: unlimited)."""
+        max_epochs = getattr(trainer, "max_epochs", None)
+        return max_epochs if isinstance(max_epochs, int) and max_epochs > 0 else 0
+
+    def _epoch_progress(self, trainer: Trainer) -> EpochProgress:
+        """The epoch under way, one-based for display, and the total."""
+        current = int(getattr(trainer, "current_epoch", 0)) + 1
+        return EpochProgress(current, self._epoch_total(trainer))
+
+    @staticmethod
+    def _split_frame_total(trainer: Trainer, split: str) -> int:
+        """The frames of the pass the trainer runs over ``split``, 0 when unknown.
+
+        Read from the loader the trainer holds (``train_dataloader`` or
+        ``val_dataloaders``, set once the fit loop built them), never through the
+        datamodule's loader factory, which would build a second loader. 0 when the
+        loader has no sized dataset or the trainer limits the pass
+        (``limit_train_batches``, ``limit_val_batches``): the split's length would
+        then overstate the frames the pass sees.
+        """
+        loader_attr, limit_attr = (
+            ("train_dataloader", "limit_train_batches")
+            if split == "train"
+            else ("val_dataloaders", "limit_val_batches")
+        )
+        limit = getattr(trainer, limit_attr, 1.0)
+        whole = limit is None or (isinstance(limit, float) and limit >= 1.0)
+        loader = getattr(trainer, loader_attr, None)
+        if not whole or loader is None:
+            return 0
+        try:
+            return frame_total(loader)
+        except Exception:
+            return 0
+
     def _extract_losses(self, outputs: Any) -> dict[str, float]:
         """Extract loss values from batch outputs."""
         losses: dict[str, float] = {}
