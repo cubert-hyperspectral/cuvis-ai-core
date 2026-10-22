@@ -18,10 +18,14 @@ from cuvis_ai_core.training import (
     CalibrationOutcome,
     GradientTrainer,
     StatisticalTrainer,
-    calibrate_pipeline_deciders,
 )
-from cuvis_ai_core.training.callbacks import build_runtime_callbacks
 from cuvis_ai_core.training.config import TrainRunConfig, create_callbacks_from_config
+from cuvis_ai_core.training.post_fit import (
+    PostFitCallback,
+    TrainEvent,
+    TrainHook,
+    log_event,
+)
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_resolver import _build_catalog, resolve_pipeline_plugins
@@ -510,6 +514,14 @@ def _log_calibration_outcome(outcome: CalibrationOutcome) -> None:
     report(f"  Calibration: {outcome.summary()}")
 
 
+def _log_post_fit_event(event: TrainEvent) -> None:
+    """The CLI's event sink: the calibration line as before, one line per other step."""
+    if event.hook is TrainHook.CALIBRATION_END and event.calibration is not None:
+        _log_calibration_outcome(event.calibration)
+        return
+    log_event(event)
+
+
 def restore_trainrun(
     trainrun_path: str | Path,
     mode: Literal["train", "validate", "test", "info"] = "info",
@@ -659,21 +671,27 @@ def restore_trainrun(
     ]
     requires_static_fit = bool(nodes_needing_stat_fit)
 
+    # Find loss and metric nodes by name; the metric nodes also feed the
+    # post-fit evaluation of either trainer.
+    loss_nodes = []
+    metric_nodes = []
+    for node in pipeline.nodes():
+        if node.name in trainrun_config.loss_nodes:
+            loss_nodes.append(node)
+        if node.name in trainrun_config.metric_nodes:
+            metric_nodes.append(node)
+
     # Create trainers (both will be used based on mode)
-    stat_trainer = StatisticalTrainer(pipeline=pipeline, datamodule=datamodule)
+    stat_trainer = StatisticalTrainer(
+        pipeline=pipeline,
+        datamodule=datamodule,
+        metric_nodes=metric_nodes or None,
+        emit=_log_post_fit_event,
+    )
     grad_trainer = None
 
     if has_gradient_training:
         logger.info("Detected gradient training configuration")
-
-        # Find loss and metric nodes by name
-        loss_nodes = []
-        metric_nodes = []
-        for node in pipeline.nodes():
-            if node.name in trainrun_config.loss_nodes:
-                loss_nodes.append(node)
-            if node.name in trainrun_config.metric_nodes:
-                metric_nodes.append(node)
 
         # Update checkpoint directory to output_dir
         training_config = trainrun_config.training
@@ -687,7 +705,8 @@ def restore_trainrun(
 
         # An explicit callback list wins over the config-derived one inside the
         # trainer, so the config callbacks are appended here rather than left
-        # for the trainer to build.
+        # for the trainer to build. The post-fit callback goes in with the
+        # trainrun's metric nodes; the trainer adds the other runtime callbacks.
         grad_trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
@@ -695,7 +714,11 @@ def restore_trainrun(
             metric_nodes=metric_nodes,
             training_config=training_config,
             callbacks=[
-                *build_runtime_callbacks(training_config),
+                PostFitCallback(
+                    emit=_log_post_fit_event,
+                    metric_nodes=metric_nodes or None,
+                    release_cuda_cache=training_config.release_cuda_cache_on_validation,
+                ),
                 *create_callbacks_from_config(training_config.callbacks),
             ],
         )
@@ -727,16 +750,19 @@ def restore_trainrun(
                     "Please configure checkpoint resumption in the training config."
                 )
 
+            # The post-fit steps (restore the best checkpoint, calibrate the
+            # deciders on val, evaluate val and test) run inside the fit, at
+            # Lightning's on_train_end, through the PostFitCallback in the
+            # trainer's callback list; each step logs one line.
             grad_trainer.fit()
         else:
             logger.info("  Step 2: Skipped (statistical-only)")
-
-        # Calibrate decider thresholds on the validation split so the saved checkpoint
-        # ships thresholds matched to its own weights. Best effort: a skipped or failed
-        # calibration is reported here and the save below still happens.
-        _log_calibration_outcome(
-            calibrate_pipeline_deciders(pipeline, datamodule, split="val")
-        )
+            # A statistical-only run has no Lightning fit to hang the steps on:
+            # calibrate and evaluate here, on the weights about to be saved.
+            logger.info("  Post-fit steps (calibration, evaluation)...")
+            PostFitCallback(
+                emit=_log_post_fit_event, metric_nodes=metric_nodes or None
+            ).run(pipeline, datamodule, restore=False)
 
         # Step 3: Save trained pipeline
         logger.info("  Step 3: Saving trained pipeline...")
@@ -746,33 +772,6 @@ def restore_trainrun(
         restored_pipeline_path.parent.mkdir(parents=True, exist_ok=True)
         pipeline.save_to_file(str(restored_pipeline_path))
         logger.info(f"     Saved to {restored_pipeline_path}")
-
-        # Step 4: Run validation (populate TensorBoard monitoring).
-        # Gate on the resolved val dataset (built by setup("fit")); a run whose
-        # config resolves no val split simply skips this step.
-        if datamodule.val_ds is not None:
-            logger.info("  Step 4: Validation...")
-            if grad_trainer is not None:
-                grad_trainer.validate()
-            else:
-                stat_trainer.validate()
-        else:
-            logger.warning(
-                "  Step 4: Validation skipped - no validation data resolved for this run"
-            )
-
-        # Step 5: Run test evaluation (populate TensorBoard monitoring).
-        datamodule.setup(stage="test")
-        if datamodule.test_ds is not None:
-            logger.info("  Step 5: Test evaluation...")
-            if grad_trainer is not None:
-                grad_trainer.test()
-            else:
-                stat_trainer.test()
-        else:
-            logger.warning(
-                "  Step 5: Test evaluation skipped - no test data resolved for this run"
-            )
 
     elif mode == "validate":
         logger.info("Validation mode")

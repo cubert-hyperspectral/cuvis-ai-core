@@ -461,6 +461,20 @@ def test_restore_trainrun_info_mode_builds_and_returns(
 _DS = object()  # sentinel: a non-None dataset is available
 
 
+class RecordingPostFit:
+    """Stands in for PostFitCallback: records how it was built and whether run() fired."""
+
+    instances: list["RecordingPostFit"] = []
+
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.runs: list[bool] = []
+        self.__class__.instances.append(self)
+
+    def run(self, pipeline, datamodule, *, module=None, restore=True, **_):
+        self.runs.append(restore)
+
+
 def _patch_restore_components(
     monkeypatch, fake_pipeline, *, val_ds=None, test_ds=None
 ) -> None:
@@ -476,8 +490,10 @@ def _patch_restore_components(
         lambda *a, **k: FakeRestoreDataModule(val_ds=val_ds, test_ds=test_ds),
     )
     RecordingTrainer.all_instances.clear()
+    RecordingPostFit.instances.clear()
     monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
     monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "PostFitCallback", RecordingPostFit)
 
 
 def _auto_weights_path(tmp_path: Path) -> Path:
@@ -552,18 +568,22 @@ def test_restore_trainrun_execution_modes_with_mocked_trainers(
         assert fake_pipeline.save_to_file_calls, "save_to_file must fire in train mode"
         if requires_fit:
             assert "fit" in stat_trainer.calls
+        # The post-fit steps (calibration, evaluation) replace the separate
+        # validate()/test() calls: inside the gradient fit through the callback
+        # in the trainer's list, after a statistical-only fit through run().
+        assert "validate" not in stat_trainer.calls and "test" not in stat_trainer.calls
         if use_gradient:
             assert grad_trainer is not None
             assert "fit" in grad_trainer.calls
-            if val_ds is not None:
-                assert "validate" in grad_trainer.calls
-            if test_ds is not None:
-                assert "test" in grad_trainer.calls
+            assert (
+                "validate" not in grad_trainer.calls
+                and "test" not in grad_trainer.calls
+            )
+            post_fit = RecordingPostFit.instances[-1]
+            assert post_fit in grad_trainer.kwargs["callbacks"]
+            assert post_fit.runs == []  # the recording fit never reaches on_train_end
         else:
-            if val_ds is not None:
-                assert "validate" in stat_trainer.calls
-            if test_ds is not None:
-                assert "test" in stat_trainer.calls
+            assert RecordingPostFit.instances[-1].runs == [False]
     elif mode == "validate":
         assert not fake_pipeline.save_to_file_calls, (
             "save_to_file must NOT fire in validate mode"
@@ -946,8 +966,10 @@ def _capture_trainrun_config(monkeypatch) -> dict:
         lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
     )
     RecordingTrainer.all_instances.clear()
+    RecordingPostFit.instances.clear()
     monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
     monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "PostFitCallback", RecordingPostFit)
     return captured
 
 
@@ -1045,9 +1067,13 @@ def test_restore_trainrun_registers_the_memory_log_callback(
 
     restore_mod.restore_trainrun(path, mode="train", device="cpu")
 
+    # The memory log and the cache release are installed by the trainer itself;
+    # the explicit list carries the post-fit lifecycle with the CLI's log sink.
     registered = [type(c).__name__ for c in captured["callbacks"]]
-    assert "CudaMemoryLogCallback" in registered
-    assert "CudaCacheReleaseCallback" not in registered
+    assert registered == ["PostFitCallback"]
+    post_fit = captured["callbacks"][0]
+    assert post_fit.release_cuda_cache is False
+    assert post_fit.emit is restore_mod._log_post_fit_event
 
 
 def test_restore_trainrun_keeps_the_config_callbacks_alongside_the_runtime_ones(
@@ -1063,8 +1089,7 @@ def test_restore_trainrun_keeps_the_config_callbacks_alongside_the_runtime_ones(
     restore_mod.restore_trainrun(path, mode="train", device="cpu")
 
     registered = [type(c).__name__ for c in captured["callbacks"]]
-    assert "CudaMemoryLogCallback" in registered
-    assert "ModelCheckpoint" in registered
+    assert registered == ["PostFitCallback", "ModelCheckpoint"]
 
 
 def test_restore_trainrun_registers_the_cache_release_on_request(
@@ -1080,5 +1105,6 @@ def test_restore_trainrun_registers_the_cache_release_on_request(
         overrides=["training.release_cuda_cache_on_validation=true"],
     )
 
-    registered = [type(c).__name__ for c in captured["callbacks"]]
-    assert "CudaCacheReleaseCallback" in registered
+    (post_fit,) = captured["callbacks"]
+    assert type(post_fit).__name__ == "PostFitCallback"
+    assert post_fit.release_cuda_cache is True

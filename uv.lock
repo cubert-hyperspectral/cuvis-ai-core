@@ -764,7 +764,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "click", specifier = ">=8.4.2" },
-    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.14.0,<0.15" },
+    { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.14.2,<0.15" },
     { name = "cyclonedx-bom", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "detect-secrets", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
@@ -820,15 +820,15 @@ provides-extras = ["hf", "dev", "test"]
 
 [[package]]
 name = "cuvis-ai-schemas"
-version = "0.14.0"
+version = "0.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/35/97/ed9df56d5d9a779d1a950fae70800ba1996543aeaf000437eb874c199c34/cuvis_ai_schemas-0.14.0.tar.gz", hash = "sha256:6d4bdd5ef6c15cc791ecf56ca870c60c28eeb277fead236d21fb518a6d9b7a66", size = 267200, upload-time = "2026-10-01T20:14:45.641Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/10/829447cc484b615ef3e77ab8b8fc188a675690cd843814700c8f3115e381/cuvis_ai_schemas-0.14.2.tar.gz", hash = "sha256:0dc4caac606fbdc7ecbc44c36ece658a94ff7c402b98096cc2e0c16c57ea57f1", size = 274960, upload-time = "2026-10-22T21:00:14.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/84/29573dc4488e49cc12d33f39cf60b19472431c045f5847156c501ca34269/cuvis_ai_schemas-0.14.0-py3-none-any.whl", hash = "sha256:5299318d9943f7fe37ece68892512c5a126352742566aa9ecef1b870ad3992a0", size = 81717, upload-time = "2026-10-01T20:14:44.056Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/32/81219e7c53ed975d7e325ba527433695c83667ac87dd120d33de2c97033f/cuvis_ai_schemas-0.14.2-py3-none-any.whl", hash = "sha256:7eb81c668a4a31fa1617053de1cf3ebb8d260a05efde8bf051261c95213fde42", size = 84860, upload-time = "2026-10-22T21:00:12.953Z" },
 ]
 
 [package.optional-dependencies]

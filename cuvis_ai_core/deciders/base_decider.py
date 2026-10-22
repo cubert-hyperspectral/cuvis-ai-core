@@ -41,6 +41,18 @@ class BinaryDecider(Node):
         # parameters to the Serializable base for automatic hparam capture.
         super().__init__(threshold=threshold, **kwargs)
 
+    @property
+    def is_calibrated(self) -> bool:
+        """Whether the decider holds the thresholds its decisions need.
+
+        A decider constructed with its thresholds is calibrated from the start. A
+        subclass whose thresholds may be unset until the post-fit calibration (a null
+        value in the pipeline yaml) overrides this to report the live state; the post-fit
+        lifecycle reads it to announce a pending calibration and to say, after the step,
+        whether thresholds are present.
+        """
+        return True
+
     @abstractmethod
     def forward(  # type: ignore[override]
         self,

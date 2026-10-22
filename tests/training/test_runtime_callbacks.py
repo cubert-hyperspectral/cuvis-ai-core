@@ -21,6 +21,7 @@ from cuvis_ai_core.training.callbacks import (
     CudaMemoryLogCallback,
     build_runtime_callbacks,
 )
+from cuvis_ai_core.training.post_fit import PostFitCallback
 from cuvis_ai_core.training.config import TrainingConfig
 
 
@@ -338,7 +339,7 @@ def test_release_is_a_no_op_without_cuda(monkeypatch):
 
 def test_the_log_callback_is_always_built():
     built = build_runtime_callbacks(TrainingConfig())
-    assert [type(c) for c in built] == [CudaMemoryLogCallback]
+    assert [type(c) for c in built] == [CudaMemoryLogCallback, PostFitCallback]
 
 
 def test_the_release_callback_is_opt_in():
@@ -348,11 +349,15 @@ def test_the_release_callback_is_opt_in():
     assert [type(c) for c in built] == [
         CudaMemoryLogCallback,
         CudaCacheReleaseCallback,
+        PostFitCallback,
     ]
 
 
 def test_no_config_still_yields_the_log_callback():
-    assert [type(c) for c in build_runtime_callbacks(None)] == [CudaMemoryLogCallback]
+    assert [type(c) for c in build_runtime_callbacks(None)] == [
+        CudaMemoryLogCallback,
+        PostFitCallback,
+    ]
 
 
 def test_the_env_var_name_is_the_documented_one():

@@ -9,6 +9,7 @@ mock-level so they run in the ``not slow and not gpu`` gate.
 from unittest.mock import MagicMock, patch
 
 import pytorch_lightning as pl
+import pytest
 import torch
 
 from cuvis_ai_core.node.node import Node
@@ -148,7 +149,7 @@ def test_fit_enables_checkpointing_with_explicit_callbacks():
         trainer.fit()
     kwargs = mock_trainer_cls.call_args.kwargs
     assert kwargs["enable_checkpointing"] is True
-    assert kwargs["callbacks"] == trainer.callbacks
+    assert kwargs["callbacks"][: len(trainer.callbacks)] == trainer.callbacks
 
 
 def test_test_without_fit_lazily_builds_trainer_and_drops_best():
@@ -217,3 +218,133 @@ def test_fit_builds_callbacks_from_config_and_logs_early_stopping():
         trainer.fit()
     # callbacks were derived from the config (not an explicitly-passed list).
     assert "callbacks" in mock_trainer_cls.call_args.kwargs
+
+
+def _checkpoint_callback(path, monitor="val/x", score=0.9):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        best_model_path=str(path), monitor=monitor, best_model_score=torch.tensor(score)
+    )
+
+
+def _live_weight(trainer: GradientTrainer) -> float:
+    return float(next(p for n in trainer.pipeline.nodes() for p in n.parameters()))
+
+
+def test_load_best_checkpoint_without_a_trainer_keeps_the_final_epoch():
+    trainer = _trainer(TrainingConfig())
+
+    restored = trainer.load_best_checkpoint()
+
+    assert restored.restored is False
+    assert restored.reason == "no checkpoint callback"
+    assert _live_weight(trainer) == 1.0
+
+
+def test_load_best_checkpoint_loads_the_file_into_the_live_nodes(tmp_path):
+    from types import SimpleNamespace
+
+    trainer = _trainer(TrainingConfig())
+    state = {
+        key: torch.full_like(value, 2.0) for key, value in trainer.state_dict().items()
+    }
+    path = tmp_path / "best.ckpt"
+    torch.save({"state_dict": state, "epoch": 4}, path)
+    trainer.trainer = SimpleNamespace(checkpoint_callback=_checkpoint_callback(path))
+
+    restored = trainer.load_best_checkpoint()
+
+    assert restored.restored is True
+    assert (restored.path, restored.epoch, restored.monitor) == (str(path), 4, "val/x")
+    assert restored.score == pytest.approx(0.9)
+    assert _live_weight(trainer) == 2.0  # the pipeline nodes share the modules
+
+
+def test_load_best_checkpoint_refuses_a_foreign_state_dict(tmp_path):
+    from types import SimpleNamespace
+
+    trainer = _trainer(TrainingConfig())
+    state = {
+        key: torch.full_like(value, 2.0) for key, value in trainer.state_dict().items()
+    }
+
+    extra = tmp_path / "extra.ckpt"
+    torch.save({"state_dict": {**state, "stray": torch.zeros(1)}, "epoch": 1}, extra)
+    trainer.trainer = SimpleNamespace(checkpoint_callback=_checkpoint_callback(extra))
+    refused = trainer.load_best_checkpoint()
+    assert refused.restored is False and refused.reason.startswith("checkpoint keys")
+
+    shaped = tmp_path / "shaped.ckpt"
+    torch.save(
+        {"state_dict": {key: torch.zeros(3) for key in state}, "epoch": 1}, shaped
+    )
+    trainer.trainer = SimpleNamespace(checkpoint_callback=_checkpoint_callback(shaped))
+    refused = trainer.load_best_checkpoint()
+    assert refused.restored is False and refused.reason.startswith("shape mismatch")
+
+    missing = tmp_path / "missing.ckpt"
+    trainer.trainer = SimpleNamespace(checkpoint_callback=_checkpoint_callback(missing))
+    assert trainer.load_best_checkpoint().reason == "no checkpoint was saved"
+    assert _live_weight(trainer) == 1.0
+
+
+def test_build_trainer_installs_the_runtime_callbacks_once():
+    """Every fit gets the memory log and the post-fit lifecycle, also a direct fit();
+    an explicit PostFitCallback (the gRPC one with its queue sink) is not doubled."""
+    from cuvis_ai_core.training.callbacks import CudaMemoryLogCallback
+    from cuvis_ai_core.training.post_fit import PostFitCallback
+
+    plain = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        mock_trainer_cls.return_value = MagicMock()
+        plain.fit()
+    callbacks = mock_trainer_cls.call_args.kwargs["callbacks"]
+    assert sum(isinstance(c, PostFitCallback) for c in callbacks) == 1
+    assert sum(isinstance(c, CudaMemoryLogCallback) for c in callbacks) == 1
+
+    own = PostFitCallback()
+    explicit = GradientTrainer(
+        pipeline=_pipeline(),
+        datamodule=_MockDataModule(),
+        loss_nodes=[],
+        training_config=TrainingConfig(max_epochs=1),
+        callbacks=[own],
+    )
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        mock_trainer_cls.return_value = MagicMock()
+        explicit.fit()
+    callbacks = mock_trainer_cls.call_args.kwargs["callbacks"]
+    assert [c for c in callbacks if isinstance(c, PostFitCallback)] == [own]
+    assert sum(isinstance(c, CudaMemoryLogCallback) for c in callbacks) == 1
+
+
+def test_build_runtime_callbacks_carries_the_sink_and_the_stop_event():
+    import threading
+
+    from cuvis_ai_core.training.callbacks import (
+        CudaCacheReleaseCallback,
+        build_runtime_callbacks,
+    )
+    from cuvis_ai_core.training.post_fit import PostFitCallback
+
+    stop = threading.Event()
+
+    def sink(event) -> None:
+        pass
+
+    callbacks = build_runtime_callbacks(
+        TrainingConfig(release_cuda_cache_on_validation=True),
+        emit=sink,
+        stop_event=stop,
+    )
+    post_fit = next(c for c in callbacks if isinstance(c, PostFitCallback))
+    assert post_fit.emit is sink and post_fit.stop_event is stop
+    assert post_fit.release_cuda_cache is True
+    assert any(isinstance(c, CudaCacheReleaseCallback) for c in callbacks)
+    assert (
+        next(
+            c for c in build_runtime_callbacks(None) if isinstance(c, PostFitCallback)
+        ).release_cuda_cache
+        is False
+    )

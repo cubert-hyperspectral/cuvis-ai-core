@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,8 +14,17 @@ import torch
 from loguru import logger
 
 from cuvis_ai_core.grpc.callbacks import ProgressStreamCallback, StopTrainingCallback
-from cuvis_ai_core.training import calibrate_pipeline_deciders
-from cuvis_ai_core.training.callbacks import build_runtime_callbacks
+from cuvis_ai_core.training.calibration import (
+    CalibrationOutcome,
+    uncalibrated_required_consumers,
+)
+from cuvis_ai_core.training.post_fit import (
+    PostFitCallback,
+    PostFitResult,
+    TrainEvent,
+    TrainHook,
+    describe_event,
+)
 from cuvis_ai_core.training.config import (
     DataConfig,
     TrainingConfig,
@@ -72,11 +81,16 @@ def _run_outcome(
     stop_set_now : bool
         Whether the stop event is set now that the run has finished.
 
+    A :class:`TrainingCancelled` the run raised itself (the statistical fit at a
+    batch boundary) is the cancellation, not noise, and is returned as it is.
+
     Returns
     -------
     Exception or None
         The exception to raise, or ``None`` when the run completed.
     """
+    if isinstance(training_error, TrainingCancelled):
+        return training_error
     if training_error is not None and not stop_set_at_failure:
         return training_error
     if not stop_set_now:
@@ -184,18 +198,25 @@ class TrainingService:
             from cuvis_ai_core.data.datamodule import create_data_module
 
             datamodule = create_data_module(session.node_registry, data_config_py)
+            self._refuse_uncalibrated_consumers(session.pipeline)
+            # Read before the experiment capture below, which writes a default
+            # TrainingConfig into the session for a statistical phase.
+            statistical_only = session.training_config is None
             training_config_py: TrainingConfig | None = None
             inner: Iterator[cuvis_ai_pb2.TrainResponse]
 
             if request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_STATISTICAL:
-                # Statistical training - single pass, no streaming
+                # Statistical training - single pass; the post-fit steps follow
+                # only when no gradient phase comes after it.
                 # Preserve existing training_config from session (if loaded via RestoreTrainRun)
                 # or create default if not present
                 training_config_py = session.training_config or TrainingConfig()
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                inner = self._train_statistical(session, datamodule)
+                inner = self._train_statistical(
+                    session, datamodule, post_fit=statistical_only
+                )
 
             elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_GRADIENT:
                 # Gradient training - streaming progress
@@ -217,6 +238,15 @@ class TrainingService:
                     session, data_config_py, training_config_py
                 )
                 inner = self._train_gradient(session, datamodule, training_config_py)
+
+            elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_CALIBRATION:
+                # The post-fit steps alone, on weights the session already holds.
+                refusal = self._calibration_precondition(session)
+                if refusal is not None:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details(refusal)
+                    return
+                inner = self._train_calibration(session, datamodule)
 
             else:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -529,9 +559,14 @@ class TrainingService:
         self,
         session: SessionState,
         datamodule: "pl.LightningDataModule",
+        *,
+        post_fit: bool = True,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
-        """Train with statistical method."""
-        # Yield initial status
+        """Train with the statistical method; the post-fit steps follow a statistical-only run.
+
+        ``post_fit`` is False when a gradient phase comes next: the restore, the
+        calibration and the evaluation then run once, at the end of that fit.
+        """
         yield cuvis_ai_pb2.TrainResponse(
             context=cuvis_ai_pb2.Context(
                 stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
@@ -543,26 +578,39 @@ class TrainingService:
             message="Starting statistical training",
         )
 
-        # Create and run statistical trainer
+        progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
+        fit_context = Context(
+            stage=ExecutionStage.TRAIN, epoch=0, batch_idx=0, global_step=0
+        )
         trainer = StatisticalTrainer(
             pipeline=session.pipeline,
             datamodule=datamodule,
             stop_event=session.stop_event,
+            metric_nodes=self._metric_nodes(session),
+            emit=lambda event: progress_queue.put(
+                self._event_response(fit_context, event)
+            ),
         )
 
-        # Fit the pipeline (initializes normalizers, selectors, PCA, RX).
-        # Raises TrainingCancelled when the stop event fires; train() maps it
-        # to the terminal CANCELLED response.
-        trainer.fit()
-
-        # Store trainer in session for potential later use
+        # Fit the pipeline (initializes normalizers, selectors, PCA, RX) on a
+        # worker thread, so each node's start, batches and end reach the stream
+        # while it runs. A StopTrain raises TrainingCancelled inside the fit;
+        # the drain re-raises it and train() maps it to the CANCELLED response.
+        yield from self._drain_worker(trainer.fit, progress_queue, session.stop_event)
         session.trainer = trainer
+        session.weights_source = "fit"
 
-        # Same post-fit threshold calibration as the gradient path and the CLI, so a
-        # statistical-only pipeline with a decider ships fitted thresholds too.
-        calibration = self._calibrate_session_deciders(session, datamodule)
+        message = "Statistical training complete"
+        if post_fit:
+            base = Context(
+                stage=ExecutionStage.TRAIN, epoch=1, batch_idx=0, global_step=1
+            )
+            outcome = yield from self._run_post_fit(
+                session, datamodule, restore=False, base_context=base
+            )
+            if outcome.applicable:
+                message = f"{message}; {outcome.summary()}"
 
-        # Yield completion
         yield cuvis_ai_pb2.TrainResponse(
             context=cuvis_ai_pb2.Context(
                 stage=cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
@@ -571,7 +619,7 @@ class TrainingService:
                 global_step=1,
             ),
             status=cuvis_ai_pb2.TRAIN_STATUS_COMPLETE,
-            message=f"Statistical training complete{calibration}",
+            message=message,
         )
 
     def _train_gradient(
@@ -580,7 +628,13 @@ class TrainingService:
         datamodule: "pl.LightningDataModule",
         training_config: TrainingConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
-        """Train with gradient-based method and stream progress."""
+        """Train with the gradient method and stream progress, the post-fit steps included.
+
+        The fit runs on a worker thread; the Lightning callbacks queue one
+        response per emission and the post-fit callback queues one per
+        lifecycle event, all drained here in order. A StopTrain during the fit
+        or during a post-fit step ends the stream CANCELLED.
+        """
         # Seed as early as the Train RPC allows so training-time randomness
         # (shuffling, dropout, augmentation) is reproducible.
         import pytorch_lightning as pl
@@ -592,24 +646,46 @@ class TrainingService:
         progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
 
         def progress_handler(
-            context_obj: Context, losses: dict, metrics: dict, status: str
+            context_obj: Context,
+            losses: dict,
+            metrics: dict,
+            status: str,
+            event: TrainEvent | None = None,
         ) -> None:
             """Queue one progress response for the streaming reply."""
+            message = (_event_message(event) if event is not None else "") or (
+                "Gradient training"
+            )
             progress_queue.put(
                 self._create_progress_response(
                     context_obj,
                     losses,
                     metrics,
                     status=status,
-                    message="Gradient training",
+                    message=message,
+                    event=event,
                 )
             )
 
-        callback_list = [
-            ProgressStreamCallback(progress_handler),
-            StopTrainingCallback(session.stop_event),
-            *build_runtime_callbacks(training_config),
-        ]
+        progress = ProgressStreamCallback(progress_handler)
+
+        def emit(event: TrainEvent) -> None:
+            """Queue one post-fit event; its context keeps the fit's last epoch and step."""
+            base = Context(
+                stage=ExecutionStage.TRAIN,
+                epoch=progress.last_epoch,
+                batch_idx=0,
+                global_step=progress.last_global_step,
+            )
+            progress_queue.put(self._event_response(base, event))
+
+        post_fit = PostFitCallback(
+            emit=emit,
+            stop_event=session.stop_event,
+            release_cuda_cache=training_config.release_cuda_cache_on_validation,
+            metric_nodes=metric_nodes or None,
+        )
+        callback_list = [progress, StopTrainingCallback(session.stop_event), post_fit]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
 
         trainer = GradientTrainer(
@@ -622,29 +698,190 @@ class TrainingService:
         )
         session.trainer = trainer
 
-        training_complete = threading.Event()
-        training_error: Exception | None = None
+        yield from self._drain_worker(trainer.fit, progress_queue, session.stop_event)
+        session.weights_source = "fit"
 
+        result = post_fit.result
+        outcome = (
+            result.calibration
+            if result is not None
+            else CalibrationOutcome(split="val", applicable=False)
+        )
+        if outcome.calibrated:
+            session.pipeline_config = None
+        suffix = f"; {outcome.summary()}" if outcome.applicable else ""
+
+        final_context = Context(
+            stage=ExecutionStage.TRAIN,
+            epoch=training_config.max_epochs,
+            batch_idx=0,
+            global_step=getattr(getattr(trainer, "_trainer", None), "global_step", 0),
+        )
+        yield self._create_progress_response(
+            final_context,
+            losses={},
+            metrics={},
+            status="complete",
+            message=f"Gradient training complete{suffix}",
+        )
+
+    def _train_calibration(
+        self,
+        session: SessionState,
+        datamodule: "pl.LightningDataModule",
+    ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
+        """Run the post-fit steps on a session that already holds trained weights; no fit."""
+        base = Context(stage=ExecutionStage.TRAIN, epoch=0, batch_idx=0, global_step=0)
+        yield self._create_progress_response(
+            base,
+            losses={},
+            metrics={},
+            status="running",
+            message="Starting calibration",
+        )
+        outcome = yield from self._run_post_fit(
+            session, datamodule, restore=False, base_context=base
+        )
+        suffix = (
+            f"; {outcome.summary()}"
+            if outcome.applicable
+            else "; no calibratable decider"
+        )
+        yield self._create_progress_response(
+            base,
+            losses={},
+            metrics={},
+            status="complete",
+            message=f"Calibration complete{suffix}",
+        )
+
+    @staticmethod
+    def _calibration_precondition(session: SessionState) -> str | None:
+        """Why the calibration phase cannot run on this session, or ``None`` when it can."""
+        if session.weights_source is None:
+            return (
+                "The session holds no trained weights: restore a saved run with its "
+                "weights, load weights, or train before a calibration"
+            )
+        unfitted = [
+            node.name
+            for node in session.pipeline.nodes()
+            if node.requires_initial_fit
+            and not getattr(node, "_statistically_initialized", False)
+        ]
+        if unfitted:
+            return (
+                f"Nodes {', '.join(unfitted)} need a statistical fit before a calibration; "
+                "train or load weights first"
+            )
+        return None
+
+    @staticmethod
+    def _refuse_uncalibrated_consumers(pipeline) -> None:
+        """Refuse a training graph that feeds a required decisions input from an uncalibrated decider.
+
+        Such a node would fail its first forward at a training stage (the decider emits
+        no decisions before its calibration); the refusal names both nodes before any fit.
+        """
+        consumers = uncalibrated_required_consumers(pipeline)
+        if not consumers:
+            return
+        clauses = ", ".join(
+            f"{node.name} reads decisions from {decider.name}"
+            for node, decider in consumers
+        )
+        raise ValueError(
+            f"{clauses}, whose thresholds are not calibrated; set thresholds in the "
+            "pipeline or take the node out of the training graph"
+        )
+
+    @staticmethod
+    def _metric_nodes(session: SessionState) -> list | None:
+        """The trainrun's metric nodes by name, or ``None`` for discovery."""
+        trainrun = getattr(session, "trainrun_config", None)
+        names = getattr(trainrun, "metric_nodes", None)
+        if (
+            not isinstance(names, (list, tuple))
+            or not names
+            or session.pipeline is None
+        ):
+            return None
+        wanted = set(names)
+        return [node for node in session.pipeline.nodes() if node.name in wanted]
+
+    def _run_post_fit(
+        self,
+        session: SessionState,
+        datamodule: "pl.LightningDataModule",
+        *,
+        restore: bool,
+        base_context: Context,
+    ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
+        """Run the post-fit steps on a worker thread and stream their events.
+
+        The generator's return value is the calibration outcome; a calibrated
+        pipeline drops the session's cached config so the save re-derives it.
+        """
+        progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
+        results: list[PostFitResult] = []
+        post_fit = PostFitCallback(
+            emit=lambda event: progress_queue.put(
+                self._event_response(base_context, event)
+            ),
+            stop_event=session.stop_event,
+            metric_nodes=self._metric_nodes(session),
+        )
+
+        def _run() -> None:
+            """The steps, on the worker thread."""
+            results.append(post_fit.run(session.pipeline, datamodule, restore=restore))
+
+        yield from self._drain_worker(_run, progress_queue, session.stop_event)
+        outcome = (
+            results[0].calibration
+            if results
+            else CalibrationOutcome(split="val", applicable=False)
+        )
+        if outcome.calibrated:
+            session.pipeline_config = None
+        return outcome
+
+    @staticmethod
+    def _drain_worker(
+        run: Callable[[], object],
+        progress_queue: "queue.Queue[cuvis_ai_pb2.TrainResponse]",
+        stop_event: threading.Event,
+    ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
+        """Run ``run`` on a worker thread and yield the queued responses while it runs.
+
+        When the thread is done the drain empties the queue, then the run's
+        outcome is decided (``_run_outcome``): an error is raised as is, a
+        requested stop as :class:`TrainingCancelled`.
+        """
+        complete = threading.Event()
+        error: Exception | None = None
         stop_set_at_failure = False
 
-        def _run_training() -> None:
-            """Run ``trainer.fit()`` on the worker thread and record its failure."""
-            nonlocal training_error, stop_set_at_failure
+        def _target() -> None:
+            """Run the work and record its failure for the stream."""
+            nonlocal error, stop_set_at_failure
             try:
-                trainer.fit()
-            except Exception as exc:  # pragma: no cover - surfaced via progress stream
-                training_error = exc
+                run()
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - surfaced via the stream outcome
+                error = exc
                 # Read the stop flag here, not after the loop: only a stop that
                 # was already requested when the run blew up may take
                 # precedence over the error.
-                stop_set_at_failure = session.stop_event.is_set()
+                stop_set_at_failure = stop_event.is_set()
             finally:
-                training_complete.set()
+                complete.set()
 
-        thread = threading.Thread(target=_run_training, daemon=True)
+        thread = threading.Thread(target=_target, daemon=True)
         thread.start()
 
-        while not training_complete.is_set() or not progress_queue.empty():
+        while not complete.is_set() or not progress_queue.empty():
             try:
                 progress = progress_queue.get(timeout=0.1)
             except queue.Empty:
@@ -652,46 +889,26 @@ class TrainingService:
             else:
                 yield progress
 
-        outcome = _run_outcome(
-            training_error, stop_set_at_failure, session.stop_event.is_set()
-        )
+        outcome = _run_outcome(error, stop_set_at_failure, stop_event.is_set())
         if outcome is not None:
             raise outcome
 
-        calibration = self._calibrate_session_deciders(session, datamodule)
-
-        final_context = Context(
-            stage=ExecutionStage.TRAIN,
-            epoch=training_config.max_epochs,
-            batch_idx=0,
-            global_step=getattr(getattr(trainer, "trainer", None), "global_step", 0),
+    def _event_response(
+        self, base: Context, event: TrainEvent
+    ) -> cuvis_ai_pb2.TrainResponse:
+        """One RUNNING response for a post-fit event, with the status line a human reads."""
+        stage = event.split if event.split is not None else base.stage
+        context = Context(
+            stage=stage, epoch=base.epoch, batch_idx=0, global_step=base.global_step
         )
-        yield self._create_progress_response(
-            final_context,
+        return self._create_progress_response(
+            context,
             losses={},
             metrics={},
-            status="complete",
-            message=f"Gradient training complete{calibration}",
+            status="running",
+            message=_event_message(event),
+            event=event,
         )
-
-    def _calibrate_session_deciders(
-        self, session: SessionState, datamodule: "pl.LightningDataModule"
-    ) -> str:
-        """Run the post-training threshold calibration on the session's pipeline.
-
-        The deciders are mutated in place; when any was calibrated the session's cached
-        pipeline config is dropped so the next save re-derives the calibrated hparams
-        from the live pipeline. Returns the suffix for the completion message: empty
-        when the pipeline has no calibratable decider, otherwise
-        ``"; thresholds calibrated on val: ..."`` or ``"; thresholds not calibrated: ..."``
-        so the caller sees the result without reading the log.
-        """
-        if session.pipeline is None:
-            return ""
-        outcome = calibrate_pipeline_deciders(session.pipeline, datamodule, split="val")
-        if outcome.calibrated:
-            session.pipeline_config = None
-        return f"; {outcome.summary()}" if outcome.applicable else ""
 
     def _deserialize_training_config(
         self, config_proto: cuvis_ai_pb2.TrainingConfig
@@ -784,14 +1001,9 @@ class TrainingService:
         metrics: dict,
         status: str,
         message: str = "",
+        event: TrainEvent | None = None,
     ) -> cuvis_ai_pb2.TrainResponse:
         """Map internal progress to proto TrainResponse."""
-        stage_map = {
-            ExecutionStage.TRAIN: cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
-            ExecutionStage.VAL: cuvis_ai_pb2.EXECUTION_STAGE_VAL,
-            ExecutionStage.TEST: cuvis_ai_pb2.EXECUTION_STAGE_TEST,
-            ExecutionStage.INFERENCE: cuvis_ai_pb2.EXECUTION_STAGE_INFERENCE,
-        }
         status_map = {
             "running": cuvis_ai_pb2.TRAIN_STATUS_RUNNING,
             "complete": cuvis_ai_pb2.TRAIN_STATUS_COMPLETE,
@@ -799,9 +1011,9 @@ class TrainingService:
             "cancelled": cuvis_ai_pb2.TRAIN_STATUS_CANCELLED,
         }
 
-        return cuvis_ai_pb2.TrainResponse(
+        response = cuvis_ai_pb2.TrainResponse(
             context=cuvis_ai_pb2.Context(
-                stage=stage_map.get(
+                stage=_STAGE_TO_PROTO.get(
                     context_obj.stage, cuvis_ai_pb2.EXECUTION_STAGE_TRAIN
                 ),
                 epoch=context_obj.epoch,
@@ -813,6 +1025,129 @@ class TrainingService:
             status=status_map.get(status, cuvis_ai_pb2.TRAIN_STATUS_RUNNING),
             message=message,
         )
+        if event is not None:
+            response.event.CopyFrom(_event_to_proto(event))
+        return response
+
+
+_STAGE_TO_PROTO = {
+    ExecutionStage.TRAIN: cuvis_ai_pb2.EXECUTION_STAGE_TRAIN,
+    ExecutionStage.VAL: cuvis_ai_pb2.EXECUTION_STAGE_VAL,
+    ExecutionStage.TEST: cuvis_ai_pb2.EXECUTION_STAGE_TEST,
+    ExecutionStage.INFERENCE: cuvis_ai_pb2.EXECUTION_STAGE_INFERENCE,
+}
+_SPLIT_STAGES = {
+    "train": ExecutionStage.TRAIN,
+    "val": ExecutionStage.VAL,
+    "test": ExecutionStage.TEST,
+}
+
+
+_PASS_NAMES = {
+    TrainHook.EPOCH_START: "Training",
+    TrainHook.TRAIN_PROGRESS: "Training",
+    TrainHook.VALIDATION_START: "Validating",
+    TrainHook.VALIDATION_PROGRESS: "Validating",
+    TrainHook.CALIBRATION_PROGRESS: "Calibrating decider thresholds",
+}
+
+
+def _event_message(event: TrainEvent) -> str:
+    """The status line of an event response; the hooks with progress carry the counts."""
+    if event.progress is not None:
+        if event.hook in (
+            TrainHook.STATISTICAL_NODE_START,
+            TrainHook.STATISTICAL_PROGRESS,
+        ):
+            what = f"Fitting {event.node}"
+        else:
+            what = _PASS_NAMES.get(
+                event.hook,
+                f"Evaluating {event.split.value if event.split else 'split'}",
+            )
+        done, total = event.progress.done, event.progress.total
+        counts = f"{done}/{total}" if total else f"{done}"
+        return f"{what} ({counts})"
+    return describe_event(event) or ""
+
+
+def _event_to_proto(event: TrainEvent) -> cuvis_ai_pb2.TrainEvent:
+    """The typed event as its proto message; enum members map by name."""
+    proto = cuvis_ai_pb2.TrainEvent(
+        hook=getattr(cuvis_ai_pb2, f"TRAIN_HOOK_{event.hook.name}"),
+        calibration_pending=event.calibration_pending,
+    )
+    if event.split is not None:
+        proto.split = _STAGE_TO_PROTO[event.split]
+    if event.progress is not None:
+        proto.progress.done = event.progress.done
+        proto.progress.total = event.progress.total
+    if event.epochs is not None:
+        proto.epochs.current = event.epochs.current
+        proto.epochs.total = event.epochs.total
+    if event.node:
+        proto.node = event.node
+    if event.checkpoint is not None:
+        restored = event.checkpoint
+        proto.checkpoint.restored = restored.restored
+        proto.checkpoint.path = restored.path
+        proto.checkpoint.epoch = restored.epoch
+        proto.checkpoint.monitor = restored.monitor
+        proto.checkpoint.reason = restored.reason
+        if restored.score is not None:
+            proto.checkpoint.score = restored.score
+    if event.calibration is not None:
+        _calibration_to_proto(event.calibration, proto.calibration)
+    if event.evaluation is not None:
+        evaluation = event.evaluation
+        proto.evaluation.split = _STAGE_TO_PROTO[evaluation.split]
+        proto.evaluation.status = getattr(
+            cuvis_ai_pb2, f"EVALUATION_STATUS_{evaluation.status.name}"
+        )
+        proto.evaluation.frames = evaluation.frames
+        proto.evaluation.metrics.update(
+            {key: float(value) for key, value in evaluation.metrics.items()}
+        )
+        proto.evaluation.error = evaluation.error
+    return proto
+
+
+def _calibration_to_proto(
+    outcome: CalibrationOutcome, target: cuvis_ai_pb2.CalibrationOutcome
+) -> None:
+    """Fill the proto calibration outcome from the structured one."""
+    target.split = _STAGE_TO_PROTO[_SPLIT_STAGES.get(outcome.split, ExecutionStage.VAL)]
+    target.applicable = outcome.applicable
+    target.phase_skip = (
+        cuvis_ai_pb2.CALIBRATION_PHASE_SKIP_NONE
+        if outcome.phase_skip is None
+        else getattr(cuvis_ai_pb2, f"CALIBRATION_PHASE_SKIP_{outcome.phase_skip.name}")
+    )
+    target.phase_detail = outcome.phase_detail
+    target.frames = outcome.frames
+    target.anomalous_frames = outcome.anomalous_frames
+    for record in outcome.deciders:
+        decider = target.deciders.add()
+        decider.name = record.name
+        decider.class_name = record.class_name
+        decider.status = getattr(
+            cuvis_ai_pb2, f"DECIDER_CALIBRATION_STATUS_{record.status.name}"
+        )
+        decider.skip = (
+            cuvis_ai_pb2.DECIDER_SKIP_NONE
+            if record.skip is None
+            else getattr(cuvis_ai_pb2, f"DECIDER_SKIP_{record.skip.name}")
+        )
+        decider.skip_detail = record.skip_detail
+        for key, change in record.thresholds.items():
+            entry = decider.thresholds[key]
+            if change.before is not None:
+                entry.before = change.before
+            entry.after = change.after
+        decider.metrics.update(
+            {key: float(value) for key, value in record.metrics.items()}
+        )
+        decider.thresholds_present = record.thresholds_present
 
 
 __all__ = ["TrainingService"]

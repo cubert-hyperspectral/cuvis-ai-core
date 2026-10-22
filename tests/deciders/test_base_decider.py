@@ -107,3 +107,8 @@ class TestBinaryDecider:
         decider = ConcreteBinaryDecider(threshold=0.6, custom_param="test")
         assert decider.threshold == 0.6
         # The custom_param should be stored by the Node's Serializable base
+
+
+def test_is_calibrated_defaults_to_true():
+    """A decider without a calibration override holds its thresholds from construction."""
+    assert ConcreteBinaryDecider().is_calibrated is True

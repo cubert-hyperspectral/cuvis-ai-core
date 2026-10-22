@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import grpc
@@ -20,6 +21,32 @@ from cuvis_ai_core.utils.restore import (
 from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
+
+
+def _write_staged(target: Path, write: Callable[[Path], None]) -> None:
+    """Write ``target`` through a unique sibling that is moved into place.
+
+    A failed write never leaves a truncated or half-written file at ``target``
+    (the previous file stays), and two saves to one path cannot clobber each
+    other's staging file. The staging name keeps the target's suffix, so a
+    writer that picks its format by extension sees the same one.
+    """
+    with tempfile.NamedTemporaryFile(
+        dir=target.parent,
+        prefix=target.name + ".",
+        suffix=".tmp" + target.suffix,
+        delete=False,
+    ) as staging:
+        staging_path = Path(staging.name)
+    try:
+        write(staging_path)
+        os.replace(staging_path, target)
+    except BaseException:
+        try:
+            staging_path.unlink(missing_ok=True)
+        except OSError:  # cleanup must not mask the failure
+            pass
+        raise
 
 
 class TrainRunService:
@@ -57,7 +84,7 @@ class TrainRunService:
 
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
-            session.pipeline_config.save_to_file(sibling_pipeline_path)
+            _write_staged(sibling_pipeline_path, session.pipeline_config.save_to_file)
             return sibling_pipeline_path.name
 
         has_live_pipeline = session.has_live_pipeline
@@ -96,13 +123,19 @@ class TrainRunService:
                 tags={},
             )
 
-        with trainrun_path.open("w", encoding="utf-8") as f:
-            yaml.dump(
-                trainrun_config.to_dict(),
-                f,
-                default_flow_style=False,
-                sort_keys=False,
-            )
+        def _write_trainrun(path: Path) -> None:
+            """Dump the trainrun yaml to ``path``."""
+            with path.open("w", encoding="utf-8") as f:
+                yaml.dump(
+                    trainrun_config.to_dict(),
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
+                )
+
+        # Staged like the weights below: a save into an existing run folder (a
+        # recalibration) never leaves a half-written yaml next to a good one.
+        _write_staged(trainrun_path, _write_trainrun)
 
         # Weights only on request. The contract of a failed weights save: the
         # trainrun yaml is written and stays written, ``weights_path`` is empty,
@@ -136,22 +169,9 @@ class TrainRunService:
                 # Written to a unique sibling first and moved into place: a failed
                 # save never leaves a truncated ``<stem>.pt``, and two saves to one
                 # stem cannot clobber each other's staging file.
-                with tempfile.NamedTemporaryFile(
-                    dir=weights_path_obj.parent,
-                    prefix=weights_path_obj.name + ".",
-                    suffix=".tmp",
-                    delete=False,
-                ) as staging:
-                    staging_path = Path(staging.name)
-                try:
-                    torch.save(checkpoint, staging_path)
-                    os.replace(staging_path, weights_path_obj)
-                except BaseException:
-                    try:
-                        staging_path.unlink(missing_ok=True)
-                    except OSError:  # cleanup must not mask the failure
-                        pass
-                    raise
+                _write_staged(
+                    weights_path_obj, lambda staging: torch.save(checkpoint, staging)
+                )
                 weights_path = str(weights_path_obj)
 
             except Exception as exc:
@@ -292,6 +312,10 @@ class TrainRunService:
                 training_config=trainrun_config.training,
                 trainrun_config=trainrun_config,
             )
+            if weights_path_from_request is not None:
+                self.session_manager.get_session(session_id).weights_source = str(
+                    weights_path_from_request
+                )
         else:
             self.session_manager.set_pipeline(
                 target_session_id,
@@ -302,6 +326,8 @@ class TrainRunService:
             session.data_config = trainrun_config.data
             session.training_config = trainrun_config.training
             session.trainrun_config = trainrun_config
+            if weights_path_from_request is not None:
+                session.weights_source = str(weights_path_from_request)
             session_id = target_session_id
 
         return cuvis_ai_pb2.RestoreTrainRunResponse(

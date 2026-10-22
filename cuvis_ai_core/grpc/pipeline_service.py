@@ -60,6 +60,7 @@ class PipelineService:
                 strict_weight_loading=strict,
             )
             resolved_path = str(resolved)
+            session.weights_source = resolved_path
         elif request.HasField("weights_bytes") and request.weights_bytes:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmp:
                 tmp.write(request.weights_bytes)
@@ -73,6 +74,7 @@ class PipelineService:
             finally:
                 tmp_path.unlink(missing_ok=True)
             resolved_path = "(client-bytes)"
+            session.weights_source = resolved_path
         else:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("Provide either weights_path or weights_bytes")
