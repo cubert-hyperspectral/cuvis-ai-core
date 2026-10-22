@@ -310,9 +310,6 @@ def calibratable_deciders(pipeline: CuvisPipeline) -> list[BinaryDecider]:
     ]
 
 
-_calibratable_deciders = calibratable_deciders
-
-
 def calibration_pending(pipeline: CuvisPipeline) -> bool:
     """Whether a calibratable decider of ``pipeline`` still has no thresholds."""
     return any(not decider.is_calibrated for decider in calibratable_deciders(pipeline))
