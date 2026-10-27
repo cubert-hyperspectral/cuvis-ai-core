@@ -16,9 +16,19 @@ median, purpose-built for profiling ``node.forward()`` durations.
 
 from __future__ import annotations
 
+import functools
 import math
 import statistics
 import threading
+from collections import OrderedDict
+from collections.abc import Callable
+from typing import Any
+
+import torch
+from loguru import logger
+from torch._ops import HigherOrderOperator
+from torch.utils._python_dispatch import TorchDispatchMode
+from torch.utils._pytree import tree_flatten, tree_map
 
 from cuvis_ai_schemas.pipeline.profiling import NodeProfilingStats
 
@@ -212,6 +222,243 @@ class _ScalarAccumulator:
 
 
 # ---------------------------------------------------------------------------
+# FLOP counting
+# ---------------------------------------------------------------------------
+
+_aten = torch.ops.aten
+_SDPA_OPS = (
+    "scaled_dot_product_attention",
+    "_scaled_dot_product_flash_attention_for_cpu",
+    "_scaled_dot_product_flash_attention",
+    "_scaled_dot_product_efficient_attention",
+    "_scaled_dot_product_cudnn_attention",
+)
+_DECOMPOSITION_CACHE_SIZE = 4096
+
+# FLOPs of one composite call, keyed by op and argument shapes. Decomposition runs
+# on meta copies, so the count never depends on the real device or values.
+_decomposition_cache: OrderedDict[tuple, int] = OrderedDict()
+_decomposition_cache_lock = threading.Lock()
+_logged_decomposition_failures: set[str] = set()
+
+
+def _sdpa_flop(query, key, value, *args, out_shape=None, **kwargs) -> int:
+    """FLOPs of ``softmax(q k^T) v`` for any batch layout, grouped-query included.
+
+    With ``q (..., L, E)``, ``k (..., S, E)`` and ``v (..., S, Ev)``, every query
+    batch entry does one ``q k^T`` and one ``attn v`` product. torch's own
+    ``sdpa_flop_count`` requires 4-D inputs with equal head counts.
+    """
+    *batch, length, embed = query
+    source, value_embed = key[-2], value[-1]
+    return 2 * math.prod(batch) * length * source * (embed + value_embed)
+
+
+@functools.cache
+def _flop_formulas() -> dict[Any, Callable[..., int]] | None:
+    """torch's FLOP formulas plus the attention formula; ``None`` when unavailable.
+
+    Imported lazily: importing ``torch.utils.flop_counter`` logs a "triton not
+    found" line on machines without triton, which only a counted forward pays.
+    """
+    try:
+        from torch.utils.flop_counter import flop_registry, shape_wrapper
+    except ImportError as exc:
+        logger.warning("FLOP counting is off: torch.utils.flop_counter lacks {}", exc)
+        return None
+    formulas = dict(flop_registry)
+    sdpa = shape_wrapper(_sdpa_flop)
+    for name in _SDPA_OPS:
+        packet = getattr(_aten, name, None)
+        if packet is not None:
+            formulas[packet] = sdpa
+    return formulas
+
+
+def flop_counting_available() -> bool:
+    """Whether this torch build has the FLOP formulas the counter needs."""
+    return _flop_formulas() is not None
+
+
+def _to_meta(value: Any) -> Any:
+    """A meta copy of a tensor; anything else as is."""
+    return value.to("meta") if isinstance(value, torch.Tensor) else value
+
+
+def _leaf_key(leaf: Any) -> Any:
+    """One argument as a cache key part: shape and dtype for a tensor."""
+    if isinstance(leaf, torch.Tensor):
+        return (tuple(leaf.shape), leaf.dtype)
+    if isinstance(leaf, (bool, int, float, str, type(None), torch.dtype)):
+        return leaf
+    return repr(leaf)
+
+
+def _call_key(func: Any, args: tuple, kwargs: dict) -> tuple:
+    """The decomposition cache key of one call: op, argument layout and leaves."""
+    leaves, spec = tree_flatten((args, kwargs))
+    return (func, str(spec), tuple(_leaf_key(leaf) for leaf in leaves))
+
+
+def _cached_flops(key: tuple) -> int | None:
+    """The cached count of a composite call, or ``None`` on a miss."""
+    with _decomposition_cache_lock:
+        flops = _decomposition_cache.get(key)
+        if flops is not None:
+            _decomposition_cache.move_to_end(key)
+        return flops
+
+
+def _cache_flops(key: tuple, flops: int) -> None:
+    """Cache the count of a composite call, evicting the least recently used."""
+    with _decomposition_cache_lock:
+        _decomposition_cache[key] = flops
+        if len(_decomposition_cache) > _DECOMPOSITION_CACHE_SIZE:
+            _decomposition_cache.popitem(last=False)
+
+
+class NodeFlopCounter(TorchDispatchMode):
+    """Count the FLOPs of the ops one node forward runs, without changing them.
+
+    Every op runs exactly as it would without the mode; the mode adds torch's
+    formula count for matrix multiplication, convolution and attention ops.
+    Composite ops that reach the mode undecomposed (``aten.linear``,
+    ``aten.matmul``, ``aten.conv2d`` or ``aten.einsum`` under
+    ``torch.inference_mode``) are counted by decomposing them on meta copies of
+    their arguments. Higher-order operators such as ``torch.cond`` run
+    unchanged and uncounted. Work in other threads, compiled kernels and engines
+    outside torch (TensorRT, ONNX) is not seen.
+    """
+
+    supports_higher_order_operators = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._formulas = _flop_formulas() or {}
+        self._flops = 0
+        self._on_meta = False
+        #: The first op whose formula failed; the count is void once set.
+        self.failed_op: str | None = None
+
+    @classmethod
+    def ignore_compile_internals(cls) -> bool:
+        """Let Dynamo compile under the mode.
+
+        Dynamo skips a frame while a dispatch mode is on the stack, and a
+        compiled node whose first call happened under such a mode never compiles
+        afterwards.
+        """
+        return True
+
+    @property
+    def total(self) -> int | None:
+        """The FLOP count, or ``None`` when a formula failed."""
+        return None if self.failed_op is not None else self._flops
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        """Run the op as is, then add its FLOPs when it has a formula or decomposes."""
+        kwargs = kwargs or {}
+        if isinstance(func, HigherOrderOperator):
+            return func(*args, **kwargs)
+        formula = self._formulas.get(func._overloadpacket)
+        if self._on_meta:
+            return self._run_meta(func, formula, args, kwargs)
+        out = func(*args, **kwargs)
+        if formula is not None:
+            self._add(formula, func, args, kwargs, out)
+        elif func.has_kernel_for_dispatch_key(
+            torch._C.DispatchKey.CompositeImplicitAutograd
+        ):
+            self._flops += self._composite_flops(func, args, kwargs)
+        return out
+
+    def _add(self, formula, func, args, kwargs, out) -> None:
+        """Add one formula count; a raising or invalid formula voids the total."""
+        try:
+            flops = formula(*args, **kwargs, out_val=out)
+        except Exception:
+            flops = None
+        if isinstance(flops, int) and not isinstance(flops, bool) and flops >= 0:
+            self._flops += flops
+        elif self.failed_op is None:
+            self.failed_op = str(func)
+
+    def _run_meta(self, func, formula, args, kwargs):
+        """Inside a meta decomposition: decompose composites, count the rest."""
+        if formula is None:
+            # The mode is off inside its own handler; re-enter it so the ops of a
+            # nested composite (``aten.matmul`` inside ``aten.linear``) are seen.
+            with self:
+                out = func.decompose(*args, **kwargs)
+            if out is not NotImplemented:
+                return out
+        out = func(*args, **kwargs)
+        if formula is not None:
+            self._add(formula, func, args, kwargs, out)
+        return out
+
+    def _composite_flops(self, func, args, kwargs) -> int:
+        """FLOPs of one composite call, from its decomposition on meta copies."""
+        key = _call_key(func, args, kwargs)
+        cached = _cached_flops(key)
+        if cached is not None:
+            return cached
+        before, failed_before = self._flops, self.failed_op
+        self._on_meta = True
+        try:
+            meta_args, meta_kwargs = tree_map(_to_meta, (args, kwargs))
+            # A composite that draws random numbers without naming a device must
+            # not advance the real generator, so the meta pass gets its own. (A
+            # ``torch.device("meta")`` context would re-dispatch the composite
+            # instead of decomposing it.)
+            with torch.random.fork_rng(devices=[]), torch.no_grad(), self:
+                func.decompose(*meta_args, **meta_kwargs)
+            flops = self._flops - before
+        except Exception as exc:
+            name = str(func)
+            if name not in _logged_decomposition_failures:
+                _logged_decomposition_failures.add(name)
+                logger.debug("FLOP count of {} skipped: {}", name, exc)
+            flops = 0
+        finally:
+            self._on_meta = False
+            self._flops = before
+        if self.failed_op is failed_before:
+            _cache_flops(key, flops)
+        return flops
+
+
+class FlopClaim:
+    """One (stage, node) FLOP count in flight: its counter and where it goes."""
+
+    __slots__ = ("counter", "_profiler", "_token", "_key")
+
+    def __init__(
+        self, profiler: PipelineProfiler, token: int, key: tuple[str, str]
+    ) -> None:
+        self.counter = NodeFlopCounter()
+        self._profiler = profiler
+        self._token = token
+        self._key = key
+
+    def record(self) -> None:
+        """Store the count in the profiler it was claimed from (dropped after a reset)."""
+        flops = self.counter.total
+        if flops is None:
+            logger.warning(
+                "FLOP count of node '{}' ({}) failed at {}; its GFLOP stays empty",
+                self._key[1],
+                self._key[0],
+                self.counter.failed_op,
+            )
+        self._profiler.record_flops(self._token, self._key, flops)
+
+    def release(self) -> None:
+        """Hand the claim back after the counted forward raised; the next one counts."""
+        self._profiler.release_flop_claim(self._token, self._key)
+
+
+# ---------------------------------------------------------------------------
 # Pipeline profiler
 # ---------------------------------------------------------------------------
 
@@ -220,7 +467,8 @@ class PipelineProfiler:
     """Thread-safe per-node runtime profiler for pipeline execution.
 
     Accumulates timing samples keyed by ``(stage_value, node_name)`` and
-    exposes frozen :class:`NodeProfilingStats` snapshots.
+    exposes frozen :class:`NodeProfilingStats` snapshots. Each key also gets one
+    FLOP count per reset, from the forward that claims it first.
 
     Parameters
     ----------
@@ -234,6 +482,10 @@ class PipelineProfiler:
             raise ValueError(f"skip_first_n must be >= 0, got {skip_first_n}")
         self._skip_first_n = skip_first_n
         self._accumulators: dict[tuple[str, str], _ScalarAccumulator] = {}
+        self._flops: dict[tuple[str, str], int | None] = {}
+        self._flop_claims: set[tuple[str, str]] = set()
+        # Bumped by reset(): a claim taken before it records nothing.
+        self._generation = 0
         self._lock = threading.Lock()
 
     @property
@@ -251,10 +503,41 @@ class PipelineProfiler:
                 self._accumulators[key] = acc
             acc.record(elapsed_ms)
 
+    def claim_flop_count(self, stage_value: str, node_name: str) -> FlopClaim | None:
+        """Claim the FLOP count of this key; ``None`` when it is already claimed.
+
+        Only the first forward per key after a reset counts, so two concurrent
+        forwards never both run under a counter.
+        """
+        key = (stage_value, node_name)
+        if key in self._flop_claims:  # warm keys skip the lock
+            return None
+        with self._lock:
+            if key in self._flop_claims:
+                return None
+            self._flop_claims.add(key)
+            token = self._generation
+        return FlopClaim(self, token, key)
+
+    def record_flops(self, token: int, key: tuple[str, str], flops: int | None) -> None:
+        """Store a claimed count, unless a reset happened since the claim."""
+        with self._lock:
+            if token == self._generation:
+                self._flops[key] = flops
+
+    def release_flop_claim(self, token: int, key: tuple[str, str]) -> None:
+        """Free a claim whose forward raised, unless a reset already freed it."""
+        with self._lock:
+            if token == self._generation:
+                self._flop_claims.discard(key)
+
     def reset(self) -> None:
-        """Clear all accumulated statistics."""
+        """Clear all accumulated statistics and FLOP counts."""
         with self._lock:
             self._accumulators.clear()
+            self._flops.clear()
+            self._flop_claims.clear()
+            self._generation += 1
 
     def snapshot(self, stage: str | None = None) -> list[NodeProfilingStats]:
         """Return a list of frozen stats for all (or filtered) accumulators.
@@ -276,6 +559,7 @@ class PipelineProfiler:
                         node_name=node_name,
                         stage=stage_val,
                         **snap,
+                        flops_per_call=self._flops.get((stage_val, node_name)),
                     )
                 )
         return results
@@ -349,41 +633,69 @@ def format_profiling_table(
         header_meta += f" (skip_first_n={skip_first_n})"
     parts.append(header_meta)
     if stats:
-        parts.extend(_node_block(stats))
+        parts.extend(_node_block(stats, cuda_synchronized))
     if data_rows or first_batches:
         parts.extend(_data_block(data_rows, first_batches, cuda_synchronized))
     return "\n".join(parts)
 
 
-def _column_header(label: str) -> str:
+def _column_header(label: str, flops: bool = False) -> str:
     """The column header line, with ``label`` over the name column."""
-    return (
+    header = (
         f"{label:<40} {'Stage':<12} {'Count':>5} {'Mean(ms)':>10} "
         f"{'Std(ms)':>10} {'Min(ms)':>10} {'Max(ms)':>10} "
         f"{'Median(ms)':>10} {'Total(s)':>10}"
     )
+    if flops:
+        header += f" {'GFLOP':>10} {'GFLOP/s':>10}"
+    return header
 
 
-def _format_row(s: NodeProfilingStats) -> str:
+def _format_row(s: NodeProfilingStats, flops: bool = False) -> str:
     """One table row for a node or a data-loading step."""
-    return (
+    row = (
         f"{s.node_name:<40} {s.stage:<12} {s.count:>5} {s.mean_ms:>10.2f} "
         f"{s.std_ms:>10.2f} {s.min_ms:>10.2f} {s.max_ms:>10.2f} "
         f"{s.median_ms:>10.2f} {s.total_ms / 1000:>10.3f}"
     )
+    if flops:
+        gflop = "" if s.flops_per_call is None else f"{s.flops_per_call / 1e9:.3f}"
+        rate = "" if s.gflop_per_s is None else f"{s.gflop_per_s:.2f}"
+        row = f"{row} {gflop:>10} {rate:>10}".rstrip()
+    return row
 
 
-def _node_block(stats: list[NodeProfilingStats]) -> list[str]:
-    """The node rows sorted by total time, the TOTAL footer and the per-frame line."""
+def _per_forward_flops(stats: list[NodeProfilingStats], frame_ms: float) -> str:
+    """The FLOP part of the per-frame line: the counts summed over the nodes."""
+    counts = [s.flops_per_call for s in stats if s.flops_per_call is not None]
+    total = sum(counts)
+    text = f", {total / 1e9:.3f} GFLOP per forward"
+    if frame_ms > 0:
+        text += f" ({total / (frame_ms * 1e6):.2f} GFLOP/s)"
+    missing = len(stats) - len(counts)
+    if missing:
+        text += f", {missing} node{'s' if missing > 1 else ''} not counted"
+    return text
+
+
+def _node_block(
+    stats: list[NodeProfilingStats], cuda_synchronized: bool = False
+) -> list[str]:
+    """The node rows sorted by total time, the TOTAL footer and the per-frame line.
+
+    The GFLOP columns appear when any row has a FLOP count. The per-frame line
+    sums the counts only when every row belongs to one stage.
+    """
     sorted_stats = sorted(stats, key=lambda s: s.total_ms, reverse=True)
-    col_header = _column_header("Node")
+    flops = any(s.flops_per_call is not None for s in stats)
+    col_header = _column_header("Node", flops)
     separator = "-" * len(col_header)
     parts = [col_header, separator]
 
     total_pipeline_ms = 0.0
     for s in sorted_stats:
         total_pipeline_ms += s.total_ms
-        parts.append(_format_row(s))
+        parts.append(_format_row(s, flops))
 
     parts.append(separator)
     parts.append(
@@ -396,8 +708,14 @@ def _node_block(stats: list[NodeProfilingStats]) -> list[str]:
     if frame_count > 0:
         avg_frame_ms = total_pipeline_ms / frame_count
         fps = 1000.0 / avg_frame_ms if avg_frame_ms > 0 else 0.0
+        line = f"Average per-frame pipeline time: {avg_frame_ms:.2f} ms ({fps:.1f} FPS)"
+        if flops and len({s.stage for s in stats}) == 1:
+            line += _per_forward_flops(stats, avg_frame_ms)
+        parts.append(line)
+    if flops and not cuda_synchronized:
         parts.append(
-            f"Average per-frame pipeline time: {avg_frame_ms:.2f} ms ({fps:.1f} FPS)"
+            "Node times are host wall time (no CUDA synchronize): "
+            "GFLOP/s of GPU nodes reads high."
         )
     return parts
 
@@ -449,7 +767,10 @@ def _data_block(
 __all__ = [
     "BATCH_LOOP",
     "DATA_LOAD",
+    "FlopClaim",
+    "NodeFlopCounter",
     "PipelineProfiler",
     "TO_DEVICE",
+    "flop_counting_available",
     "format_profiling_table",
 ]

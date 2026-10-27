@@ -6,13 +6,16 @@ Node subclasses (same pattern as test_graph_routing.py).
 
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 import torch
+from loguru import logger
 
 import cuvis_ai_core.pipeline.pipeline as pipeline_mod
+import cuvis_ai_core.pipeline.profiling as profiling_mod
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.pipeline.profiling import PipelineProfiler
@@ -629,3 +632,280 @@ class TestIterProfiledBatches:
         assert pipeline.get_profiling_summary() == []
         assert pipeline.get_data_profiling_summary() != []
         assert pipeline.get_data_profiling_summary(stage=ExecutionStage.TRAIN) == []
+
+
+# ---------------------------------------------------------------------------
+# FLOP counting: each (stage, node) counted on its first forward after a reset
+# ---------------------------------------------------------------------------
+
+_ROWS = 3
+_MATMUL_FLOPS = 2 * _ROWS * 4 * 4
+
+
+class _MatmulNode(Node):
+    """One matrix product per forward: 2 * rows * 4 * 4 FLOPs."""
+
+    INPUT_SPECS = {"x": PortSpec(dtype=torch.float32, shape=(-1, 4))}
+    OUTPUT_SPECS = {"y": PortSpec(dtype=torch.float32, shape=(-1, 4))}
+
+    def forward(self, x, **kwargs):
+        return {"y": x @ torch.ones(4, 4)}
+
+
+class _FlakyMatmulNode(_MatmulNode):
+    """Raises on its first forward, then multiplies like _MatmulNode."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.calls = 0
+
+    def forward(self, x, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("first forward fails")
+        return super().forward(x, **kwargs)
+
+
+class _GatedMatmulNode(_MatmulNode):
+    """Signals when its forward starts and waits for a go before multiplying."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.started = threading.Event()
+        self.go = threading.Event()
+
+    def forward(self, x, **kwargs):
+        self.started.set()
+        assert self.go.wait(timeout=5)
+        return super().forward(x, **kwargs)
+
+
+def _matmul_pipeline(first_cls=_MatmulNode):
+    pipeline = CuvisPipeline("test")
+    first, second = first_cls(), _MatmulNode()
+    pipeline.connect(first.outputs.y, second.x)
+    return pipeline, first, second
+
+
+def _matrix_batch() -> dict[str, torch.Tensor]:
+    return {"x": torch.ones(_ROWS, 4)}
+
+
+def _flops(pipeline: CuvisPipeline, stage: str = "inference") -> dict[str, int | None]:
+    return {
+        s.node_name: s.flops_per_call
+        for s in pipeline.get_profiling_summary()
+        if s.stage == stage
+    }
+
+
+@pytest.fixture
+def granted_claims(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """The (stage, node) keys every granted FLOP claim was for, in order."""
+    granted: list[tuple[str, str]] = []
+    original = PipelineProfiler.claim_flop_count
+
+    def spy(self, stage_value, node_name):
+        claim = original(self, stage_value, node_name)
+        if claim is not None:
+            granted.append((stage_value, node_name))
+        return claim
+
+    monkeypatch.setattr(PipelineProfiler, "claim_flop_count", spy)
+    return granted
+
+
+class TestFlopCounting:
+    def test_each_node_is_counted_once_over_five_forwards(
+        self, granted_claims: list
+    ) -> None:
+        pipeline, first, second = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        for _ in range(5):
+            pipeline.forward(batch=_matrix_batch())
+
+        assert _flops(pipeline) == {
+            first.name: _MATMUL_FLOPS,
+            second.name: _MATMUL_FLOPS,
+        }
+        assert {s.count for s in pipeline.get_profiling_summary()} == {5}
+        assert granted_claims == [("inference", first.name), ("inference", second.name)]
+
+    def test_elementwise_node_counts_zero(self) -> None:
+        pipeline, _, _ = _make_single_node_pipeline(_IdentityNode)
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch={"x": torch.tensor([1.0, 2.0])})
+        assert set(_flops(pipeline).values()) == {0}
+
+    @pytest.mark.parametrize("reset", ["reset_profiling", "set_profiling_reset"])
+    def test_a_reset_rearms_the_count(self, granted_claims: list, reset: str) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        if reset == "reset_profiling":
+            pipeline.reset_profiling()
+        else:
+            pipeline.set_profiling(enabled=True, reset=True)
+        assert _flops(pipeline) == {}
+
+        pipeline.forward(batch=_matrix_batch())
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
+        assert len(granted_claims) == 4
+
+    def test_stages_count_separately(self) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch(), stage=ExecutionStage.TRAIN)
+        pipeline.forward(batch=_matrix_batch(), stage=ExecutionStage.VAL)
+        assert _flops(pipeline, "train")[first.name] == _MATMUL_FLOPS
+        assert _flops(pipeline, "val")[first.name] == _MATMUL_FLOPS
+
+    def test_disable_and_reenable_without_reset_does_not_recount(
+        self, granted_claims: list
+    ) -> None:
+        pipeline, _, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        pipeline.set_profiling(enabled=False)
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        assert len(granted_claims) == 2
+
+    def test_a_changed_skip_first_n_recounts(self, granted_claims: list) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        pipeline.set_profiling(enabled=True, skip_first_n=1)
+        pipeline.forward(batch=_matrix_batch())
+        assert len(granted_claims) == 4
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
+
+    def test_skip_first_n_keeps_the_count_and_drops_one_sample(self) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True, skip_first_n=1)
+        for _ in range(3):
+            pipeline.forward(batch=_matrix_batch())
+        stats = {s.node_name: s for s in pipeline.get_profiling_summary()}
+        assert stats[first.name].count == 2
+        assert stats[first.name].flops_per_call == _MATMUL_FLOPS
+
+    def test_every_sample_skipped_leaves_a_zero_count_row_with_its_count(self) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True, skip_first_n=1)
+        pipeline.forward(batch=_matrix_batch())
+        stats = {s.node_name: s for s in pipeline.get_profiling_summary()}
+        assert stats[first.name].count == 0
+        assert stats[first.name].flops_per_call == _MATMUL_FLOPS
+        assert stats[first.name].gflop_per_s is None
+
+    def test_upto_node_then_full_forward_counts_every_node_once(
+        self, granted_claims: list
+    ) -> None:
+        pipeline, first, second = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch(), upto_node=second)
+        pipeline.forward(batch=_matrix_batch())
+        pipeline.forward(batch=_matrix_batch())
+        assert granted_claims == [("inference", first.name), ("inference", second.name)]
+
+    def test_two_pipelines_sharing_a_node_count_it_once_each(self) -> None:
+        shared = _MatmulNode()
+        pipelines = []
+        for _ in range(2):
+            pipeline = CuvisPipeline("test")
+            pipeline.connect(shared.outputs.y, _MatmulNode().x)
+            pipeline.set_profiling(enabled=True)
+            pipeline.forward(batch=_matrix_batch())
+            pipelines.append(pipeline)
+        for pipeline in pipelines:
+            assert _flops(pipeline)[shared.name] == _MATMUL_FLOPS
+
+    def test_a_forward_that_raises_hands_the_count_to_the_next(self) -> None:
+        pipeline, first, _ = _matmul_pipeline(_FlakyMatmulNode)
+        pipeline.set_profiling(enabled=True)
+        with pytest.raises(RuntimeError, match="first forward fails"):
+            pipeline.forward(batch=_matrix_batch())
+        pipeline.forward(batch=_matrix_batch())
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
+
+    @pytest.mark.parametrize("reset", ["reset_profiling", "set_profiling_reset"])
+    def test_a_reset_during_the_counted_forward_drops_its_count(
+        self, reset: str
+    ) -> None:
+        pipeline, first, _ = _matmul_pipeline(_GatedMatmulNode)
+        pipeline.set_profiling(enabled=True)
+        worker = threading.Thread(
+            target=pipeline.forward, kwargs={"batch": _matrix_batch()}
+        )
+        worker.start()
+        assert first.started.wait(timeout=5)
+        if reset == "reset_profiling":
+            pipeline.reset_profiling()
+        else:
+            pipeline.set_profiling(enabled=True, reset=True)
+        first.go.set()
+        worker.join(timeout=5)
+
+        assert _flops(pipeline)[first.name] is None
+        pipeline.forward(batch=_matrix_batch())
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
+
+    def test_no_counter_while_profiling_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_counter(*args, **kwargs):
+            raise AssertionError("a counter was built with profiling off")
+
+        monkeypatch.setattr(profiling_mod, "NodeFlopCounter", no_counter)
+        pipeline, _, _ = _matmul_pipeline()
+        pipeline.forward(batch=_matrix_batch())
+        assert pipeline.get_profiling_summary() == []
+
+    @pytest.mark.parametrize("value", ["0", "false", "off"])
+    def test_kill_switch_turns_counting_off(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.setenv(pipeline_mod.FLOP_COUNT_ENV, value)
+        pipeline, _, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        assert set(_flops(pipeline).values()) == {None}
+        assert {s.count for s in pipeline.get_profiling_summary()} == {1}
+
+    def test_failed_formula_leaves_the_count_empty_with_one_warning_per_node(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def broken(*args, **kwargs):
+            raise RuntimeError("bad shape")
+
+        monkeypatch.setattr(
+            profiling_mod, "_flop_formulas", lambda: {torch.ops.aten.mm: broken}
+        )
+        messages: list[str] = []
+        sink_id = logger.add(
+            lambda m: messages.append(m.record["message"]), level="WARNING"
+        )
+        try:
+            pipeline, first, second = _matmul_pipeline()
+            pipeline.set_profiling(enabled=True)
+            for _ in range(3):
+                out = pipeline.forward(batch=_matrix_batch())
+        finally:
+            logger.remove(sink_id)
+
+        assert torch.equal(out[(second.name, "y")], torch.full((_ROWS, 4), 16.0))
+        assert _flops(pipeline) == {first.name: None, second.name: None}
+        assert len(messages) == 2
+        assert any(first.name in m for m in messages)
+
+    def test_data_loading_rows_carry_no_count(self) -> None:
+        pipeline = CuvisPipeline("test")
+        pipeline.set_profiling(enabled=True)
+        list(
+            pipeline.iter_profiled_batches(
+                _batches(3), stage=ExecutionStage.INFERENCE, move=_move
+            )
+        )
+        rows = pipeline.get_data_profiling_summary()
+        assert rows
+        assert {s.flops_per_call for s in rows} == {None}

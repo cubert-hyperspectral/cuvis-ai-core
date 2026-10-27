@@ -1,5 +1,21 @@
 # TODOs
 
+## Nodes outside torch report no FLOPs
+
+- **What:** A node can declare its own FLOP count per forward (a method or attribute the
+  profiler reads instead of counting), for TensorRT and ONNX engines, numpy or OpenCV code and
+  compiled kernels that the counting mode does not see.
+- **Why:** The profiler counts only the torch ops it sees on a node's first forward, so an
+  engine-backed node (a TensorRT span, an ONNX export) shows 0 GFLOP although it does the
+  heaviest work of the pipeline.
+- **Pros:** The GFLOP column means the same thing for every node, and GFLOP/s compares an
+  engine with its torch original.
+- **Cons:** A node author has to keep the declared count in step with the model; a wrong
+  number reads like a measured one.
+- **Context:** `cuvis_ai_core/pipeline/profiling.py` (`NodeFlopCounter`, `FlopClaim`) and the
+  claim in `CuvisPipeline.forward`; the count travels in `NodeProfilingStats.flops_per_call`.
+- **Depends on / blocked by:** nothing.
+
 ## The `dataset` CLI still stops at the first failed download
 
 - **What:** `download-model download NAME...` continues past a failed name and reports the

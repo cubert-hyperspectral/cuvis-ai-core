@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.7 - 2026-10-27
+
+- The profiler counts each node's FLOPs next to its timing: the first forward per (stage, node) after a profiling reset runs under `NodeFlopCounter`, a dispatch mode that runs every op unchanged and adds torch's formula counts for matrix multiplication, convolution and attention (`aten.mm`, `aten.addmm`, `aten.bmm`, `aten.convolution` and the scaled-dot-product attention ops, any batch layout and grouped-query attention included). Composite ops that reach the mode undecomposed under `torch.inference_mode` (`aten.linear`, `aten.matmul`, `aten.conv2d`, `aten.einsum`) are counted by decomposing them on meta copies of their arguments, cached by op and shapes. Elementwise ops, reductions, numpy, OpenCV and engines outside torch (TensorRT, ONNX) count nothing; compiled kernels and work on other threads are not seen. A forward that raises hands the count to the next one; a reset during a counted forward drops its count. The count is part of profiling (no flag); `CUVIS_PROFILE_FLOPS=0` turns it off for every pipeline of the process.
+- `NodeProfilingStats.flops_per_call` and `gflop_per_s` (cuvis-ai-schemas 0.14.3) carry the count through `get_profiling_summary()` and `GetProfilingSummary`, where the field is set only for a counted node (a counted 0 included). A formula that fails leaves the count empty and logs one warning naming the node and the op. The data-loading rows carry no count.
+- The profiling table shows `GFLOP` and `GFLOP/s` columns when a node has a count, sums the counts per forward on the per-frame line when all rows belong to one stage, and notes that GFLOP/s of GPU nodes reads high when the run was not CUDA-synchronized (`restore-pipeline --profile-sync`).
+- Requires `cuvis-ai-schemas>=0.14.3`.
+
 ## 0.18.6 - 2026-10-22
 
 - The post-fit lifecycle: after any fit the trained weights are finished in one place, `training.post_fit.PostFitCallback`, which restores the best checkpoint when a checkpoint callback saved one, calibrates the calibratable deciders on the validation split when it exists, and evaluates the validation and test splits when they exist. Nothing in a trainrun declares or disables the steps; each runs when its inputs are there. The gradient trainer runs them at Lightning's `on_train_end` (the model is still on its device there; the teardown that precedes `on_fit_end` moves it to the CPU), the statistical trainer and the standalone calibration phase call `run()` directly. A cancelled fit runs none of them.
