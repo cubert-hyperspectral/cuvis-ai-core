@@ -136,6 +136,33 @@ def _build_data_module(
     return create_data_module(registry, data_config)
 
 
+def predict_batches(
+    pipeline_path: str | Path,
+    data_module: str,
+    data_args: dict[str, str] | None = None,
+    plugins_dirs: list[str | Path] | None = None,
+    device: str | None = None,
+):
+    """The batches of ``data_module``'s predict split, one dict at a time.
+
+    The data module's plugin is found the way ``restore-pipeline`` finds it: in
+    the ``configs/plugins/`` above ``pipeline_path`` and in ``plugins_dirs``.
+    Tensors move to ``device`` when one is given.
+    """
+    candidate_dirs = _discover_plugins_dirs(Path(pipeline_path), plugins_dirs)
+    registry = NodeRegistry()
+    data_config = DataConfig(data_module=data_module, params=dict(data_args or {}))
+    datamodule = _build_data_module(registry, data_config, candidate_dirs)
+    datamodule.setup(stage="predict")
+    for batch in datamodule.predict_dataloader():
+        if device:
+            batch = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+        yield batch
+
+
 def _resolve_splits_path_in_config(
     data_config: DataConfig, base_dir: Path | None
 ) -> DataConfig:
