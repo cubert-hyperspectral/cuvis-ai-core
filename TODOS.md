@@ -181,3 +181,43 @@
 - **Cons:** Two lines and a test for a case no catalog produces.
 - **Context:** `orchestrator/runtime_project.py` (`build_runtime_pyproject`, `CORE_PACKAGE_NAME`).
 - **Depends on / blocked by:** nothing.
+
+## Exported spans take fixed shapes
+
+- **What:** `export-pipeline` exports a span at the shapes of its first example and the sidecar
+  records them; the `ExportedSpan` node refuses another height, width or channel count and loops
+  over a batch. Dynamic axes (the dynamo exporter's `dynamic_shapes`) would let one file serve
+  several resolutions and a real batch.
+- **Why:** A camera with another resolution, or a batch of frames in one run, needs a second
+  export today.
+- **Pros:** One deploy folder per model; batch inference in one runtime call.
+- **Cons:** TensorRT needs an optimisation profile per dynamic axis, every export adapter has to
+  be shape-agnostic, and parity needs examples of several shapes.
+- **Context:** `cuvis_ai_core/pipeline/export.py` (`_export_dynamo`, the sidecar `shape`
+  entries); the shape check of `ExportedSpan` in cuvis-ai.
+- **Depends on / blocked by:** nothing.
+
+## UNet tiled configurations do not export
+
+- **What:** `DynUNet` owns tiling, padding, blending and cropping; its export adapter covers
+  non-tiled configurations and refuses tiled ones. The route is to export the net alone and run
+  `utils.tiling.sliding_window_inference` around the `ExportedSpan` node.
+- **Why:** Large frames run tiled, so those pipelines stay in eager torch.
+- **Pros:** One adapter for the net; the tiling stays in tested Python.
+- **Cons:** A tiled span is then two nodes (the tiling and the exported net), not one graph.
+- **Context:** `cuvis_ai_core/utils/tiling.py`; `cuvis_ai_unet/node/dynunet.py`.
+- **Depends on / blocked by:** the `ExportedSpan` node in cuvis-ai and the UNet export adapter.
+
+## A native consumer for exported spans
+
+- **What:** The Python runtime runs an exported span through `ExportedSpan`. Whether a native
+  C++ consumer (ONNX Runtime or TensorRT without Python on the device) is needed, and for which
+  nodes outside the span, is open.
+- **Why:** Python and torch on an edge device cost memory and start-up time. The sidecar (ports,
+  shapes, constants) and the nodes that carry `NodeTag.ONNX` are the inputs to the decision.
+- **Pros:** Lower latency and footprint on the device.
+- **Cons:** Every node outside the span needs a C++ port; the decision belongs with the AI
+  Runtime requirements.
+- **Context:** `cuvis_ai_core/pipeline/export.py` (the sidecar format); `NodeTag.ONNX` in
+  cuvis-ai-schemas.
+- **Depends on / blocked by:** the AI Runtime requirements.
