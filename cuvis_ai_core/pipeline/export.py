@@ -20,7 +20,6 @@ from __future__ import annotations
 import copy
 import json
 import tempfile
-import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -475,7 +474,7 @@ def _export_dynamo(
     path: Path,
     *,
     input_names: list[str],
-    output_names: list[str],
+    output_names: list[str] | None,
     opset: int,
     external_data: bool,
 ) -> None:
@@ -491,35 +490,6 @@ def _export_dynamo(
         external_data=external_data,
         verbose=False,
     )
-
-
-def _export_legacy(
-    module: nn.Module,
-    args: tuple[Tensor, ...],
-    path: Path,
-    *,
-    input_names: list[str],
-    output_names: list[str],
-    opset: int,
-    external_data: bool,
-) -> None:
-    """The TorchScript exporter, with every ``TracerWarning`` treated as an error.
-
-    The tracer turns a ``.item()`` or a numpy value into a constant with only a
-    warning, so a graph that traced "successfully" can be wrong for other inputs.
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", category=torch.jit.TracerWarning)
-        torch.onnx.export(
-            module,
-            args,
-            str(path),
-            dynamo=False,
-            opset_version=opset,
-            input_names=input_names,
-            output_names=output_names,
-            verbose=False,
-        )
 
 
 def _remove_export_files(path: Path) -> None:
@@ -538,29 +508,26 @@ def _export_graph(
     output_names: list[str] | None,
     opset: int,
     external_data: bool,
-) -> tuple[str, Exception | None]:
-    """Export with the dynamo exporter, then the legacy one.
+) -> None:
+    """Export with the dynamo exporter; a failure leaves no file behind.
 
-    Returns ``(kind, dynamo_error)`` where ``kind`` is ``"dynamo"`` or ``"legacy"``;
-    raises the legacy error (with the dynamo error as its cause) when both fail.
+    There is no fallback to the TorchScript tracer, which bakes a ``.item()`` or a
+    numpy value into the graph with only a warning: a node the dynamo exporter
+    cannot trace gets an export adapter or stays outside the span.
     """
-    options: dict[str, Any] = dict(
-        input_names=input_names,
-        output_names=output_names,
-        opset=opset,
-        external_data=external_data,
-    )
     try:
-        _export_dynamo(module, args, path, **options)
-        return "dynamo", None
-    except Exception as dynamo_error:  # noqa: BLE001 - every exporter failure is recorded
+        _export_dynamo(
+            module,
+            args,
+            path,
+            input_names=input_names,
+            output_names=output_names,
+            opset=opset,
+            external_data=external_data,
+        )
+    except Exception:
         _remove_export_files(path)
-        try:
-            _export_legacy(module, args, path, **options)
-        except Exception as legacy_error:  # noqa: BLE001
-            _remove_export_files(path)
-            raise legacy_error from dynamo_error
-        return "legacy", dynamo_error
+        raise
 
 
 def _dtype_name(tensor: Tensor) -> str:
@@ -917,7 +884,7 @@ def export_deployment(
     external_data = state_bytes > EXTERNAL_DATA_THRESHOLD
     input_names, output_names = span.input_names, span.output_names
     try:
-        kind, dynamo_error = _export_graph(
+        _export_graph(
             span,
             example_args[0],
             onnx_path,
@@ -930,22 +897,16 @@ def export_deployment(
         culprit = _first_failing_node(span, record0, opset=opset)
         if culprit is None:
             raise SpanExportError(
-                f"The span {selection.node_names} did not export with the dynamo exporter "
-                f"nor the legacy one, and every node exports on its own: {span_error}"
+                f"The span {selection.node_names} did not export with the dynamo exporter, "
+                f"and every node exports on its own: {span_error}"
             ) from span_error
         node_name, node_error = culprit
         raise SpanExportError(
             f"Node {node_name!r} fails to export on its own ({type(node_error).__name__}: "
             f"{str(node_error).splitlines()[0] if str(node_error) else ''}); the span "
-            f"{selection.node_names} did not export with the dynamo exporter nor the "
-            f"legacy one."
+            f"{selection.node_names} did not export with the dynamo exporter. Give the "
+            "node an export_module() adapter or move the cut so it stays outside the span."
         ) from span_error
-    if dynamo_error is not None:
-        logger.warning(
-            "Span {} exported with the legacy exporter; the dynamo exporter failed: {}",
-            selection.node_names,
-            str(dynamo_error).splitlines()[0] if str(dynamo_error) else dynamo_error,
-        )
 
     # 3. ONNX Runtime against the span module on every example.
     try:
@@ -971,7 +932,7 @@ def export_deployment(
                 raise SpanExportError(
                     f"ONNX Runtime differs from the span on example {index}, output {ref} "
                     f"(max abs diff {diff:.3e}, atol={atol}, rtol={rtol}); the exported "
-                    f"graph ({kind} exporter) does not reproduce the span."
+                    "graph does not reproduce the span."
                 )
 
     # 4. The sidecar.
@@ -1021,7 +982,7 @@ def export_deployment(
             ],
         },
         "exporter": {
-            "kind": kind,
+            "kind": "dynamo",
             "opset": opset,
             "torch": torch.__version__,
             "cuvis_ai_core": __version__,
@@ -1070,9 +1031,8 @@ def export_deployment(
         weights_path,
     )
     logger.info(
-        "Exported span {} ({} exporter) to {}; deploy yaml {}",
+        "Exported span {} to {}; deploy yaml {}",
         selection.node_names,
-        kind,
         onnx_path,
         yaml_path,
     )

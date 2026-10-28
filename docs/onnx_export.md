@@ -59,13 +59,13 @@ batch), and the sidecar records those shapes.
 The export fails unless three things agree on every example, within `--atol` and `--rtol`:
 the live nodes' own `forward`, the span module (deep copies in eval mode, export adapters
 in place of `forward`), and ONNX Runtime on the written file. A mismatch names the node
-and port. When neither exporter carries the span, the error names the first node that
-fails to export on its own and keeps the span's own error as the cause.
+and port. When the span does not export, the error names the first node that fails to
+export on its own and keeps the span's own error as the cause.
 
-The dynamo exporter (`torch.export`, opset 18) runs first. When it fails, the TorchScript
-exporter runs with every `TracerWarning` turned into an error, because the tracer turns a
-`.item()` or a numpy value into a constant with only a warning; the sidecar records which
-exporter wrote the file.
+The exporter is `torch.export` (the dynamo exporter, opset 18) and nothing else. There is
+no fallback to the TorchScript tracer, which bakes a `.item()` or a numpy value into the
+graph as a constant with only a warning: a node the dynamo exporter cannot trace gets an
+`export_module()` adapter (below) or stays outside the span.
 
 From Python:
 
@@ -92,7 +92,7 @@ deployment = export_deployment(
 | `span.nodes` | name and class of every span node, in execution order |
 | `span.inputs`, `span.outputs` | per port: the pipeline port, the port name on the `ExportedSpan` node, the ONNX tensor name, dtype and shape |
 | `span.constants` | per baked input: port, name, dtype, shape and the value |
-| `exporter` | `dynamo` or `legacy`, the opset, the torch and cuvis-ai-core versions |
+| `exporter` | `dynamo`, the opset, the torch and cuvis-ai-core versions |
 | `fingerprint` | a digest of the span weights, wiring and hparams (`utils.trt_engine.tensor_fingerprint`), the key for an engine built from this file |
 | `onnx_md5`, `onnx_data_md5` | the hash of the written file(s); the runtime refuses an edited file |
 | `parity` | the number of examples, the tolerance and the largest difference per output |

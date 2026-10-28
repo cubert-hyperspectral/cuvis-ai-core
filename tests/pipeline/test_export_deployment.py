@@ -325,9 +325,11 @@ def test_export_deployment_names_the_first_node_that_fails_on_its_own(tmp_path):
     assert not list(tmp_path.glob("*.onnx"))
 
 
-def test_export_deployment_records_the_legacy_exporter_when_dynamo_fails(
+def test_export_deployment_has_no_fallback_when_the_dynamo_exporter_fails(
     tmp_path, monkeypatch
 ):
+    """The dynamo exporter (``torch.export``) is the only exporter: a span it cannot
+    trace is an error that names the node, never a graph from another tracer."""
     from cuvis_ai_core.pipeline import export as export_mod
 
     def no_dynamo(*_, **__):
@@ -336,32 +338,14 @@ def test_export_deployment_records_the_legacy_exporter_when_dynamo_fails(
     monkeypatch.setattr(export_mod, "_export_dynamo", no_dynamo)
     pipeline, _ = _anomaly_pipeline()
 
-    result = export_mod.export_deployment(
-        pipeline, tmp_path, examples=_examples(), **_ANOMALY_CUT
-    )
-
-    assert result.sidecar["exporter"]["kind"] == "legacy"
-    assert result.onnx_path.is_file()
-
-
-def test_export_deployment_escalates_tracer_warnings_in_the_legacy_fallback(
-    tmp_path, monkeypatch
-):
-    """The legacy exporter bakes a data-dependent float into the graph with only a
-    warning; the fallback treats that warning as a failure."""
-    from cuvis_ai_core.pipeline import export as export_mod
-
-    def no_dynamo(*_, **__):
-        raise RuntimeError("dynamo exporter unavailable")
-
-    monkeypatch.setattr(export_mod, "_export_dynamo", no_dynamo)
-    pipeline = _bad_pipeline(_Untraceable(name="bad"))
-
-    with pytest.raises(export_mod.SpanExportError, match="'bad'"):
+    with pytest.raises(export_mod.SpanExportError, match="dynamo exporter") as info:
         export_mod.export_deployment(
-            pipeline, tmp_path, examples=_examples(), **_BAD_CUT
+            pipeline, tmp_path, examples=_examples(), **_ANOMALY_CUT
         )
-    assert not list(tmp_path.glob("*.onnx"))
+    assert "legacy" not in str(info.value)
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert not list(tmp_path.iterdir())
+    assert not hasattr(export_mod, "_export_legacy")
 
 
 def test_export_deployment_refuses_a_constant_that_varies_across_examples(tmp_path):
