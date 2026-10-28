@@ -828,6 +828,29 @@ class TestFlopCounting:
         pipeline.forward(batch=_matrix_batch())
         assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
 
+    @pytest.mark.parametrize(
+        "timer", ["_start_profiling_timer", "_stop_profiling_timer"]
+    )
+    def test_a_failing_timer_hands_the_count_to_the_next(
+        self, monkeypatch: pytest.MonkeyPatch, timer: str
+    ) -> None:
+        original = getattr(CuvisPipeline, timer)
+        calls = {"n": 0}
+
+        def flaky(self, *args):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("timer fails")
+            return original(self, *args)
+
+        monkeypatch.setattr(CuvisPipeline, timer, flaky)
+        pipeline, first, _ = _matmul_pipeline()
+        pipeline.set_profiling(enabled=True)
+        with pytest.raises(RuntimeError, match="timer fails"):
+            pipeline.forward(batch=_matrix_batch())
+        pipeline.forward(batch=_matrix_batch())
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
+
     @pytest.mark.parametrize("reset", ["reset_profiling", "set_profiling_reset"])
     def test_a_reset_during_the_counted_forward_drops_its_count(
         self, reset: str
@@ -871,6 +894,20 @@ class TestFlopCounting:
         pipeline.forward(batch=_matrix_batch())
         assert set(_flops(pipeline).values()) == {None}
         assert {s.count for s in pipeline.get_profiling_summary()} == {1}
+
+    def test_kill_switch_is_read_when_profiling_turns_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pipeline, first, _ = _matmul_pipeline()
+        monkeypatch.setenv(pipeline_mod.FLOP_COUNT_ENV, "0")
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=_matrix_batch())
+        assert set(_flops(pipeline).values()) == {None}
+
+        monkeypatch.delenv(pipeline_mod.FLOP_COUNT_ENV)
+        pipeline.set_profiling(enabled=True, reset=True)
+        pipeline.forward(batch=_matrix_batch())
+        assert _flops(pipeline)[first.name] == _MATMUL_FLOPS
 
     def test_failed_formula_leaves_the_count_empty_with_one_warning_per_node(
         self, monkeypatch: pytest.MonkeyPatch

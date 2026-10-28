@@ -327,7 +327,9 @@ class NodeFlopCounter(TorchDispatchMode):
     ``torch.inference_mode``) are counted by decomposing them on meta copies of
     their arguments. Higher-order operators such as ``torch.cond`` run
     unchanged and uncounted. Work in other threads, compiled kernels and engines
-    outside torch (TensorRT, ONNX) is not seen.
+    outside torch (TensorRT, ONNX) is not seen. A node that runs a profiled
+    sub-pipeline during its counted forward includes the sub-pipeline's FLOPs in
+    its own count.
     """
 
     supports_higher_order_operators = True
@@ -633,7 +635,7 @@ def format_profiling_table(
         header_meta += f" (skip_first_n={skip_first_n})"
     parts.append(header_meta)
     if stats:
-        parts.extend(_node_block(stats, cuda_synchronized))
+        parts.extend(_node_block(stats, cuda_synchronized, skip_first_n))
     if data_rows or first_batches:
         parts.extend(_data_block(data_rows, first_batches, cuda_synchronized))
     return "\n".join(parts)
@@ -679,12 +681,15 @@ def _per_forward_flops(stats: list[NodeProfilingStats], frame_ms: float) -> str:
 
 
 def _node_block(
-    stats: list[NodeProfilingStats], cuda_synchronized: bool = False
+    stats: list[NodeProfilingStats],
+    cuda_synchronized: bool = False,
+    skip_first_n: int = 0,
 ) -> list[str]:
     """The node rows sorted by total time, the TOTAL footer and the per-frame line.
 
     The GFLOP columns appear when any row has a FLOP count. The per-frame line
-    sums the counts only when every row belongs to one stage.
+    sums the counts only when every row belongs to one stage. Without a skip, a
+    note says the counted first forward is part of the times.
     """
     sorted_stats = sorted(stats, key=lambda s: s.total_ms, reverse=True)
     flops = any(s.flops_per_call is not None for s in stats)
@@ -716,6 +721,11 @@ def _node_block(
         parts.append(
             "Node times are host wall time (no CUDA synchronize): "
             "GFLOP/s of GPU nodes reads high."
+        )
+    if flops and skip_first_n == 0:
+        parts.append(
+            "The first forward of each node also counted its FLOPs and runs slower; "
+            "skip_first_n >= 1 leaves it out of the times."
         )
     return parts
 

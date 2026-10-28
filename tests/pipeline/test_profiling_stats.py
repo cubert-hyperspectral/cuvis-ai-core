@@ -491,6 +491,12 @@ class TestFormatProfilingTable:
         )
         assert note not in format_profiling_table(self._make_stats())
 
+    def test_counted_forward_note_only_without_a_skip(self) -> None:
+        note = "The first forward of each node also counted its FLOPs"
+        assert note in format_profiling_table(self._flop_stats())
+        assert note not in format_profiling_table(self._flop_stats(), skip_first_n=1)
+        assert note not in format_profiling_table(self._make_stats())
+
 
 class TestFormatProfilingTableDataBlock:
     """The data-loading block: rows recorded outside the nodes, plus the first-batch line."""
