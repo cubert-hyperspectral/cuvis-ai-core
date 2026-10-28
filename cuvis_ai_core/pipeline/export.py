@@ -957,6 +957,7 @@ def export_deployment(
         sort_keys=True,
         default=str,
     )
+    output_entries = _port_entries(selection.outputs, list(span_outputs[0]))
     sidecar: dict[str, Any] = {
         "format": SIDECAR_FORMAT,
         "pipeline": pipeline.name,
@@ -969,7 +970,7 @@ def export_deployment(
                     _port_entries(input_refs, list(example_args[0])), input_refs
                 )
             ],
-            "outputs": _port_entries(selection.outputs, list(span_outputs[0])),
+            "outputs": output_entries,
             "constants": [
                 {
                     "port": str(ref),
@@ -1012,7 +1013,7 @@ def export_deployment(
         span_class_name=span_class_name,
         span_plugin=span_plugin,
         input_names=span_port_in,
-        output_names=_span_port_names(selection.outputs),
+        output_names=[entry["name"] for entry in output_entries],
     )
     yaml_path = out_dir / f"{name}_deploy.yaml"
     with yaml_path.open("w", encoding="utf-8") as handle:
