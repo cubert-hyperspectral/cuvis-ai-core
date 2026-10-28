@@ -84,20 +84,22 @@ class ProfilingService:
             proto_stage_val = _STAGE_STR_TO_PROTO.get(
                 s.stage, cuvis_ai_pb2.EXECUTION_STAGE_UNSPECIFIED
             )
-            proto_stats.append(
-                cuvis_ai_pb2.NodeProfilingStats(
-                    node_name=s.node_name,
-                    stage=proto_stage_val,
-                    count=s.count,
-                    mean_ms=s.mean_ms,
-                    median_ms=s.median_ms,
-                    std_ms=s.std_ms,
-                    min_ms=s.min_ms,
-                    max_ms=s.max_ms,
-                    total_ms=s.total_ms,
-                    last_ms=s.last_ms,
-                )
+            proto_stat = cuvis_ai_pb2.NodeProfilingStats(
+                node_name=s.node_name,
+                stage=proto_stage_val,
+                count=s.count,
+                mean_ms=s.mean_ms,
+                median_ms=s.median_ms,
+                std_ms=s.std_ms,
+                min_ms=s.min_ms,
+                max_ms=s.max_ms,
+                total_ms=s.total_ms,
+                last_ms=s.last_ms,
             )
+            # Presence means "counted": a set 0 is a node without counted ops.
+            if s.flops_per_call is not None:
+                proto_stat.flops_per_call = s.flops_per_call
+            proto_stats.append(proto_stat)
 
         return cuvis_ai_pb2.GetProfilingSummaryResponse(node_stats=proto_stats)
 

@@ -78,6 +78,8 @@ def test_profiling_end_to_end_through_child(grpc_stub, create_test_cube):
         assert stat.count >= 1
         assert stat.stage == cuvis_ai_pb2.EXECUTION_STAGE_INFERENCE
         assert stat.mean_ms >= 0.0
+        # Every node ran its counted first forward; a present 0 survives the proxy.
+        assert stat.HasField("flops_per_call")
 
     # A stage that never ran after enabling yields no stats.
     train_only = grpc_stub.GetProfilingSummary(

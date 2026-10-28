@@ -6,10 +6,12 @@ reset, empty snapshot, and thread-safety stress.
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 
 import numpy as np
 import pytest
+import torch
 
 from cuvis_ai_core.pipeline.profiling import (
     PipelineProfiler,
@@ -257,6 +259,109 @@ class TestPipelineProfiler:
         assert errors == [], f"Thread errors: {errors}"
 
 
+def _count_one_matmul(profiler: PipelineProfiler, node: str = "NodeA") -> None:
+    """Claim, count a 4x8 @ 8x2 product, time it at 2 ms and record both."""
+    claim = profiler.claim_flop_count("inference", node)
+    assert claim is not None
+    with claim.counter:
+        _ = torch.ones(4, 8) @ torch.ones(8, 2)
+    profiler.record("inference", node, 2.0)
+    claim.record()
+
+
+class TestFlopClaims:
+    """A FLOP count per (stage, node), claimed once until the next reset."""
+
+    def test_one_claim_per_stage_and_node(self) -> None:
+        profiler = PipelineProfiler()
+        assert profiler.claim_flop_count("inference", "NodeA") is not None
+        assert profiler.claim_flop_count("inference", "NodeA") is None
+        assert profiler.claim_flop_count("train", "NodeA") is not None
+        assert profiler.claim_flop_count("inference", "NodeB") is not None
+
+    def test_recorded_count_reaches_the_snapshot(self) -> None:
+        profiler = PipelineProfiler()
+        _count_one_matmul(profiler)
+        (stats,) = profiler.snapshot()
+        assert stats.flops_per_call == 2 * 4 * 8 * 2
+        assert stats.gflop_per_s == pytest.approx(128 / 2e6)
+
+    def test_rows_without_a_claim_carry_no_count(self) -> None:
+        profiler = PipelineProfiler()
+        profiler.record("inference", "NodeA", 1.0)
+        (stats,) = profiler.snapshot()
+        assert stats.flops_per_call is None
+
+    def test_reset_drops_the_counts_and_rearms_the_claims(self) -> None:
+        profiler = PipelineProfiler()
+        _count_one_matmul(profiler)
+        profiler.reset()
+        assert profiler.snapshot() == []
+        assert profiler.claim_flop_count("inference", "NodeA") is not None
+
+    def test_released_claim_lets_the_next_forward_count(self) -> None:
+        profiler = PipelineProfiler()
+        claim = profiler.claim_flop_count("inference", "NodeA")
+        claim.release()
+        assert profiler.claim_flop_count("inference", "NodeA") is not None
+
+    def test_stale_release_keeps_a_newer_claim(self) -> None:
+        profiler = PipelineProfiler()
+        old = profiler.claim_flop_count("inference", "NodeA")
+        profiler.reset()
+        assert profiler.claim_flop_count("inference", "NodeA") is not None
+        old.release()
+        assert profiler.claim_flop_count("inference", "NodeA") is None
+
+    def test_count_claimed_before_a_reset_is_dropped(self) -> None:
+        profiler = PipelineProfiler()
+        claimed, reset_done = threading.Event(), threading.Event()
+
+        def forward() -> None:
+            claim = profiler.claim_flop_count("inference", "NodeA")
+            claimed.set()
+            reset_done.wait(timeout=5)
+            with claim.counter:
+                _ = torch.ones(4, 8) @ torch.ones(8, 2)
+            profiler.record("inference", "NodeA", 1.0)
+            claim.record()
+
+        worker = threading.Thread(target=forward)
+        worker.start()
+        assert claimed.wait(timeout=5)
+        profiler.reset()
+        reset_done.set()
+        worker.join(timeout=5)
+
+        (stats,) = profiler.snapshot()
+        assert stats.flops_per_call is None
+        assert profiler.claim_flop_count("inference", "NodeA") is not None
+
+    def test_concurrent_claims_grant_exactly_one(self) -> None:
+        profiler = PipelineProfiler()
+        barrier = threading.Barrier(8)
+        claims: list[object] = []
+
+        def claim() -> None:
+            barrier.wait(timeout=5)
+            claims.append(profiler.claim_flop_count("inference", "NodeA"))
+
+        threads = [threading.Thread(target=claim) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+        assert sum(c is not None for c in claims) == 1
+
+    def test_every_sample_skipped_keeps_the_count_on_a_zero_count_row(self) -> None:
+        profiler = PipelineProfiler(skip_first_n=1)
+        _count_one_matmul(profiler)
+        (stats,) = profiler.snapshot()
+        assert stats.count == 0
+        assert stats.flops_per_call == 128
+        assert stats.gflop_per_s is None
+
+
 class TestFormatProfilingTable:
     """Tests for format_profiling_table()."""
 
@@ -325,6 +430,72 @@ class TestFormatProfilingTable:
     def test_no_metadata(self) -> None:
         table = format_profiling_table(self._make_stats())
         assert table.startswith("Profiling Summary\n")
+
+    def _flop_stats(
+        self, flops_a: int | None = 2_000_000_000, flops_b: int | None = 1_000_000_000
+    ) -> list[NodeProfilingStats]:
+        a, b = self._make_stats()
+        return [
+            dataclasses.replace(a, flops_per_call=flops_a),
+            dataclasses.replace(b, flops_per_call=flops_b),
+        ]
+
+    def test_no_gflop_columns_without_counts(self) -> None:
+        table = format_profiling_table(self._make_stats())
+        assert "GFLOP" not in table
+
+    def test_gflop_columns_with_counts(self) -> None:
+        table = format_profiling_table(self._flop_stats(flops_b=None))
+        header = next(line for line in table.splitlines() if line.startswith("Node"))
+        assert header.split()[-2:] == ["GFLOP", "GFLOP/s"]
+        row_a = next(line for line in table.splitlines() if line.startswith("node_a"))
+        row_b = next(line for line in table.splitlines() if line.startswith("node_b"))
+        # 2e9 FLOPs at a mean of 10 ms
+        assert row_a.split()[-2:] == ["2.000", "200.00"]
+        assert row_b.split()[-1] == "0.500"  # Total(s) is the last cell
+
+    def test_total_row_carries_no_gflop(self) -> None:
+        table = format_profiling_table(self._flop_stats())
+        total = next(line for line in table.splitlines() if line.startswith("TOTAL"))
+        assert total.split() == ["TOTAL", "1.500"]
+
+    def test_per_forward_line_sums_one_stage(self) -> None:
+        table = format_profiling_table(self._flop_stats(), cuda_synchronized=True)
+        # 3e9 FLOPs per forward over 15 ms per frame
+        assert (
+            "Average per-frame pipeline time: 15.00 ms (66.7 FPS), "
+            "3.000 GFLOP per forward (200.00 GFLOP/s)"
+        ) in table
+
+    def test_per_forward_line_names_nodes_without_a_count(self) -> None:
+        table = format_profiling_table(
+            self._flop_stats(flops_b=None), cuda_synchronized=True
+        )
+        assert ("2.000 GFLOP per forward (133.33 GFLOP/s), 1 node not counted") in table
+
+    def test_no_per_forward_gflop_across_stages(self) -> None:
+        a, b = self._flop_stats()
+        table = format_profiling_table(
+            [a, dataclasses.replace(b, stage="train")], cuda_synchronized=True
+        )
+        fps_line = next(
+            line for line in table.splitlines() if line.startswith("Average per-frame")
+        )
+        assert "GFLOP" not in fps_line
+
+    def test_host_time_note_only_without_sync(self) -> None:
+        note = "Node times are host wall time (no CUDA synchronize)"
+        assert note in format_profiling_table(self._flop_stats())
+        assert note not in format_profiling_table(
+            self._flop_stats(), cuda_synchronized=True
+        )
+        assert note not in format_profiling_table(self._make_stats())
+
+    def test_counted_forward_note_only_without_a_skip(self) -> None:
+        note = "The first forward of each node also counted its FLOPs"
+        assert note in format_profiling_table(self._flop_stats())
+        assert note not in format_profiling_table(self._flop_stats(), skip_first_n=1)
+        assert note not in format_profiling_table(self._make_stats())
 
 
 class TestFormatProfilingTableDataBlock:
@@ -415,6 +586,14 @@ class TestFormatProfilingTableDataBlock:
             first_batch_ms={"inference": [14620.0]},
         )
         assert with_data.startswith(without)
+
+    def test_data_block_has_no_gflop_columns(self) -> None:
+        node_stats = [
+            dataclasses.replace(s, flops_per_call=10**9) for s in self._node_stats()
+        ]
+        table = format_profiling_table(node_stats, data_stats=self._data_stats())
+        assert "GFLOP" in table
+        assert "GFLOP" not in table.split("Data loading (outside the nodes)")[1]
 
     def test_no_data_kwargs_is_todays_output(self) -> None:
         assert format_profiling_table(

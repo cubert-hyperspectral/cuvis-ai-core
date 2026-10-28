@@ -28,6 +28,14 @@ class _IdentityNode(Node):
         return {"y": x}
 
 
+class _MatmulNode(Node):
+    INPUT_SPECS = {"x": PortSpec(dtype=torch.float32, shape=(-1, 4))}
+    OUTPUT_SPECS = {"y": PortSpec(dtype=torch.float32, shape=(-1, 4))}
+
+    def forward(self, x, **kwargs):
+        return {"y": x @ torch.ones(4, 4)}
+
+
 def _make_pipeline() -> CuvisPipeline:
     """Create a minimal pipeline for testing."""
     pipeline = CuvisPipeline("test")
@@ -240,3 +248,33 @@ class TestGetProfilingSummarySuccess:
         )
         response_all = self.service.get_profiling_summary(request_all, self.ctx)
         assert len(response_all.node_stats) == 4
+
+    def _summary_after_one_forward(self, pipeline: CuvisPipeline, batch: dict):
+        self.session_manager.get_session(self.session_id).pipeline = pipeline
+        pipeline.set_profiling(enabled=True)
+        pipeline.forward(batch=batch)
+        request = cuvis_ai_pb2.GetProfilingSummaryRequest(session_id=self.session_id)
+        return self.service.get_profiling_summary(request, self.ctx).node_stats
+
+    def test_counted_flops_are_sent(self):
+        pipeline = CuvisPipeline("test")
+        first, second = _MatmulNode(), _MatmulNode()
+        pipeline.connect(first.outputs.y, second.x)
+        stats = self._summary_after_one_forward(pipeline, {"x": torch.ones(3, 4)})
+        assert [s.flops_per_call for s in stats] == [2 * 3 * 4 * 4] * 2
+
+    def test_a_counted_zero_is_sent_as_set(self):
+        stats = self._summary_after_one_forward(
+            _make_pipeline(), {"x": torch.tensor([1.0])}
+        )
+        for stat in stats:
+            assert stat.HasField("flops_per_call")
+            assert stat.flops_per_call == 0
+
+    def test_no_count_leaves_the_field_unset(self, monkeypatch):
+        monkeypatch.setenv("CUVIS_PROFILE_FLOPS", "0")
+        stats = self._summary_after_one_forward(
+            _make_pipeline(), {"x": torch.tensor([1.0])}
+        )
+        assert len(stats) == 2
+        assert not any(stat.HasField("flops_per_call") for stat in stats)

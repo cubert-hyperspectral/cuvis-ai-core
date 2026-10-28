@@ -23,7 +23,9 @@ from cuvis_ai_core.pipeline.profiling import (
     BATCH_LOOP,
     DATA_LOAD,
     TO_DEVICE,
+    FlopClaim,
     PipelineProfiler,
+    flop_counting_available,
     format_profiling_table,
 )
 from cuvis_ai_schemas.enums import ExecutionStage
@@ -47,6 +49,12 @@ if TYPE_CHECKING:
 PORT_RETENTION_ENV = "CUVIS_PROFILE_PORT_RETENTION"
 _PORT_RETENTION_MAX_FORWARDS = 2
 _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+# FLOP counting is part of profiling. This env var set to 0 turns it off for every
+# pipeline that enables profiling after it is set, for a node that misbehaves under
+# the counting mode.
+FLOP_COUNT_ENV = "CUVIS_PROFILE_FLOPS"
+_FALSY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def _tensor_bytes(value: Any) -> tuple[int, int]:
@@ -183,6 +191,8 @@ class CuvisPipeline:
         )
         self._port_retention_requested: bool = False
         self._port_retention_forwards: dict[str, int] = {}
+        # Read from FLOP_COUNT_ENV each time set_profiling() turns profiling on.
+        self._count_flops: bool = True
 
     @property
     def name(self) -> str:
@@ -977,15 +987,34 @@ class CuvisPipeline:
             if self.strict_runtime_io_validation:
                 self._validate_runtime_inputs(node, node_inputs)
 
-            # Execute node with context (profiling wraps only node.forward)
-            t0 = (
-                self._start_profiling_timer(node, node_inputs)
+            # Execute node with context (profiling wraps only node.forward; the
+            # first forward per stage after a reset also counts its FLOPs)
+            claim = (
+                self._claim_flop_count(stage_key, node)
                 if self._profiling_enabled
                 else None
             )
-            outputs = node.forward(**node_inputs, context=context)
-            if t0 is not None:
-                self._stop_profiling_timer(t0, node, node_inputs, stage_key)
+            if claim is None:
+                t0 = (
+                    self._start_profiling_timer(node, node_inputs)
+                    if self._profiling_enabled
+                    else None
+                )
+                outputs = node.forward(**node_inputs, context=context)
+                if t0 is not None:
+                    self._stop_profiling_timer(t0, node, node_inputs, stage_key)
+            else:
+                # Anything that raises before the count is recorded hands the
+                # claim back, so the next forward counts.
+                try:
+                    t0 = self._start_profiling_timer(node, node_inputs)
+                    with claim.counter:
+                        outputs = node.forward(**node_inputs, context=context)
+                    self._stop_profiling_timer(t0, node, node_inputs, stage_key)
+                except BaseException:
+                    claim.release()
+                    raise
+                claim.record()
 
             if not isinstance(outputs, dict):
                 raise TypeError(
@@ -1158,7 +1187,11 @@ class CuvisPipeline:
         Parameters
         ----------
         enabled : bool
-            Activate or deactivate profiling.
+            Activate or deactivate profiling. While enabled, the first forward of
+            each node per stage after a reset also counts the node's FLOPs
+            (``NodeProfilingStats.flops_per_call``); ``CUVIS_PROFILE_FLOPS=0`` in
+            the environment turns the counting off. The variable is read on every
+            call that enables profiling.
         synchronize_cuda : bool
             If ``True``, call ``torch.cuda.synchronize`` before and after each
             ``node.forward()`` for accurate GPU wall-clock timing, and in
@@ -1184,6 +1217,11 @@ class CuvisPipeline:
 
         self._synchronize_cuda = synchronize_cuda
         self._profiling_enabled = enabled
+        if enabled:
+            self._count_flops = (
+                os.environ.get(FLOP_COUNT_ENV, "").strip().lower()
+                not in _FALSY_ENV_VALUES
+            )
         self._port_retention_requested = port_retention
         if reset or port_retention:
             self._port_retention_forwards.clear()
@@ -1382,6 +1420,14 @@ class CuvisPipeline:
     # ------------------------------------------------------------------
     # Profiling timing helpers (private)
     # ------------------------------------------------------------------
+
+    def _claim_flop_count(self, stage_value: str, node: Node) -> FlopClaim | None:
+        """The FLOP claim for ``node``'s first forward in this stage since a reset."""
+        if not self._count_flops or self._profiler is None:
+            return None
+        if not flop_counting_available():
+            return None
+        return self._profiler.claim_flop_count(stage_value, node.name)
 
     def _start_profiling_timer(
         self,

@@ -141,7 +141,9 @@ jobs:
           # PYSEC-2026-3447 (setuptools): fixed in 83.0.0, but the torch 2.11.0+cu128 wheel requires
           # setuptools<82, so the cap lifts with the next torch line; the flaw only affects building
           # sdists on macOS.
-          uv run pip-audit --desc on --skip-editable --ignore-vuln CVE-2025-3000 --ignore-vuln PYSEC-2026-3447
+          # GHSA-xmj3-9gf7-h52w (setuptools): fixed in 84.1.0, same torch cap; the flaw is in the
+          # legacy wheel-as-egg install path on Windows, which uv does not use.
+          uv run pip-audit --desc on --skip-editable --ignore-vuln CVE-2025-3000 --ignore-vuln PYSEC-2026-3447 --ignore-vuln GHSA-xmj3-9gf7-h52w
 
       - name: Run detect-secrets
         run: |
