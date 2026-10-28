@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0 - 2026-10-28
 
 - `export-pipeline` exports the span between the `--input` and `--output` ports of a pipeline to ONNX (the dynamo exporter, `torch.export`, at opset 18 and nothing else: a node it cannot trace gets an `export_module()` adapter or stays outside the span) and writes a deploy folder: `<name>.onnx`, the `<name>.onnx.json` sidecar (ports, shapes, baked constants, exporter, a fingerprint of the span weights and wiring, the file hash, the parity figures), `<name>_deploy.yaml` with one `ExportedSpan` node (plugin `cuvis_ai_onnx`) in place of the span, and `<name>_deploy.pt` with the weights of the nodes that stay. The canonical yaml and `.pt` are not touched. Examples come from `--examples` files (`.npz` or `.pt`, keyed `node.port`) or from a data module's predict split (`--data-module`, `--num-examples`).
 - `pipeline.export`: `select_span` cuts by port and refuses a span input the pipeline would read from the batch, a node that does not run at inference, a span port read outside the span but not declared as an output, and a cut whose contraction makes the deploy graph cyclic; `PipelineSpanModule` runs the span as one module over deep copies in eval mode with constants as buffers; `collect_examples` keeps what pipeline runs feed into the span inputs; `export_deployment` fails unless the live nodes, their export adapters and ONNX Runtime agree on every example, and names the first node that fails to export on its own while keeping the span's error as the cause.
@@ -9,6 +9,7 @@
 - `[onnx]` extra: `onnx`, `onnxscript` and `onnxruntime` (CPU), enough to export and check parity.
 - `pipeline.factory.pipeline_source_dir()` is the folder of the pipeline file being loaded, set for the duration of the build by `CuvisPipeline.load_pipeline`, by `PipelineBuilder.build_from_config` when given a path, and by a trainrun's pipeline reference; a build from a dict or from gRPC bytes leaves it unset. A node whose hparams hold a path relative to the pipeline file (the ONNX file next to a deploy yaml) resolves it in its constructor.
 - The composed child environment names `onnxruntime-gpu` as a direct dependency from ONNX Runtime's CUDA 12 feed (`onnxruntime-cuda-12`, an explicit index) when a plugin asks for an `onnx` extra and the host torch is a cu12x build: PyPI builds that package with CUDA 13 from 1.27 on, and uv applies an index pin only to a direct dependency. A cu13x host keeps PyPI.
+- Lock: filelock 3.20.3 to 4.2.4 (CVE-2026-112909, CVE-2026-112910, both in the lock-file handling), and the floor follows it (`filelock>=4.2.4`). Nothing else in the lock moves.
 
 ## 0.18.7 - 2026-10-28
 

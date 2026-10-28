@@ -70,7 +70,7 @@ dependencies = [
     "click>=8.4.2",
     "packaging>=25.0",
     # Per-run child-env composer (orchestrator package)
-    "filelock>=3.20.3",
+    "filelock>=4.2.4",
     "tomli-w>=1.2.0",
     # Child-lease liveness checks and orphan reaping (pid + create_time
     # identity, process-tree termination) — os.kill(pid, 0) is not a
