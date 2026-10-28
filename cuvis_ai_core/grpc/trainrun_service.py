@@ -201,7 +201,11 @@ class TrainRunService:
         # last_calibration from a pass run on this session's own live pipeline.
         # A failed weights save writes no summary: an older .pt may still sit beside
         # the yaml, and a summary hashed against it would claim weights it never saw.
-        if has_live_pipeline and session.last_calibration is not None and not weights_failed:
+        if (
+            has_live_pipeline
+            and session.last_calibration is not None
+            and not weights_failed
+        ):
             try:
                 write_validation_summary(
                     str(sibling_pipeline_path),
