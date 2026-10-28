@@ -359,6 +359,23 @@ class Node(nn.Module, ABC, Serializable):
         """
         return None
 
+    def export_module(self) -> nn.Module | None:
+        """The module the span exporter traces in place of :meth:`forward`.
+
+        The exporter traces ``forward`` directly when this returns ``None`` (the
+        default). A node whose ``forward`` holds something a traced graph cannot
+        carry (a ``.item()`` guard, a numpy lookup, a lazy compile) returns a
+        module that computes the same outputs with tensor ops instead.
+
+        The contract: the exporter calls this once, outside tracing, on a copy of
+        the node that is already in eval mode; the returned module takes the
+        node's input ports as keyword arguments (no ``context``) and returns a
+        dict of output port name to tensor; it reads the node's weights and
+        buffers but never mutates the node. The exporter checks the module
+        against ``forward`` on real samples before it writes anything.
+        """
+        return None
+
     @abstractmethod
     def forward(self, **inputs: Any) -> dict[str, Any]:
         """Execute node computation returning a dictionary of named outputs."""

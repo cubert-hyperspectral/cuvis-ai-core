@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +14,39 @@ from omegaconf import DictConfig, OmegaConf
 
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.utils.node_registry import NodeRegistry
+
+_SOURCE_DIR: ContextVar[Path | None] = ContextVar(
+    "cuvis_pipeline_source_dir", default=None
+)
+
+
+def pipeline_source_dir() -> Path | None:
+    """The folder of the pipeline file being loaded, or ``None`` outside a file load.
+
+    The loaders that build a pipeline from a file set it for the duration of the
+    build, so a node whose hparams hold a path relative to the pipeline file (the
+    ONNX file next to a deploy yaml) can resolve it in its constructor. A build from
+    a dict or from bytes leaves it unset.
+    """
+    return _SOURCE_DIR.get()
+
+
+@contextmanager
+def pipeline_source(path: str | os.PathLike[str] | None) -> Generator[None, None, None]:
+    """Set :func:`pipeline_source_dir` to the folder of ``path`` while building.
+
+    ``path`` is the pipeline file or its folder. ``None`` changes nothing, so a build
+    from a dict inside a file load keeps the file's folder.
+    """
+    if path is None:
+        yield
+        return
+    resolved = Path(path).resolve()
+    token = _SOURCE_DIR.set(resolved.parent if resolved.is_file() else resolved)
+    try:
+        yield
+    finally:
+        _SOURCE_DIR.reset(token)
 
 
 class PipelineBuilder:
@@ -78,10 +115,16 @@ class PipelineBuilder:
         if declared_plugins:
             pipeline._plugins = [str(name) for name in declared_plugins]
 
-        # Instantiate nodes
-        nodes = self._instantiate_nodes(
-            pipeline_cfg.nodes,
+        # A build from a file tells the nodes where the file is; a dict does not.
+        source = (
+            self._resolve_config_path(pipeline_config)
+            if isinstance(pipeline_config, (str, Path))
+            else None
         )
+        with pipeline_source(source):
+            nodes = self._instantiate_nodes(
+                pipeline_cfg.nodes,
+            )
 
         # Build connections
         self._build_connections(pipeline, nodes, pipeline_cfg.connections)

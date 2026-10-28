@@ -87,6 +87,14 @@ hf = [
     "huggingface-hub>=1.27.0,<3",
 ]
 
+onnx = [
+    # The span exporter (torch.onnx.export with the dynamo exporter) and the
+    # ONNX Runtime parity check; the CPU runtime is enough to export and compare.
+    "onnx>=1.18.0",
+    "onnxscript>=0.5.0",
+    "onnxruntime>=1.22.0",
+]
+
 dev = [
     "ipykernel",
     "jupyterlab",
@@ -137,6 +145,7 @@ suggest-plugins-fix = "cuvis_ai_core.utils.plugin_fixer:suggest_plugins_fix_cli"
 clean-run-cache = "cuvis_ai_core.orchestrator.clean_run_cache:main"
 audit-plugin-deps = "scripts.audit_plugin_deps:main"
 provision = "scripts.provision:main"
+export-pipeline = "scripts.export_pipeline:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

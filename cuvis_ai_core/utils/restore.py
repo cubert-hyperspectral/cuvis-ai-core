@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from cuvis_ai_core.data.datamodule import create_data_module
-from cuvis_ai_core.pipeline.factory import PipelineBuilder
+from cuvis_ai_core.pipeline.factory import PipelineBuilder, pipeline_source
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import (
     CalibrationOutcome,
@@ -134,6 +134,33 @@ def _build_data_module(
     if data_config.data_module not in registry.data_modules:
         _load_data_module_plugin(registry, data_config.data_module, candidate_dirs)
     return create_data_module(registry, data_config)
+
+
+def predict_batches(
+    pipeline_path: str | Path,
+    data_module: str,
+    data_args: dict[str, str] | None = None,
+    plugins_dirs: list[str | Path] | None = None,
+    device: str | None = None,
+):
+    """The batches of ``data_module``'s predict split, one dict at a time.
+
+    The data module's plugin is found the way ``restore-pipeline`` finds it: in
+    the ``configs/plugins/`` above ``pipeline_path`` and in ``plugins_dirs``.
+    Tensors move to ``device`` when one is given.
+    """
+    candidate_dirs = _discover_plugins_dirs(Path(pipeline_path), plugins_dirs)
+    registry = NodeRegistry()
+    data_config = DataConfig(data_module=data_module, params=dict(data_args or {}))
+    datamodule = _build_data_module(registry, data_config, candidate_dirs)
+    datamodule.setup(stage="predict")
+    for batch in datamodule.predict_dataloader():
+        if device:
+            batch = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+        yield batch
 
 
 def _resolve_splits_path_in_config(
@@ -375,7 +402,8 @@ def _build_pipeline_from_config(
         raise ValueError("Pipeline reference is missing in trainrun config.")
     pipeline_path = _resolve_pipeline_reference(trainrun_config.pipeline, base_dir)
     pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
-    pipeline = PipelineBuilder().build_from_config(pipeline_cfg.to_dict())
+    with pipeline_source(pipeline_path):
+        pipeline = PipelineBuilder().build_from_config(pipeline_cfg.to_dict())
 
     # Move pipeline to specified device if needed
     if device != "auto":
