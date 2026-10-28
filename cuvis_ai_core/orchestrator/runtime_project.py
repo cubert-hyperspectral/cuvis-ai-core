@@ -54,6 +54,16 @@ _TORCH_PACKAGES = ("torch", "torchvision")
 # Allowlisted rather than interpolated blindly, because it ends up in a URL.
 _PYTORCH_INDEX_TAG = re.compile(r"^(cpu|cu\d+|rocm[\d.]+|xpu)$")
 _PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/{tag}"
+# A plugin's ``onnx`` extra brings onnxruntime-gpu (the ExportedSpan node of cuvis-ai).
+# PyPI builds that package with CUDA 13 from 1.27 on; the CUDA 12.8 builds that match a
+# cu12x torch and find its libraries live on ONNX Runtime's own feed.
+_ONNX_EXTRA = "onnx"
+_ONNXRUNTIME_GPU = "onnxruntime-gpu"
+_ORT_CUDA12_INDEX_NAME = "onnxruntime-cuda-12"
+_ORT_CUDA12_INDEX_URL = (
+    "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/"
+    "onnxruntime-cuda-12/pypi/simple/"
+)
 
 
 @lru_cache(maxsize=1)
@@ -390,6 +400,22 @@ def build_runtime_pyproject(
             }
         ]
         sources.update({name: {"index": index_name} for name in torch_versions})
+    if (
+        torch_index_tag
+        and torch_index_tag.startswith("cu12")
+        and any(_ONNX_EXTRA in p.extras for p in plugins)
+    ):
+        # Named as a direct dependency for the same reason as torch: uv applies an
+        # index pin only there, and the extra pulls onnxruntime-gpu in transitively.
+        dependencies.append(_ONNXRUNTIME_GPU)
+        uv_table.setdefault("index", []).append(
+            {
+                "name": _ORT_CUDA12_INDEX_NAME,
+                "url": _ORT_CUDA12_INDEX_URL,
+                "explicit": True,
+            }
+        )
+        sources[_ONNXRUNTIME_GPU] = {"index": _ORT_CUDA12_INDEX_NAME}
     if sources:
         uv_table["sources"] = sources
     # The composed venv runs on the host that builds it, so the resolution only

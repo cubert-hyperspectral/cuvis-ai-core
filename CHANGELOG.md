@@ -7,6 +7,8 @@
 - `Node.export_module()`: the module the exporter traces in place of `forward` (default `None`), for a node whose forward holds a `.item()` guard, a numpy lookup or a lazy compile.
 - `utils.restore.predict_batches`: the batches of a data module's predict split, its plugin loaded from the plugins dirs the way `restore-pipeline` loads it.
 - `[onnx]` extra: `onnx`, `onnxscript` and `onnxruntime` (CPU), enough to export and check parity.
+- `pipeline.factory.pipeline_source_dir()` is the folder of the pipeline file being loaded, set for the duration of the build by `CuvisPipeline.load_pipeline`, by `PipelineBuilder.build_from_config` when given a path, and by a trainrun's pipeline reference; a build from a dict or from gRPC bytes leaves it unset. A node whose hparams hold a path relative to the pipeline file (the ONNX file next to a deploy yaml) resolves it in its constructor.
+- The composed child environment names `onnxruntime-gpu` as a direct dependency from ONNX Runtime's CUDA 12 feed (`onnxruntime-cuda-12`, an explicit index) when a plugin asks for an `onnx` extra and the host torch is a cu12x build: PyPI builds that package with CUDA 13 from 1.27 on, and uv applies an index pin only to a direct dependency. A cu13x host keeps PyPI.
 
 ## 0.18.7 - 2026-10-28
 

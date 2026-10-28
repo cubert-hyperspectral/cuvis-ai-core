@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from cuvis_ai_core.data.datamodule import create_data_module
-from cuvis_ai_core.pipeline.factory import PipelineBuilder
+from cuvis_ai_core.pipeline.factory import PipelineBuilder, pipeline_source
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import (
     CalibrationOutcome,
@@ -402,7 +402,8 @@ def _build_pipeline_from_config(
         raise ValueError("Pipeline reference is missing in trainrun config.")
     pipeline_path = _resolve_pipeline_reference(trainrun_config.pipeline, base_dir)
     pipeline_cfg = PipelineConfig.load_from_file(pipeline_path)
-    pipeline = PipelineBuilder().build_from_config(pipeline_cfg.to_dict())
+    with pipeline_source(pipeline_path):
+        pipeline = PipelineBuilder().build_from_config(pipeline_cfg.to_dict())
 
     # Move pipeline to specified device if needed
     if device != "auto":

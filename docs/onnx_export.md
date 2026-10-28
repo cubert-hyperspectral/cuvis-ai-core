@@ -147,5 +147,13 @@ export tooling read.
   outside the span.
 - The runtime node and the `cuvis_ai_onnx` plugin manifest live in cuvis-ai; a deploy yaml
   lists `cuvis_ai_onnx` under `plugins:` so a composed environment installs ONNX Runtime.
+  The node resolves the relative `onnx_path` under `CUVIS_AI_DEPLOY_DIR`, then under the
+  folder of the pipeline file being loaded (`pipeline.factory.pipeline_source_dir()`, set
+  by the file loaders), then under the working directory. A server that receives yaml
+  bytes has no file folder, so it needs the variable or an absolute path.
+- ONNX Runtime flavours: PyPI builds `onnxruntime-gpu` with CUDA 13 from 1.27 on. A composed
+  child environment on a cu12x torch host takes the CUDA 12.8 build from ONNX Runtime's own
+  feed (`onnxruntime-cuda-12`), as cuvis-ai's `onnx` extra does; an environment holds one
+  flavour, so the exporter's CPU `onnxruntime` and the GPU package do not share one.
 - TensorRT: the sidecar fingerprint and `utils.trt_engine.build_engine_once` are the hooks
   for an engine backend; the deploy folder itself is runtime-agnostic.

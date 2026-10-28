@@ -778,10 +778,11 @@ class CuvisPipeline:
 
         # Build pipeline structure with error handling
         try:
-            from cuvis_ai_core.pipeline.factory import PipelineBuilder
+            from cuvis_ai_core.pipeline.factory import PipelineBuilder, pipeline_source
 
             builder = PipelineBuilder(node_registry=node_registry)
-            pipeline = builder.build_from_config(config)
+            with pipeline_source(config_path):
+                pipeline = builder.build_from_config(config)
         except (ImportError, KeyError) as e:
             raise RuntimeError(
                 f"Failed to load pipeline: Node class not found.\n"

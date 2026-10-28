@@ -429,6 +429,84 @@ def test_build_runtime_pyproject_omits_torch_when_host_has_none():
     assert "index" not in doc["tool"]["uv"]
 
 
+_ONNX_PLUGIN = ResolvedGitPlugin(
+    name="cuvis_ai_onnx",
+    repo="https://github.com/cubert-hyperspectral/cuvis-ai.git",
+    sha="c" * 40,
+    tag="v0.20.0",
+    package_name="cuvis-ai",
+    extras=("onnx",),
+)
+_ORT_INDEX = {
+    "name": "onnxruntime-cuda-12",
+    "url": (
+        "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/"
+        "onnxruntime-cuda-12/pypi/simple/"
+    ),
+    "explicit": True,
+}
+
+
+def _pyproject_with_torch_and_plugins(versions, tag, plugins):
+    with patch(_TORCH_PINS, return_value=(versions, tag)):
+        return tomllib.loads(
+            build_runtime_pyproject(
+                core_source=PYPI_CORE, plugins=plugins, python_requires=">=3.11,<3.14"
+            )
+        )
+
+
+def test_an_onnx_extra_on_a_cuda_12_host_takes_onnxruntime_from_the_cuda_12_feed():
+    """PyPI builds onnxruntime-gpu with CUDA 13 from 1.27 on. A plugin's ``onnx`` extra
+    pulls it in transitively, where an index pin would not apply, so the child names it
+    as a direct dependency from ONNX Runtime's CUDA 12 feed when the host torch is cu12x."""
+    doc = _pyproject_with_torch_and_plugins(
+        {"torch": "2.11.0+cu128", "torchvision": "0.26.0+cu128"},
+        "cu128",
+        (_ONNX_PLUGIN,),
+    )
+
+    assert "onnxruntime-gpu" in doc["project"]["dependencies"]
+    assert _ORT_INDEX in doc["tool"]["uv"]["index"]
+    assert doc["tool"]["uv"]["sources"]["onnxruntime-gpu"] == {
+        "index": "onnxruntime-cuda-12"
+    }
+
+
+def test_a_cuda_13_host_keeps_onnxruntime_from_pypi():
+    doc = _pyproject_with_torch_and_plugins(
+        {"torch": "2.11.0+cu130", "torchvision": "0.26.0+cu130"},
+        "cu130",
+        (_ONNX_PLUGIN,),
+    )
+
+    assert "onnxruntime-gpu" not in doc["project"]["dependencies"]
+    assert _ORT_INDEX not in doc["tool"]["uv"]["index"]
+    assert "onnxruntime-gpu" not in doc["tool"]["uv"]["sources"]
+
+
+def test_without_an_onnx_extra_the_child_names_no_onnxruntime():
+    plain = ResolvedGitPlugin(
+        name="cuvis_ai_builtin",
+        repo="https://github.com/cubert-hyperspectral/cuvis-ai.git",
+        sha="c" * 40,
+        tag="v0.20.0",
+        package_name="cuvis-ai",
+    )
+    doc = _pyproject_with_torch_and_plugins(
+        {"torch": "2.11.0+cu128", "torchvision": "0.26.0+cu128"}, "cu128", (plain,)
+    )
+
+    assert "onnxruntime-gpu" not in doc["project"]["dependencies"]
+    assert doc["tool"]["uv"]["index"] == [
+        {
+            "name": "pytorch-cu128",
+            "url": "https://download.pytorch.org/whl/cu128",
+            "explicit": True,
+        }
+    ]
+
+
 def test_host_torch_pins_rejects_unknown_local_tag(monkeypatch):
     """An unrecognised local segment must not be interpolated into an index URL."""
     from cuvis_ai_core.orchestrator import runtime_project
