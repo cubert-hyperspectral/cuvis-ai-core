@@ -13,6 +13,7 @@ import yaml
 from loguru import logger
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.training.validation_summary import write_validation_summary
 from cuvis_ai_core.utils.restore import (
     _resolve_pipeline_reference,
     _resolve_splits_path_in_config,
@@ -143,6 +144,7 @@ class TrainRunService:
         # still there, since every loader picks that sibling up next to the new
         # yaml.
         weights_path = None
+        weights_failed = False
         if request.save_weights and session.pipeline is not None:
             # The checkpoint is the pipeline yaml's sibling (`<stem>.pt`), the one
             # place every loader looks: `CuvisPipeline.load_pipeline`, the CLI
@@ -177,6 +179,7 @@ class TrainRunService:
             except Exception as exc:
                 # The yaml is saved; the client learns from the empty weights_path
                 # and the details that the checkpoint did not land.
+                weights_failed = True
                 older = (
                     f"; an older checkpoint remains at {weights_path_obj}"
                     if weights_path_obj.exists()
@@ -188,6 +191,26 @@ class TrainRunService:
                 context.set_details(
                     "Train run config saved successfully, but weights save failed: "
                     f"{exc}{older}"
+                )
+
+        # A session with a calibration record just wrote its live pipeline above
+        # (has_live_pipeline is what guards _write_pipeline_sibling), so the
+        # sibling yaml this record describes exists on disk now. A session saved
+        # from a trainrun_config with no live pipeline never touches that sibling
+        # in this call and has no record to write either: calibration only sets
+        # last_calibration from a pass run on this session's own live pipeline.
+        # A failed weights save writes no summary: an older .pt may still sit beside
+        # the yaml, and a summary hashed against it would claim weights it never saw.
+        if has_live_pipeline and session.last_calibration is not None and not weights_failed:
+            try:
+                write_validation_summary(
+                    str(sibling_pipeline_path),
+                    session.last_calibration.outcome,
+                    session.last_calibration.data_config,
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort, the run is still saved
+                logger.opt(exception=True).warning(
+                    f"Could not write the validation summary beside {sibling_pipeline_path}: {exc}"
                 )
 
         return cuvis_ai_pb2.SaveTrainRunResponse(

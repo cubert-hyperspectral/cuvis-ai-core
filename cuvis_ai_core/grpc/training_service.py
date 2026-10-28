@@ -44,7 +44,7 @@ from .error_handling import (
     get_session_or_error,
     grpc_handler,
 )
-from .session_manager import SessionManager, SessionState
+from .session_manager import CalibrationRecord, SessionManager, SessionState
 from .v1 import cuvis_ai_pb2
 
 if TYPE_CHECKING:  # pragma: no cover - for type hints only
@@ -215,7 +215,7 @@ class TrainingService:
                     session, data_config_py, training_config_py
                 )
                 inner = self._train_statistical(
-                    session, datamodule, post_fit=statistical_only
+                    session, datamodule, data_config_py, post_fit=statistical_only
                 )
 
             elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_GRADIENT:
@@ -237,7 +237,9 @@ class TrainingService:
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                inner = self._train_gradient(session, datamodule, training_config_py)
+                inner = self._train_gradient(
+                    session, datamodule, training_config_py, data_config_py
+                )
 
             elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_CALIBRATION:
                 # The post-fit steps alone, on weights the session already holds.
@@ -246,7 +248,7 @@ class TrainingService:
                     context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                     context.set_details(refusal)
                     return
-                inner = self._train_calibration(session, datamodule)
+                inner = self._train_calibration(session, datamodule, data_config_py)
 
             else:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -559,6 +561,7 @@ class TrainingService:
         self,
         session: SessionState,
         datamodule: "pl.LightningDataModule",
+        data_config: DataConfig,
         *,
         post_fit: bool = True,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
@@ -566,6 +569,8 @@ class TrainingService:
 
         ``post_fit`` is False when a gradient phase comes next: the restore, the
         calibration and the evaluation then run once, at the end of that fit.
+        ``data_config`` is the effective config this pass runs on, recorded on the
+        session alongside a calibrated outcome.
         """
         yield cuvis_ai_pb2.TrainResponse(
             context=cuvis_ai_pb2.Context(
@@ -606,7 +611,7 @@ class TrainingService:
                 stage=ExecutionStage.TRAIN, epoch=1, batch_idx=0, global_step=1
             )
             outcome = yield from self._run_post_fit(
-                session, datamodule, restore=False, base_context=base
+                session, datamodule, data_config, restore=False, base_context=base
             )
             if outcome.applicable:
                 message = f"{message}; {outcome.summary()}"
@@ -627,13 +632,16 @@ class TrainingService:
         session: SessionState,
         datamodule: "pl.LightningDataModule",
         training_config: TrainingConfig,
+        data_config: DataConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Train with the gradient method and stream progress, the post-fit steps included.
 
         The fit runs on a worker thread; the Lightning callbacks queue one
         response per emission and the post-fit callback queues one per
         lifecycle event, all drained here in order. A StopTrain during the fit
-        or during a post-fit step ends the stream CANCELLED.
+        or during a post-fit step ends the stream CANCELLED. ``data_config`` is
+        the effective config this pass runs on, recorded on the session
+        alongside a calibrated outcome.
         """
         # Seed as early as the Train RPC allows so training-time randomness
         # (shuffling, dropout, augmentation) is reproducible.
@@ -709,6 +717,9 @@ class TrainingService:
         )
         if outcome.calibrated:
             session.pipeline_config = None
+            session.last_calibration = CalibrationRecord(
+                outcome=outcome, data_config=data_config
+            )
         suffix = f"; {outcome.summary()}" if outcome.applicable else ""
 
         final_context = Context(
@@ -729,8 +740,13 @@ class TrainingService:
         self,
         session: SessionState,
         datamodule: "pl.LightningDataModule",
+        data_config: DataConfig,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
-        """Run the post-fit steps on a session that already holds trained weights; no fit."""
+        """Run the post-fit steps on a session that already holds trained weights; no fit.
+
+        ``data_config`` is the effective config this pass runs on, recorded on the
+        session alongside a calibrated outcome.
+        """
         base = Context(stage=ExecutionStage.TRAIN, epoch=0, batch_idx=0, global_step=0)
         yield self._create_progress_response(
             base,
@@ -740,7 +756,7 @@ class TrainingService:
             message="Starting calibration",
         )
         outcome = yield from self._run_post_fit(
-            session, datamodule, restore=False, base_context=base
+            session, datamodule, data_config, restore=False, base_context=base
         )
         suffix = (
             f"; {outcome.summary()}"
@@ -813,14 +829,17 @@ class TrainingService:
         self,
         session: SessionState,
         datamodule: "pl.LightningDataModule",
+        data_config: DataConfig,
         *,
         restore: bool,
         base_context: Context,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Run the post-fit steps on a worker thread and stream their events.
 
-        The generator's return value is the calibration outcome; a calibrated
-        pipeline drops the session's cached config so the save re-derives it.
+        ``data_config`` is the effective config this pass runs on; a calibrated outcome
+        is recorded on the session as the :class:`CalibrationRecord` alongside it. The
+        generator's return value is the calibration outcome; a calibrated pipeline drops
+        the session's cached config so the save re-derives it.
         """
         progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
         results: list[PostFitResult] = []
@@ -844,6 +863,9 @@ class TrainingService:
         )
         if outcome.calibrated:
             session.pipeline_config = None
+            session.last_calibration = CalibrationRecord(
+                outcome=outcome, data_config=data_config
+            )
         return outcome
 
     @staticmethod

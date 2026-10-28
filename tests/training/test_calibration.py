@@ -20,6 +20,7 @@ from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training import CalibrationOutcome, calibrate_pipeline_deciders
 from cuvis_ai_core.training.calibration import (
     CalibrationPhaseSkip,
+    DeciderCalibration,
     DeciderCalibrationStatus,
     DeciderSkip,
     ThresholdChange,
@@ -596,6 +597,28 @@ def test_records_extract_knobs_and_metrics_from_a_two_stage_report():
     )
 
 
+def test_from_report_does_not_turn_the_summary_into_a_threshold_or_a_metric():
+    """A report's ``summary`` dict has no ``"new"`` key and is not numeric: it must land
+    in neither ``thresholds`` nor ``metrics``, only on the record's full ``report``."""
+    report = {
+        "class": "TwoStageBinaryDecider",
+        "image_threshold": {"old": None, "new": 2.5},
+        "image_f1": 0.93,
+        "summary": {
+            "version": 1,
+            "provenance": {"weights_sha256": "abc"},
+            "deciders": [{"node": "gate", "kind": "two_stage"}],
+        },
+    }
+    record = DeciderCalibration.from_report("gate", report)
+    assert record.thresholds == {
+        "image_threshold": ThresholdChange(before=None, after=2.5)
+    }
+    assert record.metrics == {"image_f1": 0.93}
+    assert "summary" not in record.thresholds and "summary" not in record.metrics
+    assert record.report is not None and record.report["summary"]["version"] == 1
+
+
 def test_on_batch_reports_frames_per_batch():
     seen: list[tuple[int, int]] = []
     calibrate_pipeline_deciders(
@@ -605,6 +628,226 @@ def test_on_batch_reports_frames_per_batch():
         on_batch=lambda done, total: seen.append((done, total)),
     )
     assert seen == [(1, 0), (2, 0), (3, 0)]
+
+
+class _MetricsLikeConsumer(Node):
+    """Stands in for a metrics node that reads ``decisions`` and declares ``pixel_stride``."""
+
+    INPUT_SPECS = {"decisions": _DECISIONS}
+    OUTPUT_SPECS = {"count": PortSpec(dtype=torch.int64, shape=())}
+    EXECUTION_STAGES = {ExecutionStage.VAL, ExecutionStage.TEST}
+
+    def __init__(self, pixel_stride: int = 1, **kwargs):
+        super().__init__(pixel_stride=pixel_stride, **kwargs)
+        self.pixel_stride = pixel_stride
+
+    def forward(self, decisions, **_):
+        return {"count": decisions.sum()}
+
+
+class _StrideAwareDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` accepts ``pixel_stride`` and records what it got."""
+
+    def calibrate(self, scores, targets, *, num_candidates=256, pixel_stride=1):
+        self.calibrated_with = (tuple(scores.shape), tuple(targets.shape))
+        self.received_pixel_stride = pixel_stride
+        self.received_num_candidates = num_candidates
+        self.threshold = 0.42
+        self.hparams["threshold"] = 0.42
+        return {"class": type(self).__name__, "threshold": {"old": 0.5, "new": 0.42}}
+
+
+def test_stride_hand_off_passes_the_one_metrics_nodes_stride():
+    """One metrics node consuming ``decisions`` directly: its stride reaches calibrate()."""
+    dec = _StrideAwareDecider(name="dec")
+    src = _ScoreMaskSource(name="src")
+    metrics = _MetricsLikeConsumer(name="metrics", pixel_stride=4)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    pipe.connect(dec.outputs.decisions, metrics.inputs.decisions)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.received_pixel_stride == 4
+    assert dec.received_num_candidates == 256  # unchanged otherwise
+
+
+def test_stride_hand_off_defaults_to_one_with_no_metrics_consumer():
+    dec = _StrideAwareDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val"
+    )
+    assert outcome.calibrated
+    assert dec.received_pixel_stride == 1
+
+
+def test_stride_hand_off_several_disagreeing_strides_default_to_one_and_log(
+    monkeypatch,
+):
+    """Two metrics-like consumers with different strides: fall back to 1, log once.
+
+    loguru does not route through stdlib logging / ``caplog`` here, so the logger is
+    monkeypatched directly, as ``test_cli_log_line_matches_the_outcome`` above does.
+    """
+    info_calls: list[str] = []
+    monkeypatch.setattr(
+        "cuvis_ai_core.training.calibration.logger.info",
+        lambda msg: info_calls.append(msg),
+    )
+
+    dec = _StrideAwareDecider(name="dec")
+    src = _ScoreMaskSource(name="src")
+    first = _MetricsLikeConsumer(name="first", pixel_stride=2)
+    second = _MetricsLikeConsumer(name="second", pixel_stride=3)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    pipe.connect(dec.outputs.decisions, first.inputs.decisions)
+    pipe.connect(dec.outputs.decisions, second.inputs.decisions)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.received_pixel_stride == 1
+    disagreement_lines = [
+        msg for msg in info_calls if "disagreeing pixel_stride" in msg
+    ]
+    assert len(disagreement_lines) == 1
+    assert "first" in disagreement_lines[0] and "second" in disagreement_lines[0]
+    assert "2" in disagreement_lines[0] and "3" in disagreement_lines[0]
+
+
+def test_stride_hand_off_ignores_a_consumer_not_fed_by_this_decider():
+    """A metrics-like node downstream of a DIFFERENT decider must not affect this one."""
+    dec = _StrideAwareDecider(name="dec")
+    other = _MockCalibratableDecider(name="other")
+    src = _ScoreMaskSource(name="src")
+    metrics = _MetricsLikeConsumer(name="metrics", pixel_stride=7)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    pipe.connect(src.outputs.scores, other.inputs.logits)
+    pipe.connect(other.outputs.decisions, metrics.inputs.decisions)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.received_pixel_stride == 1  # nothing consumes dec's own decisions
+
+
+def test_stride_hand_off_old_decider_without_the_keyword_still_calibrates():
+    """A decider whose calibrate() has no ``pixel_stride`` parameter still gets called."""
+    dec = _MockCalibratableDecider(name="dec")  # base signature: (scores, targets)
+    src = _ScoreMaskSource(name="src")
+    metrics = _MetricsLikeConsumer(name="metrics", pixel_stride=4)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    pipe.connect(dec.outputs.decisions, metrics.inputs.decisions)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.threshold == 0.42  # calibrate() ran fine without pixel_stride
+
+
+def test_stride_hand_off_passes_through_kwargs_catch_all():
+    """A decider whose calibrate() accepts ``**kwargs`` also receives pixel_stride."""
+
+    class _KwargsDecider(_MockCalibratableDecider):
+        def calibrate(self, scores, targets, **kwargs):
+            self.calibrated_with = (tuple(scores.shape), tuple(targets.shape))
+            self.received_kwargs = kwargs
+            self.threshold = 0.42
+            self.hparams["threshold"] = 0.42
+            return {
+                "class": type(self).__name__,
+                "threshold": {"old": 0.5, "new": 0.42},
+            }
+
+    dec = _KwargsDecider(name="dec")
+    src = _ScoreMaskSource(name="src")
+    metrics = _MetricsLikeConsumer(name="metrics", pixel_stride=5)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    pipe.connect(dec.outputs.decisions, metrics.inputs.decisions)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.received_kwargs == {"pixel_stride": 5}
+
+
+def test_stride_hand_off_ignores_non_decisions_edge_to_a_strided_node():
+    """A node with a pixel_stride attribute, fed from a port other than 'decisions', is
+    not treated as the stride source."""
+    dec = _StrideAwareDecider(name="dec")
+    src = _ScoreMaskSource(name="src")
+    strided = _MetricsLikeConsumer(name="strided", pixel_stride=9)
+    pipe = CuvisPipeline("cal_test")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    # Wire scores (not decisions) into a port the consumer treats generically for the
+    # purpose of this test: the edge's from_port is "scores", not "decisions".
+    pipe._assign_counter_and_add_node(strided)
+
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(_MIXED), split="val")
+
+    assert outcome.calibrated
+    assert dec.received_pixel_stride == 1
+
+
+def test_summary_never_reaches_the_info_log_line(monkeypatch):
+    """The per-decider log line never carries report['summary'], even when present.
+
+    loguru does not route through stdlib logging / ``caplog`` here, so the logger is
+    monkeypatched directly, as ``test_cli_log_line_matches_the_outcome`` above does.
+    """
+    info_calls: list[str] = []
+    monkeypatch.setattr(
+        "cuvis_ai_core.training.calibration.logger.info",
+        lambda msg: info_calls.append(msg),
+    )
+
+    class _SummaryDecider(_MockCalibratableDecider):
+        def calibrate(self, scores, targets):
+            self.calibrated_with = (tuple(scores.shape), tuple(targets.shape))
+            self.threshold = 0.42
+            self.hparams["threshold"] = 0.42
+            return {
+                "class": type(self).__name__,
+                "threshold": {"old": 0.5, "new": 0.42},
+                "summary": {"version": 1, "deciders": ["big payload" * 1000]},
+            }
+
+    dec = _SummaryDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val"
+    )
+
+    assert outcome.calibrated
+    logged_text = " ".join(info_calls)
+    assert "big payload" not in logged_text
+    assert (
+        "'summary'" not in logged_text
+    )  # the dict key, not the class name's substring
+    assert "version" not in logged_text
+    # ... while the full report, summary included, stays on the record for the writer.
+    (record,) = outcome.deciders
+    assert record.report is not None and "summary" in record.report
+
+
+def test_summary_is_excluded_from_describe_report_and_outcome_summary_text():
+    """``_describe_report`` and ``CalibrationOutcome.summary()`` never format the summary."""
+    from cuvis_ai_core.training.calibration import _describe_report
+
+    report = {
+        "class": "TwoStageBinaryDecider",
+        "image_threshold": {"old": None, "new": 2.5},
+        "summary": {"version": 1, "deciders": [{"huge": "x" * 10000}]},
+    }
+    text = _describe_report("gate", report)
+    assert "huge" not in text and "version" not in text
+
+    outcome = CalibrationOutcome(split="val", applicable=True, reports={"gate": report})
+    assert "huge" not in outcome.summary() and "version" not in outcome.summary()
 
 
 def test_uncalibrated_required_consumers_names_the_graph_that_would_fail():

@@ -138,6 +138,9 @@ class PipelineService:
         # lands between two Train streams of the same run (statistical done,
         # gradient not yet started) must still cancel the later stream.
         session.stop_event.clear()
+        # Same boundary for the last calibration outcome: a fresh run must not
+        # inherit a target computed for the previous one's weights.
+        session.last_calibration = None
 
         return cuvis_ai_pb2.SetTrainRunConfigResponse(
             success=True, pipeline_from_config=False

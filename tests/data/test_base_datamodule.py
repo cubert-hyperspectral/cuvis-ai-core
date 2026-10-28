@@ -48,6 +48,18 @@ def test_predict_empty_iterates_whole_universe():
     assert len(dm._predict_ds) == 6  # empty predict -> all
 
 
+def test_inline_empty_test_without_splits_path_runs_no_test_pass():
+    """Unlike predict, an empty inline ``test`` stays empty: no file to fall back on
+    (no ``splits_path``), so ``_test_ds`` is never built and a test pass has nothing
+    to run."""
+    dm = FakeDataModule(
+        splits=DataSplitConfig(train=[_fi([0, 1])], test=[]), batch_size=1
+    )
+    dm.setup(stage="fit")
+    dm.setup(stage="test")
+    assert dm._test_ds is None
+
+
 def test_file_indices_expand_range_strings():
     dm = FakeDataModule(
         splits=DataSplitConfig(train=[_fi(["0-2"])], val=[_fi([3, "4-5"])]),

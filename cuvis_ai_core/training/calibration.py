@@ -36,6 +36,7 @@ typed event and the client words it; ``summary()`` is the one-line text for the 
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -283,14 +284,27 @@ def _describe_report(name: str, report: dict[str, Any]) -> str:
     """``dec (image_threshold 2.5, pixel_threshold 2.5)`` from a decider's report.
 
     Deciders report each updated knob as ``{"old": ..., "new": ...}``; other entries
-    (class name, metrics, alternatives) are left out of the one-liner.
+    (class name, metrics, alternatives, the validation summary) are left out of the
+    one-liner.
     """
     changes = [
         f"{key} {_format_value(value['new'])}"
         for key, value in report.items()
-        if isinstance(value, dict) and "new" in value
+        if key != "summary" and isinstance(value, dict) and "new" in value
     ]
     return f"{name} ({', '.join(changes)})" if changes else name
+
+
+def _report_without_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """``report`` with its ``"summary"`` key dropped, for anything that logs or serializes it.
+
+    The summary can run to a few hundred kilobytes; the full report (summary included)
+    stays reachable through :attr:`DeciderCalibration.report` for the writer, which is
+    the only consumer meant to see it.
+    """
+    if "summary" not in report:
+        return report
+    return {key: value for key, value in report.items() if key != "summary"}
 
 
 def _format_value(value: Any) -> str:
@@ -359,6 +373,56 @@ def _logits_source(
         if dst is decider and edge.get("to_port") == "logits":
             return src.name, edge.get("from_port")
     return None
+
+
+def _pixel_stride_for_decider(pipeline: CuvisPipeline, decider: BinaryDecider) -> int:
+    """The pixel stride of the metrics node reading this decider's ``decisions`` directly.
+
+    Walks the graph edges whose source is ``decider`` and whose ``from_port`` is
+    ``"decisions"``, and collects the ``pixel_stride`` of every destination node that
+    carries one (an int >= 1, the convention ``AnomalyDetectionMetrics`` uses; this
+    module never imports cuvis-ai, so the check is purely structural). Exactly one
+    distinct value is returned as is; no consumer with a stride defaults to 1; several
+    disagreeing values also default to 1, with one info line naming them, since no
+    single stride could be correct for all of them.
+    """
+    strides: dict[str, int] = {}
+    for src, dst, edge in pipeline._graph.edges(data=True):
+        if src is not decider or edge.get("from_port") != "decisions":
+            continue
+        stride = getattr(dst, "pixel_stride", None)
+        if isinstance(stride, int) and not isinstance(stride, bool) and stride >= 1:
+            strides[dst.name] = stride
+    distinct = set(strides.values())
+    if len(distinct) == 1:
+        return next(iter(distinct))
+    if len(distinct) > 1:
+        named = ", ".join(
+            f"{name} ({stride})" for name, stride in sorted(strides.items())
+        )
+        logger.info(
+            f"Threshold calibration: {decider.name} feeds metrics nodes with "
+            f"disagreeing pixel_stride values ({named}); using 1."
+        )
+    return 1
+
+
+def _calibrate_kwargs(decider: BinaryDecider, pixel_stride: int) -> dict[str, Any]:
+    """``{"pixel_stride": pixel_stride}`` when ``decider.calibrate`` accepts that keyword.
+
+    Checked via ``inspect.signature`` (a named parameter or ``**kwargs``) so an older
+    cuvis-ai release whose ``calibrate(self, scores, targets)`` takes no such argument
+    still calibrates, unchanged, instead of raising a ``TypeError``.
+    """
+    try:
+        parameters = inspect.signature(decider.calibrate).parameters
+    except (TypeError, ValueError):  # pragma: no cover - no introspectable signature
+        return {}
+    if "pixel_stride" in parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+    ):
+        return {"pixel_stride": pixel_stride}
+    return {}
 
 
 def _mask_originators(
@@ -499,8 +563,10 @@ def calibrate_pipeline_deciders(
             )
             continue
         scores = torch.cat(collected[key], dim=0)
+        pixel_stride = _pixel_stride_for_decider(pipeline, decider)
+        calibrate_kwargs = _calibrate_kwargs(decider, pixel_stride)
         try:
-            report = decider.calibrate(scores, targets)
+            report = decider.calibrate(scores, targets, **calibrate_kwargs)
         except Exception as exc:  # noqa: BLE001 - best effort: never lose the weights
             records[decider.name] = DeciderCalibration.skipped_decider(
                 decider, DeciderSkip.CALIBRATE_FAILED, f"{type(exc).__name__}: {exc}"
@@ -515,7 +581,9 @@ def calibrate_pipeline_deciders(
                 decider, DeciderSkip.NO_REPORT
             )
             continue
-        logger.info(f"Threshold calibration: {decider.name} -> {report}")
+        logger.info(
+            f"Threshold calibration: {decider.name} -> {_report_without_summary(report)}"
+        )
         records[decider.name] = DeciderCalibration.from_report(
             decider.name, report, thresholds_present=decider.is_calibrated
         )

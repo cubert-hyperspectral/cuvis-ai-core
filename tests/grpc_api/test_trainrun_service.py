@@ -236,6 +236,233 @@ def test_save_train_run_names_weights_after_the_pipeline_sibling(
     assert set(checkpoint["state_dict"]) == {"n"}
 
 
+def _session_with_calibration(sm, mock_experiment_dict, mock_pipeline_dict):
+    """A session with a live pipeline and a calibration record set, for the writer tests."""
+    import torch
+    from cuvis_ai_schemas.pipeline.config import PipelineConfig
+
+    from cuvis_ai_core.grpc.session_manager import CalibrationRecord
+    from cuvis_ai_core.training.calibration import CalibrationOutcome
+
+    sid = sm.create_session()
+    session = sm.get_session(sid)
+    session.trainrun_config = TrainRunConfig.from_dict(mock_experiment_dict)
+    session._pipeline_config = PipelineConfig.from_dict(mock_pipeline_dict)
+    node = MagicMock()
+    node.name = "n"
+    node.state_dict.return_value = {"w": torch.zeros(2)}
+    session.pipeline = MagicMock()
+    session.pipeline.nodes.return_value = [node]
+    outcome = CalibrationOutcome(
+        split="val",
+        applicable=True,
+        reports={"n": {"class": "Mock", "threshold": {"old": 0.5, "new": 0.42}}},
+    )
+    session.last_calibration = CalibrationRecord(
+        outcome=outcome, data_config=session.trainrun_config.data
+    )
+    return sid, session, outcome
+
+
+def test_save_train_run_writes_the_validation_summary_after_the_save(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch
+):
+    """When the session holds a calibration record, SaveTrainRun calls the writer with
+    the pipeline sibling path (never the trainrun path), after both files are written."""
+    import cuvis_ai_core.grpc.trainrun_service as trainrun_service_mod
+
+    sm, service = _service()
+    sid, session, outcome = _session_with_calibration(
+        sm, mock_experiment_dict, mock_pipeline_dict
+    )
+
+    calls: list[tuple] = []
+
+    def _fake_writer(*args, **kwargs):
+        # The sibling pipeline yaml and its weights must already exist on disk by
+        # the time the writer is called.
+        sibling = Path(args[0])
+        assert sibling.name == "tr_pipeline.yaml"
+        assert sibling.is_file()
+        assert sibling.with_suffix(".pt").is_file()
+        calls.append((args, kwargs))
+        return sibling.with_name("validation_summary.json")
+
+    monkeypatch.setattr(trainrun_service_mod, "write_validation_summary", _fake_writer)
+
+    out = tmp_path / "tr.yaml"
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=True
+        ),
+        Mock(),
+    )
+
+    assert resp.success is True
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert not kwargs
+    sibling_arg, outcome_arg, data_config_arg = args
+    assert Path(sibling_arg) == out.parent / "tr_pipeline.yaml"
+    assert outcome_arg is outcome
+    assert data_config_arg is session.last_calibration.data_config
+
+
+def test_save_train_run_skips_the_writer_without_a_calibration_record(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch
+):
+    """No `last_calibration` on the session: the writer is never called."""
+    import torch
+    from cuvis_ai_schemas.pipeline.config import PipelineConfig
+
+    import cuvis_ai_core.grpc.trainrun_service as trainrun_service_mod
+
+    sm, service = _service()
+    sid = sm.create_session()
+    session = sm.get_session(sid)
+    session.trainrun_config = TrainRunConfig.from_dict(mock_experiment_dict)
+    session._pipeline_config = PipelineConfig.from_dict(mock_pipeline_dict)
+    node = MagicMock()
+    node.name = "n"
+    node.state_dict.return_value = {"w": torch.zeros(2)}
+    session.pipeline = MagicMock()
+    session.pipeline.nodes.return_value = [node]
+    assert session.last_calibration is None
+
+    calls: list = []
+    monkeypatch.setattr(
+        trainrun_service_mod,
+        "write_validation_summary",
+        lambda *a, **k: calls.append((a, k)),
+    )
+
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(tmp_path / "tr.yaml"), save_weights=True
+        ),
+        Mock(),
+    )
+
+    assert resp.success is True
+    assert calls == []
+
+
+def test_save_train_run_writer_failure_does_not_fail_the_save(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch
+):
+    """A writer that raises is logged and must not take the save down with it."""
+    import cuvis_ai_core.grpc.trainrun_service as trainrun_service_mod
+
+    sm, service = _service()
+    sid, session, _outcome = _session_with_calibration(
+        sm, mock_experiment_dict, mock_pipeline_dict
+    )
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(trainrun_service_mod, "write_validation_summary", _boom)
+
+    # The production code logs this failure through logger.opt(exception=True).warning(...),
+    # the same chained call the existing weights-save-failure path uses; a stub that
+    # records the final .warning() call (ignoring .opt()'s arguments) captures it.
+    warnings: list[str] = []
+
+    class _LoggerStub:
+        def opt(self, *_a, **_k):
+            return self
+
+        def warning(self, msg, *_a, **_k):
+            warnings.append(str(msg))
+
+    monkeypatch.setattr(trainrun_service_mod, "logger", _LoggerStub())
+
+    out = tmp_path / "tr.yaml"
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=True
+        ),
+        Mock(),
+    )
+
+    assert resp.success is True
+    assert out.exists()
+    assert (out.parent / "tr_pipeline.pt").is_file()
+    assert len(warnings) == 1
+    assert "disk full" in warnings[0]
+
+
+def test_save_train_run_writes_no_summary_when_the_weights_save_failed(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch
+):
+    """A failed weights save writes no summary: an older `.pt` beside the yaml would bind
+    it to weights the calibration never saw."""
+    import cuvis_ai_core.grpc.trainrun_service as trainrun_service_mod
+
+    sm, service = _service()
+    sid, _session, _outcome = _session_with_calibration(
+        sm, mock_experiment_dict, mock_pipeline_dict
+    )
+    calls: list = []
+    monkeypatch.setattr(
+        trainrun_service_mod,
+        "write_validation_summary",
+        lambda *a, **k: calls.append((a, k)),
+    )
+
+    def _no_space(*_a, **_k):
+        raise RuntimeError("no space left on device")
+
+    monkeypatch.setattr(trainrun_service_mod.torch, "save", _no_space)
+
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(tmp_path / "tr.yaml"), save_weights=True
+        ),
+        Mock(),
+    )
+
+    assert resp.success is True
+    assert resp.weights_path == ""
+    assert calls == []
+
+
+def test_save_train_run_writer_runs_even_without_weights_requested(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict, monkeypatch
+):
+    """A calibration record on the session still triggers the writer call when
+    `save_weights=False`; the writer itself decides whether a `.pt` exists (it must
+    not, so the writer returns None and logs, which this test does not need to check,
+    only that it was still invoked with the pipeline sibling path)."""
+    import cuvis_ai_core.grpc.trainrun_service as trainrun_service_mod
+
+    sm, service = _service()
+    sid, session, outcome = _session_with_calibration(
+        sm, mock_experiment_dict, mock_pipeline_dict
+    )
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        trainrun_service_mod,
+        "write_validation_summary",
+        lambda *a, **k: calls.append((a, k)),
+    )
+
+    out = tmp_path / "tr.yaml"
+    resp = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=False
+        ),
+        Mock(),
+    )
+
+    assert resp.success is True
+    assert len(calls) == 1
+    args, _kwargs = calls[0]
+    assert Path(args[0]) == out.parent / "tr_pipeline.yaml"
+    assert args[1] is outcome
+
+
 # ---------------------------------------------------------------------------
 # parse_trainrun_yaml
 # ---------------------------------------------------------------------------

@@ -462,17 +462,27 @@ _DS = object()  # sentinel: a non-None dataset is available
 
 
 class RecordingPostFit:
-    """Stands in for PostFitCallback: records how it was built and whether run() fired."""
+    """Stands in for PostFitCallback: records how it was built and whether run() fired.
+
+    ``next_result`` is a class-level override: tests that need ``run()`` to hand back a
+    specific :class:`PostFitResult` (to exercise the validation-summary write) set it
+    before invoking ``restore_trainrun`` and reset it to ``None`` afterward, since the
+    default keeps the many parametrized dispatch tests' ``run()`` returning ``None``.
+    """
 
     instances: list["RecordingPostFit"] = []
+    next_result = None
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
         self.runs: list[bool] = []
+        self.result = None
         self.__class__.instances.append(self)
 
     def run(self, pipeline, datamodule, *, module=None, restore=True, **_):
         self.runs.append(restore)
+        self.result = type(self).next_result
+        return self.result
 
 
 def _patch_restore_components(
@@ -491,6 +501,7 @@ def _patch_restore_components(
     )
     RecordingTrainer.all_instances.clear()
     RecordingPostFit.instances.clear()
+    RecordingPostFit.next_result = None
     monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
     monkeypatch.setattr(restore_mod, "GradientTrainer", RecordingTrainer)
     monkeypatch.setattr(restore_mod, "PostFitCallback", RecordingPostFit)
@@ -1108,3 +1119,176 @@ def test_restore_trainrun_registers_the_cache_release_on_request(
     (post_fit,) = captured["callbacks"]
     assert type(post_fit).__name__ == "PostFitCallback"
     assert post_fit.release_cuda_cache is True
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun writes the validation summary after the save (train mode)
+# ---------------------------------------------------------------------------
+
+
+def _calibrated_post_fit_result():
+    """A PostFitResult whose calibration outcome is calibrated (has at least one report)."""
+    from cuvis_ai_core.training import CalibrationOutcome
+    from cuvis_ai_core.training.post_fit import PostFitResult
+
+    outcome = CalibrationOutcome(
+        split="val",
+        applicable=True,
+        reports={"dec": {"class": "Mock", "threshold": {"old": 0.5, "new": 0.42}}},
+    )
+    return PostFitResult(checkpoint=None, calibration=outcome, evaluations={})
+
+
+def test_statistical_only_train_writes_the_summary_after_the_save(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A statistical-only run's post-fit result, when calibrated, reaches the writer
+    with the saved yaml path and the trainrun's own data config, right after the save."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+    RecordingPostFit.next_result = _calibrated_post_fit_result()
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        restore_mod,
+        "write_validation_summary",
+        lambda *a, **k: calls.append((a, k)) or Path("ignored"),
+    )
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert len(calls) == 1
+    (args, kwargs) = calls[0]
+    assert not kwargs
+    saved_path, outcome, data_config = args
+    assert saved_path == fake_pipeline.save_to_file_calls[-1]
+    assert outcome.calibrated
+    assert data_config.data_module == statistical_experiment_dict["data"]["data_module"]
+
+
+def test_statistical_only_train_skips_the_writer_without_a_calibrated_outcome(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """No post-fit result (RecordingPostFit's default None) means no writer call."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+    # RecordingPostFit.next_result stays None (the fixture's default; _patch_restore_components
+    # resets it), so run() returns None - no PostFitResult at all.
+
+    calls: list = []
+    monkeypatch.setattr(
+        restore_mod, "write_validation_summary", lambda *a, **k: calls.append((a, k))
+    )
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert calls == []
+
+
+def test_statistical_only_train_skips_the_writer_when_nothing_calibrated(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A PostFitResult whose outcome is NOT calibrated (no decider report) must not
+    reach the writer either: there is nothing to write."""
+    from cuvis_ai_core.training import CalibrationOutcome
+    from cuvis_ai_core.training.post_fit import PostFitResult
+
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+    RecordingPostFit.next_result = PostFitResult(
+        checkpoint=None,
+        calibration=CalibrationOutcome(split="val", applicable=False),
+        evaluations={},
+    )
+
+    calls: list = []
+    monkeypatch.setattr(
+        restore_mod, "write_validation_summary", lambda *a, **k: calls.append((a, k))
+    )
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert calls == []
+
+
+class _FittingGrad(RecordingTrainer):
+    """A GradientTrainer stand-in whose ``fit()`` drives the PostFitCallback the way
+    Lightning's ``on_train_end`` would: it calls the real callback's ``run()`` (through
+    the double) and leaves ``.result`` set on the instance, exactly as the production
+    ``PostFitCallback.on_train_end`` does."""
+
+    def fit(self) -> None:
+        self.calls.append("fit")
+        for callback in self.kwargs.get("callbacks", []):
+            if isinstance(callback, RecordingPostFit):
+                callback.result = RecordingPostFit.next_result
+
+
+def test_gradient_train_writes_the_summary_after_the_save(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """The gradient path's PostFitCallback.result (set at on_train_end) reaches the
+    writer the same way the statistical-only path's run() return value does."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    fake_pipeline = FakeRestorePipeline(node_fits=(False,))
+    monkeypatch.setattr(
+        restore_mod, "_build_pipeline_from_config", lambda *a, **k: fake_pipeline
+    )
+    monkeypatch.setattr(
+        restore_mod,
+        "_create_datamodule_from_config",
+        lambda *a, **k: FakeRestoreDataModule(val_ds=None, test_ds=None),
+    )
+    RecordingTrainer.all_instances.clear()
+    RecordingPostFit.instances.clear()
+    RecordingPostFit.next_result = _calibrated_post_fit_result()
+    monkeypatch.setattr(restore_mod, "StatisticalTrainer", RecordingTrainer)
+    monkeypatch.setattr(restore_mod, "GradientTrainer", _FittingGrad)
+    monkeypatch.setattr(restore_mod, "PostFitCallback", RecordingPostFit)
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        restore_mod,
+        "write_validation_summary",
+        lambda *a, **k: calls.append((a, k)) or Path("ignored"),
+    )
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert len(calls) == 1
+    (args, kwargs) = calls[0]
+    assert not kwargs
+    saved_path, outcome, data_config = args
+    assert saved_path == fake_pipeline.save_to_file_calls[-1]
+    assert outcome.calibrated
+    assert data_config.data_module == mock_experiment_dict["data"]["data_module"]
+
+
+def test_writer_failure_is_logged_and_does_not_fail_the_cli_run(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A writer that raises must not take the CLI run down with it."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+    RecordingPostFit.next_result = _calibrated_post_fit_result()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(restore_mod, "write_validation_summary", _boom)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        restore_mod.logger,
+        "warning",
+        lambda msg, *a, **k: warnings.append(str(msg)),
+    )
+
+    # Must not raise.
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    assert len(warnings) == 1
+    assert "disk full" in warnings[0]

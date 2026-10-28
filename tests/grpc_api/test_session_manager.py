@@ -41,6 +41,7 @@ class TestSessionManager:
         assert isinstance(state.created_at, float)
         assert isinstance(state.last_accessed, float)
         assert state.created_at > 0
+        assert state.last_calibration is None
         assert state.last_accessed > 0
 
     def test_pipeline_config_property_derives_from_pipeline(self):
@@ -144,6 +145,34 @@ class TestSessionManager:
         old_pipeline.cleanup.assert_called_once_with()
         gc_collect.assert_called_once_with()
         assert manager.get_session(session_id).pipeline is new_pipeline
+
+    def test_set_pipeline_clears_the_sessions_last_calibration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pipeline load must drop any calibration outcome from the pipeline it replaces:
+        the new pipeline's deciders were never calibrated in this session."""
+        from cuvis_ai_core.grpc.session_manager import CalibrationRecord
+        from cuvis_ai_core.training.calibration import CalibrationOutcome
+        from cuvis_ai_core.training.config import DataConfig
+
+        manager = SessionManager()
+        session_id = manager.create_session(pipeline=MagicMock())
+        session = manager.get_session(session_id)
+        session.last_calibration = CalibrationRecord(
+            outcome=CalibrationOutcome(split="val", applicable=True),
+            data_config=DataConfig(),
+        )
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.gc.collect", MagicMock()
+        )
+        monkeypatch.setattr(
+            "cuvis_ai_core.grpc.session_manager.torch.cuda.is_available",
+            lambda: False,
+        )
+
+        manager.set_pipeline(session_id, MagicMock(), pipeline_config=None)
+
+        assert manager.get_session(session_id).last_calibration is None
 
     def test_get_session_updates_last_accessed(self):
         manager = SessionManager()

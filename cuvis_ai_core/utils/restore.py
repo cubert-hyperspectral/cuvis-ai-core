@@ -26,6 +26,7 @@ from cuvis_ai_core.training.post_fit import (
     TrainHook,
     log_event,
 )
+from cuvis_ai_core.training.validation_summary import write_validation_summary
 from cuvis_ai_core.utils.config_helpers import resolve_config_with_hydra
 from cuvis_ai_core.utils.node_registry import NodeRegistry
 from cuvis_ai_core.utils.plugin_resolver import _build_catalog, resolve_pipeline_plugins
@@ -707,6 +708,14 @@ def restore_trainrun(
         # trainer, so the config callbacks are appended here rather than left
         # for the trainer to build. The post-fit callback goes in with the
         # trainrun's metric nodes; the trainer adds the other runtime callbacks.
+        # Kept in its own variable (not just inline in the list) so its
+        # ``.result`` - set at Lightning's on_train_end - is reachable after
+        # the fit, the same way the gRPC gradient path reads it.
+        post_fit_callback = PostFitCallback(
+            emit=_log_post_fit_event,
+            metric_nodes=metric_nodes or None,
+            release_cuda_cache=training_config.release_cuda_cache_on_validation,
+        )
         grad_trainer = GradientTrainer(
             pipeline=pipeline,
             datamodule=datamodule,
@@ -714,11 +723,7 @@ def restore_trainrun(
             metric_nodes=metric_nodes,
             training_config=training_config,
             callbacks=[
-                PostFitCallback(
-                    emit=_log_post_fit_event,
-                    metric_nodes=metric_nodes or None,
-                    release_cuda_cache=training_config.release_cuda_cache_on_validation,
-                ),
+                post_fit_callback,
                 *create_callbacks_from_config(training_config.callbacks),
             ],
         )
@@ -735,7 +740,10 @@ def restore_trainrun(
             logger.info("  Step 1: Statistical initialization...")
             stat_trainer.fit()
 
-        # Step 2: Gradient training (if enabled)
+        # Step 2: Gradient training (if enabled). post_fit_result carries the
+        # calibration outcome and feeds the validation-summary write after
+        # the save below, whichever branch produced it.
+        post_fit_result = None
         if grad_trainer is not None:
             logger.info("  Step 2: Gradient-based training...")
 
@@ -755,12 +763,13 @@ def restore_trainrun(
             # Lightning's on_train_end, through the PostFitCallback in the
             # trainer's callback list; each step logs one line.
             grad_trainer.fit()
+            post_fit_result = post_fit_callback.result
         else:
             logger.info("  Step 2: Skipped (statistical-only)")
             # A statistical-only run has no Lightning fit to hang the steps on:
             # calibrate and evaluate here, on the weights about to be saved.
             logger.info("  Post-fit steps (calibration, evaluation)...")
-            PostFitCallback(
+            post_fit_result = PostFitCallback(
                 emit=_log_post_fit_event, metric_nodes=metric_nodes or None
             ).run(pipeline, datamodule, restore=False)
 
@@ -772,6 +781,19 @@ def restore_trainrun(
         restored_pipeline_path.parent.mkdir(parents=True, exist_ok=True)
         pipeline.save_to_file(str(restored_pipeline_path))
         logger.info(f"     Saved to {restored_pipeline_path}")
+
+        # Step 4: validation summary, only when this run actually calibrated a
+        # decider. A writer failure is logged and never fails the CLI run: the
+        # trained weights and the saved yaml are the point of the command.
+        if post_fit_result is not None and post_fit_result.calibration.calibrated:
+            try:
+                write_validation_summary(
+                    str(restored_pipeline_path),
+                    post_fit_result.calibration,
+                    trainrun_config.data,
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort, never fail the run
+                logger.warning(f"Could not write the validation summary: {exc}")
 
     elif mode == "validate":
         logger.info("Validation mode")

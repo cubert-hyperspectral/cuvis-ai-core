@@ -776,7 +776,10 @@ def test_train_gradient_streams_the_post_fit_events_and_reports_the_calibration(
             post_fit.result = PostFitResult(None, outcome, {})
 
         mock_gt.return_value.fit.side_effect = fit
-        responses = list(service._train_gradient(session, Mock(), training_config))
+        data_config = DataConfig(data_module="cu3s")
+        responses = list(
+            service._train_gradient(session, Mock(), training_config, data_config)
+        )
 
     mock_gt.assert_called_once()
     assert mock_gt.return_value.fit.called
@@ -811,11 +814,13 @@ def test_train_gradient_streams_the_post_fit_events_and_reports_the_calibration(
     )
     assert session.pipeline_config is None
     assert session.weights_source == "fit"
+    assert session.last_calibration.outcome is outcome
+    assert session.last_calibration.data_config is data_config
 
 
 def test_train_gradient_without_a_post_fit_result_reports_plain_completion(monkeypatch):
     """A mocked fit that never reaches on_train_end leaves no result: no calibration clause,
-    the cached config stays."""
+    the cached config stays, and the session's calibration record is left untouched."""
     import threading
 
     service = TrainingService(SessionManager())
@@ -824,16 +829,18 @@ def test_train_gradient_without_a_post_fit_result_reports_plain_completion(monke
     )
     session = Mock(stop_event=threading.Event(), trainrun_config=None)
     cached = session.pipeline_config
+    previous_calibration = session.last_calibration
 
     with patch("cuvis_ai_core.grpc.training_service.GradientTrainer"):
         responses = list(
             service._train_gradient(
-                session, Mock(), TrainingConfig(seed=7, max_epochs=1)
+                session, Mock(), TrainingConfig(seed=7, max_epochs=1), DataConfig()
             )
         )
 
     assert responses[-1].message == "Gradient training complete"
     assert session.pipeline_config is cached
+    assert session.last_calibration is previous_calibration
 
 
 def test_train_gradient_passes_the_cache_release_to_the_post_fit_callback(monkeypatch):
@@ -850,7 +857,7 @@ def test_train_gradient_passes_the_cache_release_to_the_post_fit_callback(monkey
     session = Mock(stop_event=threading.Event(), trainrun_config=None)
 
     with patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt:
-        list(service._train_gradient(session, Mock(), training_config))
+        list(service._train_gradient(session, Mock(), training_config, DataConfig()))
 
     post_fit = next(
         c
@@ -878,11 +885,14 @@ def test_train_statistical_runs_the_post_fit_steps_only_for_a_statistical_only_r
     )
 
     session = Mock(stop_event=threading.Event(), trainrun_config=None)
+    data_config = DataConfig(data_module="cu3s")
     with (
         patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
         patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
     ):
-        responses = list(service._train_statistical(session, Mock(), post_fit=True))
+        responses = list(
+            service._train_statistical(session, Mock(), data_config, post_fit=True)
+        )
 
     assert mock_st.return_value.fit.called
     assert fake.instances[-1].runs == [
@@ -897,20 +907,26 @@ def test_train_statistical_runs_the_post_fit_steps_only_for_a_statistical_only_r
     )
     assert session.pipeline_config is None
     assert session.weights_source == "fit"
+    assert session.last_calibration.outcome is outcome
+    assert session.last_calibration.data_config is data_config
 
     fake.instances.clear()
     session = Mock(stop_event=threading.Event(), trainrun_config=None)
     cached = session.pipeline_config
+    previous_calibration = session.last_calibration
     with (
         patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer"),
         patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
     ):
-        responses = list(service._train_statistical(session, Mock(), post_fit=False))
+        responses = list(
+            service._train_statistical(session, Mock(), DataConfig(), post_fit=False)
+        )
 
     assert fake.instances == []
     assert responses[-1].message == "Statistical training complete"
     assert not any(r.HasField("event") for r in responses)
     assert session.pipeline_config is cached
+    assert session.last_calibration is previous_calibration  # post_fit=False: untouched
 
 
 class _FakeStatisticalTrainer:
@@ -977,7 +993,9 @@ def test_train_statistical_streams_the_node_events_while_the_fit_runs():
         patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer", fake_trainer),
         patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake_post_fit),
     ):
-        responses = list(service._train_statistical(session, Mock(), post_fit=True))
+        responses = list(
+            service._train_statistical(session, Mock(), DataConfig(), post_fit=True)
+        )
 
     assert fake_trainer.instances[-1].stop_event is session.stop_event
     assert responses[0].message == "Starting statistical training"
@@ -1025,7 +1043,7 @@ def test_train_statistical_cancellation_surfaces_through_the_worker():
         ),
         pytest.raises(TrainingCancelled) as raised,
     ):
-        list(service._train_statistical(session, Mock(), post_fit=True))
+        list(service._train_statistical(session, Mock(), DataConfig(), post_fit=True))
 
     # The fit's own cancellation passes through: no swallowed error, no warning.
     assert raised.value.swallowed_error is None
@@ -1061,12 +1079,13 @@ def test_train_calibration_runs_the_steps_without_a_fit():
         stop_event=threading.Event(), trainrun_config=None, weights_source="run.pt"
     )
 
+    data_config = DataConfig(data_module="cu3s")
     with (
         patch("cuvis_ai_core.grpc.training_service.StatisticalTrainer") as mock_st,
         patch("cuvis_ai_core.grpc.training_service.GradientTrainer") as mock_gt,
         patch("cuvis_ai_core.grpc.training_service.PostFitCallback", fake),
     ):
-        responses = list(service._train_calibration(session, Mock()))
+        responses = list(service._train_calibration(session, Mock(), data_config))
 
     assert not mock_st.called and not mock_gt.called
     assert fake.instances[-1].runs == [False]
@@ -1092,6 +1111,8 @@ def test_train_calibration_runs_the_steps_without_a_fit():
         "Calibration complete; thresholds calibrated on val: dec (threshold 0.42)"
     )
     assert session.pipeline_config is None
+    assert session.last_calibration.outcome is outcome
+    assert session.last_calibration.data_config is data_config
 
 
 def test_calibration_precondition_names_the_missing_weights_and_the_unfitted_nodes():

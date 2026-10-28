@@ -16,6 +16,7 @@ from loguru import logger
 
 from cuvis_ai_core.orchestrator import leases
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from cuvis_ai_core.training.calibration import CalibrationOutcome
 from cuvis_ai_core.training.config import (
     DataConfig,
     PipelineConfig,
@@ -70,6 +71,19 @@ def default_search_paths() -> list[str]:
     return [str(get_server_base_dir().resolve())]
 
 
+@dataclass(frozen=True)
+class CalibrationRecord:
+    """The last post-fit calibration outcome of a session, with the data it ran on.
+
+    ``data_config`` is the effective ``DataConfig`` the calibrating pass actually used
+    (a request-level data config overrides the session's own for every trainer type), not
+    necessarily the one on ``SessionState.data_config`` by the time a caller reads this.
+    """
+
+    outcome: CalibrationOutcome
+    data_config: DataConfig
+
+
 @dataclass
 class SessionState:
     """State for a single training session."""
@@ -81,6 +95,13 @@ class SessionState:
     data_config: DataConfig | None = None
     training_config: TrainingConfig | None = None
     trainrun_config: TrainRunConfig | None = None
+    # The last post-fit calibration outcome produced in this session, together with the
+    # DataConfig that pass ran on. Set where a post-fit pass's result is produced
+    # (``TrainingService._run_post_fit`` and the gradient path's own post-fit callback);
+    # cleared by ``SessionManager.set_pipeline`` (every pipeline load or restore) and by
+    # ``PipelineService.set_train_run_config`` (the run boundary), so it only ever
+    # describes deciders calibrated in this session on the pipeline currently resident.
+    last_calibration: CalibrationRecord | None = None
     search_paths: list[str] = field(default_factory=default_search_paths)
     trainer: Any | None = None
     # Where the pipeline's trained weights came from: the weights file a
@@ -282,7 +303,11 @@ class SessionManager:
         pipeline: CuvisPipeline | None,
         pipeline_config: PipelineConfig | None = None,
     ) -> None:
-        """Attach a pipeline to a session, cleaning up any previous pipeline."""
+        """Attach a pipeline to a session, cleaning up any previous pipeline.
+
+        Drops ``last_calibration``: a calibration outcome describes the deciders of the
+        pipeline it was computed on, and every load or restore replaces that pipeline.
+        """
         session = self.get_session(session_id)
         old_pipeline = session.pipeline
         if old_pipeline is not None and old_pipeline is not pipeline:
@@ -290,6 +315,7 @@ class SessionManager:
 
         session.pipeline = pipeline
         session.pipeline_config = pipeline_config
+        session.last_calibration = None
 
     def set_search_paths(
         self, session_id: str, paths: list[str], append: bool = True
