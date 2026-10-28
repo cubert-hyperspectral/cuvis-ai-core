@@ -6,7 +6,7 @@
 - `NodeProfilingStats.flops_per_call` and `gflop_per_s` (cuvis-ai-schemas 0.14.3) carry the count through `get_profiling_summary()` and `GetProfilingSummary`, where the field is set only for a counted node (a counted 0 included). A formula that fails leaves the count empty and logs one warning naming the node and the op. The data-loading rows carry no count.
 - The profiling table shows `GFLOP` and `GFLOP/s` columns when a node has a count, sums the counts per forward on the per-frame line when all rows belong to one stage, notes that GFLOP/s of GPU nodes reads high when the run was not CUDA-synchronized (`restore-pipeline --profile-sync`), and notes without a warm-up skip that the slower counted first forward is part of the times.
 - Requires `cuvis-ai-schemas>=0.14.3`.
-- Lock and floors past the pip-audit advisories: pillow 13.0.0, aiohttp 3.14.5 (floor 3.14.4), gitpython 3.2.1, hydra-core 1.3.8; the lock also moves certifi to 2026.10.23 and msgpack to 1.2.4. setuptools GHSA-xmj3-9gf7-h52w is ignored in CI until the torch line lifts its `setuptools<82` cap.
+- Lock and floors past the pip-audit advisories: pillow 13.0.0, aiohttp 3.14.5, gitpython 3.2.1, hydra-core 1.3.8; the lock also moves certifi to 2026.10.23 and msgpack to 1.2.4. setuptools GHSA-xmj3-9gf7-h52w is ignored in CI until the torch line lifts its `setuptools<82` cap.
 
 ## 0.18.6 - 2026-10-22
 

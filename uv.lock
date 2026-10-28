@@ -762,7 +762,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.14.4" },
+    { name = "aiohttp", specifier = ">=3.14.5" },
     { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "click", specifier = ">=8.4.2" },
     { name = "cuvis-ai-schemas", extras = ["proto"], specifier = ">=0.14.3,<0.15" },
