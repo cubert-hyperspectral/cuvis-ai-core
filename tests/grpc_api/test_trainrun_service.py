@@ -18,6 +18,7 @@ import pytest
 import torch
 import yaml
 
+from cuvis_ai_core.grpc import training_service as training_service_mod
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
@@ -492,3 +493,42 @@ def test_save_train_run_writes_the_calibration_block_back(
         "target": 0.9,
         "level": "frames",
     }
+
+
+@pytest.mark.parametrize(
+    ("training", "loss_nodes", "statistical_only"),
+    [
+        ({"accelerator": "cpu"}, [], True),
+        ({"accelerator": "cpu"}, ["loss"], False),
+        ({"accelerator": "cpu", "max_epochs": 5}, [], False),
+        (None, [], True),
+    ],
+)
+def test_a_restored_device_block_is_no_gradient_phase(
+    monkeypatch,
+    tmp_path,
+    mock_experiment_dict,
+    mock_pipeline_dict,
+    training,
+    loss_nodes,
+    statistical_only,
+):
+    monkeypatch.setattr(
+        CuvisPipeline, "load_pipeline", staticmethod(lambda *_a, **_k: MagicMock())
+    )
+    experiment = copy.deepcopy(mock_experiment_dict)
+    experiment["training"] = training
+    experiment["loss_nodes"] = loss_nodes
+    if training is None:
+        del experiment["training"]
+    sm, service = _service()
+    context = Mock()
+    response = service.restore_train_run(
+        cuvis_ai_pb2.RestoreTrainRunRequest(
+            trainrun_path=str(_write_trainrun(tmp_path, experiment, mock_pipeline_dict))
+        ),
+        context,
+    )
+    context.set_code.assert_not_called()
+    session = sm.get_session(response.session_id)
+    assert training_service_mod._statistical_only(session) is statistical_only

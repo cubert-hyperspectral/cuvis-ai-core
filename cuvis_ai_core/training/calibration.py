@@ -391,9 +391,16 @@ def _mask_originators(
 
 
 def _takes_objective(decider: BinaryDecider) -> bool:
-    """Whether ``decider.calibrate`` accepts the trainrun's block, by name or as ``**kwargs``."""
+    """Whether ``decider.calibrate`` accepts the trainrun's block as ``objective=``.
+
+    A parameter of that name counts unless it is positional-only; ``**kwargs`` counts too.
+    """
     return any(
-        parameter.name == "objective" or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        (
+            parameter.name == "objective"
+            and parameter.kind is not inspect.Parameter.POSITIONAL_ONLY
+        )
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in inspect.signature(decider.calibrate).parameters.values()
     )
 
@@ -421,9 +428,10 @@ def calibrate_pipeline_deciders(
     from the pass) propagates.
 
     ``objective`` is the trainrun's calibration block. With one, each decider gets it as
-    ``calibrate(scores, targets, objective=objective)``; a decider whose ``calibrate`` takes
-    no such parameter is recorded as ``CALIBRATE_FAILED`` and keeps its thresholds. Without
-    one the call keeps its two arguments, so such a decider still calibrates to F1.
+    ``calibrate(scores, targets, objective=objective)``. A decider whose ``calibrate`` takes
+    no such parameter keeps the two-argument call under an f1 block, which asks for its own
+    rule, and is recorded as ``CALIBRATE_FAILED`` under a precision or recall block, keeping
+    its thresholds. Without a block the call keeps its two arguments.
     ``raise_out_of_memory`` lets a GPU out-of-memory error from the pass or from a
     ``calibrate`` propagate instead of being recorded; every other error is still recorded.
     """
@@ -528,7 +536,12 @@ def calibrate_pipeline_deciders(
                 f"{split}; skipping {decider.name}."
             )
             continue
-        if objective is not None and not _takes_objective(decider):
+        hands_objective = objective is not None and _takes_objective(decider)
+        if (
+            objective is not None
+            and objective.objective != "f1"
+            and not hands_objective
+        ):
             records[decider.name] = DeciderCalibration.skipped_decider(
                 decider,
                 DeciderSkip.CALIBRATE_FAILED,
@@ -542,9 +555,9 @@ def calibrate_pipeline_deciders(
         scores = torch.cat(collected[key], dim=0)
         try:
             report = (
-                decider.calibrate(scores, targets)
-                if objective is None
-                else decider.calibrate(scores, targets, objective=objective)
+                decider.calibrate(scores, targets, objective=objective)
+                if hands_objective
+                else decider.calibrate(scores, targets)
             )
         except Exception as exc:  # noqa: BLE001 - best effort: never lose the weights
             if raise_out_of_memory and is_cuda_out_of_memory(exc):

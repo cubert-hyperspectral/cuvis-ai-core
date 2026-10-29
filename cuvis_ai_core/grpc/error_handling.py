@@ -93,12 +93,13 @@ def grpc_handler(error_prefix: str = "") -> Callable:
 
     Exception mapping (checked in order):
 
+    * a GPU out-of-memory error, also behind an error raised from it or while
+      handling it (one of the types below included),
+      → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
     * ``FileNotFoundError``    → ``NOT_FOUND``
     * ``json.JSONDecodeError`` → ``INVALID_ARGUMENT``
     * ``ValidationError``      → ``INVALID_ARGUMENT``
     * ``ValueError``           → ``INVALID_ARGUMENT``
-    * a GPU out-of-memory error, also as the cause of another error,
-      → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
     * ``Exception`` (fallback) → ``INTERNAL`` (with *error_prefix*)
 
     The response type is inferred from the method's return annotation
@@ -121,32 +122,38 @@ def grpc_handler(error_prefix: str = "") -> Callable:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
                 return method(*args, **kwargs)
-            except tuple(exc for exc, _ in _EXCEPTION_STATUS_MAP) as exc:
-                # Find the matching status code.
-                context = _extract_context(args, kwargs)
-                for exc_type, status_code in _EXCEPTION_STATUS_MAP:
-                    if isinstance(exc, exc_type):
-                        context.set_code(status_code)
-                        context.set_details(str(exc))
-                        break
             except Exception as exc:
                 context = _extract_context(args, kwargs)
-                context.set_code(
-                    grpc.StatusCode.RESOURCE_EXHAUSTED
-                    if is_cuda_out_of_memory(exc)
-                    else grpc.StatusCode.INTERNAL
-                )
-                prefix = f"{error_prefix}: " if error_prefix else ""
-                context.set_details(f"{prefix}{exc}")
-                logger.opt(exception=True).error(
-                    f"gRPC {method.__name__}: {prefix}{exc}"
-                )
+                out_of_memory = is_cuda_out_of_memory(exc)
+                status_code = None if out_of_memory else _mapped_status(exc)
+                if status_code is not None:
+                    context.set_code(status_code)
+                    context.set_details(str(exc))
+                else:
+                    context.set_code(
+                        grpc.StatusCode.RESOURCE_EXHAUSTED
+                        if out_of_memory
+                        else grpc.StatusCode.INTERNAL
+                    )
+                    prefix = f"{error_prefix}: " if error_prefix else ""
+                    context.set_details(f"{prefix}{exc}")
+                    logger.opt(exception=True).error(
+                        f"gRPC {method.__name__}: {prefix}{exc}"
+                    )
 
             return response_type() if response_type is not None else None
 
         return wrapper
 
     return decorator
+
+
+def _mapped_status(exc: Exception) -> grpc.StatusCode | None:
+    """The status ``_EXCEPTION_STATUS_MAP`` gives ``exc``; ``None`` when it names none of its types."""
+    for exc_type, status_code in _EXCEPTION_STATUS_MAP:
+        if isinstance(exc, exc_type):
+            return status_code
+    return None
 
 
 def _extract_context(args: tuple, kwargs: dict) -> grpc.ServicerContext:

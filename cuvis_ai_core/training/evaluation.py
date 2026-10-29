@@ -63,16 +63,25 @@ def is_cuda_out_of_memory(exc: BaseException | None) -> bool:
 
     torch raises ``torch.cuda.OutOfMemoryError`` when its caching allocator cannot serve a
     request; the CUDA runtime and cuBLAS name the same condition in a ``RuntimeError``.
-    Loaders re-raise with ``raise ... from exc``, so the causes count too.
+    The walk follows the chain a traceback prints: the cause of ``raise ... from``, else
+    the error being handled when this one was raised, unless ``from None`` hid it. A chain
+    that loops back on itself ends the walk.
     """
-    while exc is not None:
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
         if isinstance(exc, torch.cuda.OutOfMemoryError):
             return True
         if isinstance(exc, RuntimeError) and any(
             text in str(exc) for text in _CUDA_OUT_OF_MEMORY_TEXT
         ):
             return True
-        exc = exc.__cause__
+        seen.add(id(exc))
+        if exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__suppress_context__:
+            exc = None
+        else:
+            exc = exc.__context__
     return False
 
 

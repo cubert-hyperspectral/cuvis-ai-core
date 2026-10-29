@@ -237,3 +237,35 @@ def test_cuda_out_of_memory_is_recognised_through_its_causes():
             RuntimeError("boom at inference"),
         )
     )
+
+
+def test_cuda_out_of_memory_is_recognised_through_an_implicit_context():
+    try:
+        try:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory.")
+        except torch.cuda.OutOfMemoryError:
+            raise RuntimeError("Node 'det' failed to prepare for inference")  # noqa: B904
+    except RuntimeError as exc:
+        implicit = exc
+    try:
+        try:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory.")
+        except torch.cuda.OutOfMemoryError:
+            raise RuntimeError("Node 'det' was given a bad shape") from None
+    except RuntimeError as exc:
+        suppressed = exc
+    assert is_cuda_out_of_memory(implicit)
+    assert not is_cuda_out_of_memory(suppressed)
+
+
+def test_a_cyclic_error_chain_ends_the_walk():
+    first, second = RuntimeError("first"), RuntimeError("second")
+    first.__cause__, second.__cause__ = second, first
+    verdict: list[bool] = []
+    # A walk that never ends fails here instead of hanging the suite.
+    walker = threading.Thread(
+        target=lambda: verdict.append(is_cuda_out_of_memory(first)), daemon=True
+    )
+    walker.start()
+    walker.join(timeout=5)
+    assert verdict == [False]

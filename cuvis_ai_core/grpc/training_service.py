@@ -71,7 +71,9 @@ def _run_outcome(
     moment the run failed, because then the failure is teardown noise from
     a trainer that was winding down. An error that arrived first wins even
     if a stop followed it, so a crash is never reported as a clean
-    cancellation. A swallowed error is logged and travels on the
+    cancellation. A GPU out-of-memory error is never noise: it wins over a
+    stop either way, so its status code reaches the client, which may run the
+    pass again on the CPU. A swallowed error is logged and travels on the
     :class:`TrainingCancelled` it lost to.
 
     Parameters
@@ -93,7 +95,9 @@ def _run_outcome(
     """
     if isinstance(training_error, TrainingCancelled):
         return training_error
-    if training_error is not None and not stop_set_at_failure:
+    if training_error is not None and (
+        not stop_set_at_failure or is_cuda_out_of_memory(training_error)
+    ):
         return training_error
     if not stop_set_now:
         return training_error
@@ -106,6 +110,22 @@ def _run_outcome(
             "Gradient training stopped via StopTrain", swallowed_error=training_error
         )
     return TrainingCancelled("Gradient training stopped via StopTrain")
+
+
+def _statistical_only(session: SessionState) -> bool:
+    """Whether the session's run has no gradient phase, so a statistical fit runs the post-fit steps.
+
+    A training config means a gradient phase, except one that sets nothing but the
+    accelerator in a run without loss nodes: RestoreTrainRun reads that key for the device
+    (a client restores a run on the CPU with it), and such a block configures no fit.
+    """
+    training = session.training_config
+    if training is None:
+        return True
+    trainrun = session.trainrun_config
+    return training.model_fields_set <= {"accelerator"} and not (
+        trainrun is not None and trainrun.loss_nodes
+    )
 
 
 class TrainingService:
@@ -203,7 +223,7 @@ class TrainingService:
             self._refuse_uncalibrated_consumers(session.pipeline)
             # Read before the experiment capture below, which writes a default
             # TrainingConfig into the session for a statistical phase.
-            statistical_only = session.training_config is None
+            statistical_only = _statistical_only(session)
             training_config_py: TrainingConfig | None = None
             inner: Iterator[cuvis_ai_pb2.TrainResponse]
 
@@ -278,19 +298,19 @@ class TrainingService:
             # keep the GPU busy to completion.
             stop_event.set()
             raise
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return
         except Exception as exc:
-            # A GPU out-of-memory error gets its own code: a client may run the pass
-            # again on the CPU, and the code is the verdict, not the message.
-            context.set_code(
-                grpc.StatusCode.RESOURCE_EXHAUSTED
-                if is_cuda_out_of_memory(exc)
-                else grpc.StatusCode.INTERNAL
-            )
-            context.set_details(f"Training failed: {str(exc)}")
+            # A GPU out-of-memory error gets its own code, also behind a ValueError it
+            # caused: a client may run the pass again on the CPU, and the code is the
+            # verdict, not the message.
+            if is_cuda_out_of_memory(exc):
+                context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+                context.set_details(f"Training failed: {str(exc)}")
+            elif isinstance(exc, ValueError):
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(str(exc))
+            else:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details(f"Training failed: {str(exc)}")
             return
         finally:
             stream_finished.set()

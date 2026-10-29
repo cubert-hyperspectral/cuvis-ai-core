@@ -776,3 +776,37 @@ def test_an_out_of_memory_calibrate_raises_when_asked_and_other_errors_stay_reco
     )
     (record,) = outcome.deciders
     assert record.skip is DeciderSkip.CALIBRATE_FAILED
+
+
+class _PositionalObjectiveDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` names ``objective`` but takes it by position only."""
+
+    def calibrate(self, scores, targets, objective=None, /):
+        """Calibrate as the mock does; a keyword ``objective`` cannot reach it."""
+        return super().calibrate(scores, targets)
+
+
+def test_an_f1_block_lets_a_decider_without_the_parameter_calibrate_by_its_own_rule():
+    plain, taking = _MockCalibratableDecider(name="dec"), _ObjectiveDecider(name="dec")
+    f1 = CalibrationConfig()
+    assert calibrate_pipeline_deciders(
+        _pipeline(plain), _ListDataModule(_MIXED), split="val", objective=f1
+    ).calibrated
+    assert plain.calibrated_with is not None
+    assert calibrate_pipeline_deciders(
+        _pipeline(taking), _ListDataModule(_MIXED), split="val", objective=f1
+    ).calibrated
+    assert taking.objective_seen is f1
+
+
+def test_a_positional_only_objective_is_no_objective_parameter():
+    dec = _PositionalObjectiveDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val", objective=_RECALL
+    )
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.CALIBRATE_FAILED
+    assert (
+        record.skip_detail
+        == "_PositionalObjectiveDecider.calibrate takes no calibration objective"
+    )

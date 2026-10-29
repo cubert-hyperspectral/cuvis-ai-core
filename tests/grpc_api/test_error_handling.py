@@ -132,6 +132,12 @@ class _OutOfMemoryService:
         error.__cause__ = torch.cuda.OutOfMemoryError("CUDA out of memory.")
         raise error
 
+    @grpc_handler("Failed to restore train run")
+    def restore_invalid(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
+        raise ValueError("Node 'det' cannot run on this device") from (
+            torch.cuda.OutOfMemoryError("CUDA out of memory.")
+        )
+
 
 def test_grpc_handler_answers_cuda_out_of_memory_with_resource_exhausted():
     context = Mock()
@@ -147,3 +153,12 @@ def test_grpc_handler_finds_out_of_memory_behind_a_wrapping_error():
     context = Mock()
     _OutOfMemoryService().restore_wrapped(None, context)
     context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
+
+
+def test_grpc_handler_finds_out_of_memory_behind_an_error_it_maps():
+    context = Mock()
+    _OutOfMemoryService().restore_invalid(None, context)
+    context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
+    context.set_details.assert_called_once_with(
+        "Failed to restore train run: Node 'det' cannot run on this device"
+    )
