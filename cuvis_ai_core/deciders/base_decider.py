@@ -9,6 +9,7 @@ from cuvis_ai_core.node.node import Node
 import torch
 from cuvis_ai_schemas.pipeline import PortSpec
 from cuvis_ai_schemas.execution.context import Context
+from cuvis_ai_schemas.training import CalibrationConfig
 
 
 class BinaryDecider(Node):
@@ -69,19 +70,29 @@ class BinaryDecider(Node):
             Dictionary with "decisions" key containing (B, H, W, 1) decision mask.
         """
 
-    def calibrate(self, scores: Tensor, targets: Tensor) -> dict[str, Any] | None:
+    def calibrate(
+        self,
+        scores: Tensor,
+        targets: Tensor,
+        objective: CalibrationConfig | None = None,
+    ) -> dict[str, Any] | None:
         """Re-fit this decider's threshold(s) on a labelled split (no-op by default).
 
         The in-training calibration phase collects the scores feeding this decider and the
         ground-truth mask over the validation split, then calls this method. Subclasses that
         support ground-truth calibration override it to sweep their own decision rule to
-        F1-max and update their thresholds in place, returning a small report; deciders that
-        do not override it are simply skipped. The base is a no-op so the phase can treat any
+        F1-max, or to the precision or recall target the trainrun's calibration block names,
+        and update their thresholds in place, returning a small report; deciders that do not
+        override it are simply skipped. The base is a no-op so the phase can treat any
         decider uniformly.
+
+        The phase passes ``objective`` only when the trainrun carries a calibration block, so
+        an override without the parameter keeps calibrating to F1 on every other trainrun.
 
         Args:
             scores: Decider-input scores stacked over the split, shaped (N, H, W, C).
             targets: Ground-truth anomaly mask, (N, H, W, C) or (N, H, W).
+            objective: The trainrun's calibration block; ``None`` means the F1 optimum.
 
         Returns:
             A per-decider calibration report, or ``None`` when calibration is unsupported.

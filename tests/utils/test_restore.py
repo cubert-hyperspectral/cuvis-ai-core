@@ -1108,3 +1108,29 @@ def test_restore_trainrun_registers_the_cache_release_on_request(
     (post_fit,) = captured["callbacks"]
     assert type(post_fit).__name__ == "PostFitCallback"
     assert post_fit.release_cuda_cache is True
+
+
+@pytest.mark.parametrize("use_gradient", [True, False])
+def test_restore_trainrun_hands_the_calibration_block_to_the_post_fit_steps(
+    monkeypatch,
+    tmp_path: Path,
+    mock_experiment_dict,
+    statistical_experiment_dict,
+    mock_pipeline_dict,
+    use_gradient,
+) -> None:
+    exp_dict = dict(
+        mock_experiment_dict if use_gradient else statistical_experiment_dict
+    )
+    exp_dict["calibration"] = {"objective": "recall", "target": 0.9, "level": "frames"}
+    path = _write_trainrun(tmp_path, exp_dict, mock_pipeline_dict)
+    _patch_restore_components(
+        monkeypatch, FakeRestorePipeline(node_fits=(True,)), val_ds=_DS, test_ds=_DS
+    )
+
+    restore_mod.restore_trainrun(path, mode="train", device="cpu")
+
+    block = RecordingPostFit.instances[-1].kwargs["calibration"]
+    assert (block.objective, block.target, block.level) == ("recall", 0.9, "frames")
+    if use_gradient:
+        assert RecordingTrainer.all_instances[1].kwargs["calibration"] == block

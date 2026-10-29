@@ -9,17 +9,21 @@ the default (fast) run.
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import grpc
 import pytest
+import torch
 import yaml
 
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.grpc.trainrun_service import TrainRunService
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
+from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import TrainRunConfig
+from cuvis_ai_schemas.training import CalibrationConfig
 
 
 def _service():
@@ -377,3 +381,114 @@ def test_restore_train_run_missing_weights_is_not_found(
     )
     service.restore_train_run(req, ctx)
     ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
+
+
+# ---------------------------------------------------------------------------
+# where a restore puts the pipeline, an out-of-memory restore, the calibration block
+# ---------------------------------------------------------------------------
+
+
+def _restore_device(
+    monkeypatch, tmp_path, experiment, mock_pipeline_dict, *, cuda=True
+):
+    devices = []
+
+    def load_pipeline(*_args, **kwargs):
+        devices.append(kwargs["device"])
+        return MagicMock()
+
+    monkeypatch.setattr(CuvisPipeline, "load_pipeline", staticmethod(load_pipeline))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
+    _, service = _service()
+    context = Mock()
+    request = cuvis_ai_pb2.RestoreTrainRunRequest(
+        trainrun_path=str(_write_trainrun(tmp_path, experiment, mock_pipeline_dict))
+    )
+    service.restore_train_run(request, context)
+    context.set_code.assert_not_called()
+    return devices
+
+
+@pytest.mark.parametrize(
+    ("accelerator", "cuda", "device"),
+    [
+        ("cpu", True, "cpu"),
+        ("cpu", False, "cpu"),
+        ("auto", True, "cuda"),
+        ("gpu", True, "cuda"),
+        ("auto", False, None),
+    ],
+)
+def test_restore_train_run_restores_where_the_trainrun_asks(
+    monkeypatch,
+    tmp_path,
+    mock_experiment_dict,
+    mock_pipeline_dict,
+    accelerator,
+    cuda,
+    device,
+):
+    experiment = copy.deepcopy(mock_experiment_dict)
+    experiment["training"]["accelerator"] = accelerator
+    assert _restore_device(
+        monkeypatch, tmp_path, experiment, mock_pipeline_dict, cuda=cuda
+    ) == [device]
+
+
+def test_restore_train_run_without_a_training_block_keeps_cuda_when_available(
+    monkeypatch, tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    experiment = copy.deepcopy(mock_experiment_dict)
+    del experiment["training"]
+    assert _restore_device(monkeypatch, tmp_path, experiment, mock_pipeline_dict) == [
+        "cuda"
+    ]
+
+
+def test_restore_train_run_out_of_memory_is_resource_exhausted(
+    monkeypatch, tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    def load_pipeline(*_args, **_kwargs):
+        raise torch.cuda.OutOfMemoryError(
+            "CUDA out of memory. Tried to allocate 1.00 GiB"
+        )
+
+    monkeypatch.setattr(CuvisPipeline, "load_pipeline", staticmethod(load_pipeline))
+    _, service = _service()
+    context = Mock()
+    request = cuvis_ai_pb2.RestoreTrainRunRequest(
+        trainrun_path=str(
+            _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+        )
+    )
+    service.restore_train_run(request, context)
+    context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
+    context.set_details.assert_called_once_with(
+        "Failed to restore train run: CUDA out of memory. Tried to allocate 1.00 GiB"
+    )
+
+
+def test_save_train_run_writes_the_calibration_block_back(
+    tmp_path, mock_experiment_dict, mock_pipeline_dict
+):
+    sm, service = _service()
+    sid = _session_with_pipeline(sm, mock_experiment_dict, mock_pipeline_dict)
+    session = sm.get_session(sid)
+    block = CalibrationConfig(objective="recall", target=0.9, level="frames")
+    session.trainrun_config = session.trainrun_config.model_copy(
+        update={"calibration": block}
+    )
+    out = tmp_path / "tr.yaml"
+    response = service.save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id=sid, trainrun_path=str(out), save_weights=False
+        ),
+        Mock(),
+    )
+    assert response.success is True
+    saved = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert saved["calibration"] == {
+        "objective": "recall",
+        "target": 0.9,
+        "level": "frames",
+    }

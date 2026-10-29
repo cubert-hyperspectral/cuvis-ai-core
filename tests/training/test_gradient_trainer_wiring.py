@@ -24,6 +24,7 @@ from cuvis_ai_core.training.config import (
 from cuvis_ai_core.training.trainers import GradientTrainer
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_schemas.training import CalibrationConfig
 
 
 class _TrainableNode(Node):
@@ -348,3 +349,22 @@ def test_build_runtime_callbacks_carries_the_sink_and_the_stop_event():
         ).release_cuda_cache
         is False
     )
+
+
+def test_fit_gives_the_runtime_post_fit_callback_the_trainrun_block():
+    from cuvis_ai_core.training.post_fit import PostFitCallback
+
+    block = CalibrationConfig(objective="recall", target=0.9)
+    trainer = GradientTrainer(
+        pipeline=_pipeline(),
+        datamodule=_MockDataModule(),
+        loss_nodes=[],
+        training_config=TrainingConfig(max_epochs=1),
+        calibration=block,
+    )
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        mock_trainer_cls.return_value = MagicMock()
+        trainer.fit()
+    callbacks = mock_trainer_cls.call_args.kwargs["callbacks"]
+    (post_fit,) = [c for c in callbacks if isinstance(c, PostFitCallback)]
+    assert post_fit.calibration is block

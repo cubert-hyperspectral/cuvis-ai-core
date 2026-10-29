@@ -26,11 +26,13 @@ from cuvis_ai_core.training.post_fit import (
     describe_event,
 )
 from cuvis_ai_core.training.config import (
+    CalibrationConfig,
     DataConfig,
     TrainingConfig,
     TrainRunConfig,
     create_callbacks_from_config,
 )
+from cuvis_ai_core.training.evaluation import is_cuda_out_of_memory
 from cuvis_ai_core.training.trainers import (
     GradientTrainer,
     StatisticalTrainer,
@@ -281,7 +283,13 @@ class TrainingService:
             context.set_details(str(exc))
             return
         except Exception as exc:
-            context.set_code(grpc.StatusCode.INTERNAL)
+            # A GPU out-of-memory error gets its own code: a client may run the pass
+            # again on the CPU, and the code is the verdict, not the message.
+            context.set_code(
+                grpc.StatusCode.RESOURCE_EXHAUSTED
+                if is_cuda_out_of_memory(exc)
+                else grpc.StatusCode.INTERNAL
+            )
             context.set_details(f"Training failed: {str(exc)}")
             return
         finally:
@@ -533,6 +541,7 @@ class TrainingService:
         metric_nodes = []
         unfreeze_nodes = []
         freeze_nodes = []
+        calibration = self._calibration_of(session)
 
         if session.trainrun_config is not None:
             loss_nodes = session.trainrun_config.loss_nodes
@@ -553,7 +562,14 @@ class TrainingService:
             metric_nodes=metric_nodes,
             freeze_nodes=freeze_nodes,
             unfreeze_nodes=unfreeze_nodes,
+            calibration=calibration,
         )
+
+    @staticmethod
+    def _calibration_of(session: SessionState) -> CalibrationConfig | None:
+        """The calibration block of the session's trainrun, or ``None`` without one."""
+        trainrun = session.trainrun_config
+        return trainrun.calibration if trainrun is not None else None
 
     def _train_statistical(
         self,
@@ -679,11 +695,13 @@ class TrainingService:
             )
             progress_queue.put(self._event_response(base, event))
 
+        calibration = self._calibration_of(session)
         post_fit = PostFitCallback(
             emit=emit,
             stop_event=session.stop_event,
             release_cuda_cache=training_config.release_cuda_cache_on_validation,
             metric_nodes=metric_nodes or None,
+            calibration=calibration,
         )
         callback_list = [progress, StopTrainingCallback(session.stop_event), post_fit]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
@@ -695,6 +713,7 @@ class TrainingService:
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             callbacks=callback_list,
+            calibration=calibration,
         )
         session.trainer = trainer
 
@@ -739,8 +758,14 @@ class TrainingService:
             status="running",
             message="Starting calibration",
         )
+        # Nothing is unsaved here, so a GPU out-of-memory error ends the call with its
+        # own code instead of a recorded skip: the client may run the pass on the CPU.
         outcome = yield from self._run_post_fit(
-            session, datamodule, restore=False, base_context=base
+            session,
+            datamodule,
+            restore=False,
+            base_context=base,
+            raise_out_of_memory=True,
         )
         suffix = (
             f"; {outcome.summary()}"
@@ -816,11 +841,14 @@ class TrainingService:
         *,
         restore: bool,
         base_context: Context,
+        raise_out_of_memory: bool = False,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Run the post-fit steps on a worker thread and stream their events.
 
         The generator's return value is the calibration outcome; a calibrated
         pipeline drops the session's cached config so the save re-derives it.
+        ``raise_out_of_memory`` lets a GPU out-of-memory error end the steps
+        (see :class:`PostFitCallback`).
         """
         progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
         results: list[PostFitResult] = []
@@ -830,6 +858,8 @@ class TrainingService:
             ),
             stop_event=session.stop_event,
             metric_nodes=self._metric_nodes(session),
+            calibration=self._calibration_of(session),
+            raise_out_of_memory=raise_out_of_memory,
         )
 
         def _run() -> None:

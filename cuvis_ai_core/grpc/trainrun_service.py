@@ -292,6 +292,13 @@ class TrainRunService:
                 target_session_id
             ).node_registry
 
+        # The trainrun's accelerator decides only for "cpu": a client that ran out of GPU
+        # memory restores the run there; anything else keeps CUDA when it is available.
+        training = trainrun_config.training
+        if training is not None and str(training.accelerator).lower() == "cpu":
+            device: str | None = "cpu"
+        else:
+            device = "cuda" if torch.cuda.is_available() else None
         pipeline = CuvisPipeline.load_pipeline(
             config_path=pipeline_config_path,
             weights_path=str(weights_path_from_request)
@@ -300,7 +307,7 @@ class TrainRunService:
             strict_weight_loading=request.strict
             if request.HasField("strict")
             else True,
-            device="cuda" if torch.cuda.is_available() else None,
+            device=device,
             node_registry=node_registry,
         )
         pipeline_config = PipelineConfig.load_from_file(pipeline_config_path)

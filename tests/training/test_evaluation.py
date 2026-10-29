@@ -20,6 +20,7 @@ from cuvis_ai_core.training.evaluation import (
     TrainingCancelled,
     evaluate_split,
     forward_split,
+    is_cuda_out_of_memory,
 )
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Metric
@@ -213,3 +214,26 @@ def test_statistical_trainer_validate_and_test_reduce_through_the_shared_pass():
     assert validation.metrics["met/auroc"] == pytest.approx(1.0)
     assert (validation.frames, test.frames) == (5, 5)
     assert met.seen_stages == [ExecutionStage.VAL] * 3 + [ExecutionStage.TEST] * 3
+
+
+def test_cuda_out_of_memory_is_recognised_through_its_causes():
+    allocator = torch.cuda.OutOfMemoryError(
+        "CUDA out of memory. Tried to allocate 2.00 GiB"
+    )
+    runtime = RuntimeError("CUDA error: out of memory")
+    cublas = RuntimeError(
+        "CUDA error: CUBLAS_STATUS_ALLOC_FAILED when calling `cublasCreate(handle)`"
+    )
+    loader = RuntimeError("Node 'det' failed to prepare for inference")
+    loader.__cause__ = allocator
+    assert all(
+        is_cuda_out_of_memory(exc) for exc in (allocator, runtime, cublas, loader)
+    )
+    assert not any(
+        is_cuda_out_of_memory(exc)
+        for exc in (
+            None,
+            ValueError("out of memory"),
+            RuntimeError("boom at inference"),
+        )
+    )

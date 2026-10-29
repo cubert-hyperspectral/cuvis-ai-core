@@ -14,6 +14,8 @@ import grpc
 from loguru import logger
 from pydantic import ValidationError
 
+from cuvis_ai_core.training.evaluation import is_cuda_out_of_memory
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -95,6 +97,8 @@ def grpc_handler(error_prefix: str = "") -> Callable:
     * ``json.JSONDecodeError`` → ``INVALID_ARGUMENT``
     * ``ValidationError``      → ``INVALID_ARGUMENT``
     * ``ValueError``           → ``INVALID_ARGUMENT``
+    * a GPU out-of-memory error, also as the cause of another error,
+      → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
     * ``Exception`` (fallback) → ``INTERNAL`` (with *error_prefix*)
 
     The response type is inferred from the method's return annotation
@@ -127,7 +131,11 @@ def grpc_handler(error_prefix: str = "") -> Callable:
                         break
             except Exception as exc:
                 context = _extract_context(args, kwargs)
-                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_code(
+                    grpc.StatusCode.RESOURCE_EXHAUSTED
+                    if is_cuda_out_of_memory(exc)
+                    else grpc.StatusCode.INTERNAL
+                )
                 prefix = f"{error_prefix}: " if error_prefix else ""
                 context.set_details(f"{prefix}{exc}")
                 logger.opt(exception=True).error(

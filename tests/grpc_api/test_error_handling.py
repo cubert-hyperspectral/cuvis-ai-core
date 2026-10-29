@@ -3,12 +3,15 @@
 from unittest.mock import Mock
 
 import grpc
+import torch
 
 from cuvis_ai_core.grpc.error_handling import (
     get_session_and_pipeline,
     get_session_or_error,
+    grpc_handler,
     require_pipeline,
 )
+from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
@@ -112,3 +115,35 @@ class TestGetSessionAndPipeline:
         assert resolved == (session, session.pipeline)
         self.context.set_code.assert_not_called()
         self.context.set_details.assert_not_called()
+
+
+class _OutOfMemoryService:
+    """A service whose calls run the graphics card out of memory, plainly or wrapped."""
+
+    @grpc_handler("Failed to restore train run")
+    def restore(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
+        raise torch.cuda.OutOfMemoryError(
+            "CUDA out of memory. Tried to allocate 1.00 GiB"
+        )
+
+    @grpc_handler("Failed to restore train run")
+    def restore_wrapped(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
+        error = RuntimeError("Node 'det' failed to prepare for inference")
+        error.__cause__ = torch.cuda.OutOfMemoryError("CUDA out of memory.")
+        raise error
+
+
+def test_grpc_handler_answers_cuda_out_of_memory_with_resource_exhausted():
+    context = Mock()
+    response = _OutOfMemoryService().restore(None, context)
+    assert isinstance(response, cuvis_ai_pb2.RestoreTrainRunResponse)
+    context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
+    context.set_details.assert_called_once_with(
+        "Failed to restore train run: CUDA out of memory. Tried to allocate 1.00 GiB"
+    )
+
+
+def test_grpc_handler_finds_out_of_memory_behind_a_wrapping_error():
+    context = Mock()
+    _OutOfMemoryService().restore_wrapped(None, context)
+    context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
