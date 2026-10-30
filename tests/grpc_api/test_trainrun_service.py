@@ -496,6 +496,9 @@ def test_save_train_run_writes_the_calibration_block_back(
 
 
 @pytest.mark.parametrize(
+    "round_trip", [False, True], ids=["raw yaml", "saved and restored"]
+)
+@pytest.mark.parametrize(
     ("training", "loss_nodes", "statistical_only"),
     [
         ({"accelerator": "cpu"}, [], True),
@@ -512,7 +515,13 @@ def test_a_restored_device_block_is_no_gradient_phase(
     training,
     loss_nodes,
     statistical_only,
+    round_trip,
 ):
+    """A device-only block is no gradient phase, also once SaveTrainRun wrote every field.
+
+    ``round_trip`` writes the trainrun the way ``SaveTrainRun`` does (``to_dict``: every
+    field with its value), so the restored block names all fields, not only the accelerator.
+    """
     monkeypatch.setattr(
         CuvisPipeline, "load_pipeline", staticmethod(lambda *_a, **_k: MagicMock())
     )
@@ -521,6 +530,8 @@ def test_a_restored_device_block_is_no_gradient_phase(
     experiment["loss_nodes"] = loss_nodes
     if training is None:
         del experiment["training"]
+    if round_trip:
+        experiment = TrainRunConfig.from_dict(experiment).to_dict()
     sm, service = _service()
     context = Mock()
     response = service.restore_train_run(

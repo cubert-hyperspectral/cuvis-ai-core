@@ -115,17 +115,19 @@ def _run_outcome(
 def _statistical_only(session: SessionState) -> bool:
     """Whether the session's run has no gradient phase, so a statistical fit runs the post-fit steps.
 
-    A training config means a gradient phase, except one that sets nothing but the
-    accelerator in a run without loss nodes: RestoreTrainRun reads that key for the device
-    (a client restores a run on the CPU with it), and such a block configures no fit.
+    A training config means a gradient phase, except one that holds nothing but the
+    accelerator over the defaults, in a run without loss nodes: RestoreTrainRun reads that
+    key for the device (a client restores a run on the CPU with it), and such a block
+    configures no fit. The block is compared by value, not by the keys the yaml names:
+    SaveTrainRun writes every field, so a saved and restored block names them all.
     """
     training = session.training_config
     if training is None:
         return True
     trainrun = session.trainrun_config
-    return training.model_fields_set <= {"accelerator"} and not (
-        trainrun is not None and trainrun.loss_nodes
-    )
+    if trainrun is not None and trainrun.loss_nodes:
+        return False
+    return training == TrainingConfig(accelerator=training.accelerator)
 
 
 class TrainingService:
