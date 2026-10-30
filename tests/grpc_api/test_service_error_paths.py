@@ -701,11 +701,15 @@ def _fake_post_fit(outcome, events=()):
             stop_event=None,
             release_cuda_cache=False,
             metric_nodes=None,
+            calibration=None,
+            raise_out_of_memory=False,
         ):
             self.emit = emit
             self.stop_event = stop_event
             self.release_cuda_cache = release_cuda_cache
             self.metric_nodes = metric_nodes
+            self.calibration = calibration
+            self.raise_out_of_memory = raise_out_of_memory
             self.result = None
             self.runs: list[bool] = []
             type(self).instances.append(self)

@@ -26,11 +26,13 @@ from cuvis_ai_core.training.post_fit import (
     describe_event,
 )
 from cuvis_ai_core.training.config import (
+    CalibrationConfig,
     DataConfig,
     TrainingConfig,
     TrainRunConfig,
     create_callbacks_from_config,
 )
+from cuvis_ai_core.training.evaluation import is_cuda_out_of_memory
 from cuvis_ai_core.training.trainers import (
     GradientTrainer,
     StatisticalTrainer,
@@ -69,7 +71,9 @@ def _run_outcome(
     moment the run failed, because then the failure is teardown noise from
     a trainer that was winding down. An error that arrived first wins even
     if a stop followed it, so a crash is never reported as a clean
-    cancellation. A swallowed error is logged and travels on the
+    cancellation. A GPU out-of-memory error is never noise: it wins over a
+    stop either way, so its status code reaches the client, which may run the
+    pass again on the CPU. A swallowed error is logged and travels on the
     :class:`TrainingCancelled` it lost to.
 
     Parameters
@@ -91,7 +95,9 @@ def _run_outcome(
     """
     if isinstance(training_error, TrainingCancelled):
         return training_error
-    if training_error is not None and not stop_set_at_failure:
+    if training_error is not None and (
+        not stop_set_at_failure or is_cuda_out_of_memory(training_error)
+    ):
         return training_error
     if not stop_set_now:
         return training_error
@@ -104,6 +110,24 @@ def _run_outcome(
             "Gradient training stopped via StopTrain", swallowed_error=training_error
         )
     return TrainingCancelled("Gradient training stopped via StopTrain")
+
+
+def _statistical_only(session: SessionState) -> bool:
+    """Whether the session's run has no gradient phase, so a statistical fit runs the post-fit steps.
+
+    A training config means a gradient phase, except one that holds nothing but the
+    accelerator over the defaults, in a run without loss nodes: RestoreTrainRun reads that
+    key for the device (a client restores a run on the CPU with it), and such a block
+    configures no fit. The block is compared by value, not by the keys the yaml names:
+    SaveTrainRun writes every field, so a saved and restored block names them all.
+    """
+    training = session.training_config
+    if training is None:
+        return True
+    trainrun = session.trainrun_config
+    if trainrun is not None and trainrun.loss_nodes:
+        return False
+    return training == TrainingConfig(accelerator=training.accelerator)
 
 
 class TrainingService:
@@ -201,7 +225,7 @@ class TrainingService:
             self._refuse_uncalibrated_consumers(session.pipeline)
             # Read before the experiment capture below, which writes a default
             # TrainingConfig into the session for a statistical phase.
-            statistical_only = session.training_config is None
+            statistical_only = _statistical_only(session)
             training_config_py: TrainingConfig | None = None
             inner: Iterator[cuvis_ai_pb2.TrainResponse]
 
@@ -276,13 +300,19 @@ class TrainingService:
             # keep the GPU busy to completion.
             stop_event.set()
             raise
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return
         except Exception as exc:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Training failed: {str(exc)}")
+            # A GPU out-of-memory error gets its own code, also behind a ValueError it
+            # caused: a client may run the pass again on the CPU, and the code is the
+            # verdict, not the message.
+            if is_cuda_out_of_memory(exc):
+                context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+                context.set_details(f"Training failed: {str(exc)}")
+            elif isinstance(exc, ValueError):
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(str(exc))
+            else:
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details(f"Training failed: {str(exc)}")
             return
         finally:
             stream_finished.set()
@@ -533,6 +563,7 @@ class TrainingService:
         metric_nodes = []
         unfreeze_nodes = []
         freeze_nodes = []
+        calibration = self._calibration_of(session)
 
         if session.trainrun_config is not None:
             loss_nodes = session.trainrun_config.loss_nodes
@@ -553,7 +584,14 @@ class TrainingService:
             metric_nodes=metric_nodes,
             freeze_nodes=freeze_nodes,
             unfreeze_nodes=unfreeze_nodes,
+            calibration=calibration,
         )
+
+    @staticmethod
+    def _calibration_of(session: SessionState) -> CalibrationConfig | None:
+        """The calibration block of the session's trainrun, or ``None`` without one."""
+        trainrun = session.trainrun_config
+        return trainrun.calibration if trainrun is not None else None
 
     def _train_statistical(
         self,
@@ -679,11 +717,13 @@ class TrainingService:
             )
             progress_queue.put(self._event_response(base, event))
 
+        calibration = self._calibration_of(session)
         post_fit = PostFitCallback(
             emit=emit,
             stop_event=session.stop_event,
             release_cuda_cache=training_config.release_cuda_cache_on_validation,
             metric_nodes=metric_nodes or None,
+            calibration=calibration,
         )
         callback_list = [progress, StopTrainingCallback(session.stop_event), post_fit]
         callback_list.extend(create_callbacks_from_config(training_config.callbacks))
@@ -695,6 +735,7 @@ class TrainingService:
             loss_nodes=loss_nodes,
             metric_nodes=metric_nodes,
             callbacks=callback_list,
+            calibration=calibration,
         )
         session.trainer = trainer
 
@@ -739,8 +780,14 @@ class TrainingService:
             status="running",
             message="Starting calibration",
         )
+        # Nothing is unsaved here, so a GPU out-of-memory error ends the call with its
+        # own code instead of a recorded skip: the client may run the pass on the CPU.
         outcome = yield from self._run_post_fit(
-            session, datamodule, restore=False, base_context=base
+            session,
+            datamodule,
+            restore=False,
+            base_context=base,
+            raise_out_of_memory=True,
         )
         suffix = (
             f"; {outcome.summary()}"
@@ -816,11 +863,14 @@ class TrainingService:
         *,
         restore: bool,
         base_context: Context,
+        raise_out_of_memory: bool = False,
     ) -> Iterator[cuvis_ai_pb2.TrainResponse]:
         """Run the post-fit steps on a worker thread and stream their events.
 
         The generator's return value is the calibration outcome; a calibrated
         pipeline drops the session's cached config so the save re-derives it.
+        ``raise_out_of_memory`` lets a GPU out-of-memory error end the steps
+        (see :class:`PostFitCallback`).
         """
         progress_queue: queue.Queue[cuvis_ai_pb2.TrainResponse] = queue.Queue()
         results: list[PostFitResult] = []
@@ -830,6 +880,8 @@ class TrainingService:
             ),
             stop_event=session.stop_event,
             metric_nodes=self._metric_nodes(session),
+            calibration=self._calibration_of(session),
+            raise_out_of_memory=raise_out_of_memory,
         )
 
         def _run() -> None:

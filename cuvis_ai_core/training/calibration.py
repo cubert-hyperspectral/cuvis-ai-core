@@ -4,7 +4,9 @@ After training a decider's shipped threshold hparams are stale: training moved t
 distribution, so a value tuned for one set of weights misfits the next. This phase runs
 the trained pipeline over the labelled validation split, collects the scores feeding each
 decider and the ground-truth ``mask``, and calls ``decider.calibrate(scores, targets)`` so
-the saved checkpoint ships thresholds matched to its own weights.
+the saved checkpoint ships thresholds matched to its own weights. A trainrun whose
+``calibration:`` block names a precision or recall target hands it on as
+``decider.calibrate(scores, targets, objective=block)``.
 
 The heavy F1-max sweep math lives on the decider subclasses (cuvis-ai); this module only
 orchestrates: find the deciders, collect their input scores plus the mask over the split,
@@ -15,7 +17,9 @@ dispatch, and report. The phase is best-effort by design:
 - A ``calibrate`` that raises (cuvis-ai's ``CalibrationError`` for a shape mismatch,
   non-finite scores, single-class targets or an unsupported ``reduce_dims``, or any other
   error) is logged with its traceback and the decider keeps its shipped thresholds. The
-  trained weights are never lost over a calibration guard.
+  trained weights are never lost over a calibration guard. A caller with nothing unsaved
+  (the standalone calibration phase) may ask for a GPU out-of-memory error instead, so it
+  can run the pass again on the CPU.
 - The result is a :class:`CalibrationOutcome`, so the trainrun can tell the user
   ``thresholds calibrated on val: ...`` or ``thresholds not calibrated: <reason>`` (the
   gRPC ``Train`` completion message, the CLI log) instead of leaving it to the log alone.
@@ -36,6 +40,7 @@ typed event and the client words it; ``summary()`` is the one-line text for the 
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -44,11 +49,17 @@ import torch
 from loguru import logger
 
 from cuvis_ai_core.deciders.base_decider import BinaryDecider
-from cuvis_ai_core.training.evaluation import OnBatch, TrainingCancelled, forward_split
+from cuvis_ai_core.training.evaluation import (
+    OnBatch,
+    TrainingCancelled,
+    forward_split,
+    is_cuda_out_of_memory,
+)
 from cuvis_ai_schemas.enums import ExecutionStage
 
 if TYPE_CHECKING:
     import pytorch_lightning as pl
+    from cuvis_ai_schemas.training import CalibrationConfig
 
     from cuvis_ai_core.node.node import Node
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
@@ -301,12 +312,15 @@ def _format_value(value: Any) -> str:
 
 
 def calibratable_deciders(pipeline: CuvisPipeline) -> list[BinaryDecider]:
-    """Decider nodes that override the base ``calibrate`` (i.e. actually support it)."""
+    """Decider nodes that declare a calibration rule or override the base ``calibrate``."""
     return [
         node
         for node in pipeline.nodes()
         if isinstance(node, BinaryDecider)
-        and type(node).calibrate is not BinaryDecider.calibrate
+        and (
+            type(node).CALIBRATION_RULE is not None
+            or type(node).calibrate is not BinaryDecider.calibrate
+        )
     ]
 
 
@@ -379,12 +393,29 @@ def _mask_originators(
     return [key for key in mask_keys if key[0] not in re_emitters]
 
 
+def _takes_objective(decider: BinaryDecider) -> bool:
+    """Whether ``decider.calibrate`` accepts the trainrun's block as ``objective=``.
+
+    A parameter of that name counts unless it is positional-only; ``**kwargs`` counts too.
+    """
+    return any(
+        (
+            parameter.name == "objective"
+            and parameter.kind is not inspect.Parameter.POSITIONAL_ONLY
+        )
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in inspect.signature(decider.calibrate).parameters.values()
+    )
+
+
 def calibrate_pipeline_deciders(
     pipeline: CuvisPipeline,
     datamodule: pl.LightningDataModule,
     *,
     split: str = "val",
     on_batch: OnBatch | None = None,
+    objective: CalibrationConfig | None = None,
+    raise_out_of_memory: bool = False,
 ) -> CalibrationOutcome:
     """Re-fit calibratable deciders' thresholds on the labelled ``split`` of ``datamodule``.
 
@@ -398,6 +429,14 @@ def calibrate_pipeline_deciders(
     frames seen so far and the split's frame total after each batch of the pass. A
     cooperative stop (:class:`~cuvis_ai_core.training.evaluation.TrainingCancelled`
     from the pass) propagates.
+
+    ``objective`` is the trainrun's calibration block. With one, each decider gets it as
+    ``calibrate(scores, targets, objective=objective)``. A decider whose ``calibrate`` takes
+    no such parameter keeps the two-argument call under an f1 block, which asks for its own
+    rule, and is recorded as ``CALIBRATE_FAILED`` under a precision or recall block, keeping
+    its thresholds. Without a block the call keeps its two arguments.
+    ``raise_out_of_memory`` lets a GPU out-of-memory error from the pass or from a
+    ``calibrate`` propagate instead of being recorded; every other error is still recorded.
     """
     deciders = calibratable_deciders(pipeline)
     if not deciders:
@@ -466,6 +505,8 @@ def calibrate_pipeline_deciders(
     except TrainingCancelled:
         raise
     except Exception as exc:  # noqa: BLE001 - best effort: never lose the weights
+        if raise_out_of_memory and is_cuda_out_of_memory(exc):
+            raise
         logger.opt(exception=True).warning(
             f"Threshold calibration: inference over {split} failed."
         )
@@ -498,10 +539,32 @@ def calibrate_pipeline_deciders(
                 f"{split}; skipping {decider.name}."
             )
             continue
+        hands_objective = objective is not None and _takes_objective(decider)
+        if (
+            objective is not None
+            and objective.objective != "f1"
+            and not hands_objective
+        ):
+            records[decider.name] = DeciderCalibration.skipped_decider(
+                decider,
+                DeciderSkip.CALIBRATE_FAILED,
+                f"{type(decider).__name__}.calibrate takes no calibration objective",
+            )
+            logger.warning(
+                f"Threshold calibration: {decider.name}.calibrate takes no calibration "
+                "objective; keeping its shipped thresholds."
+            )
+            continue
         scores = torch.cat(collected[key], dim=0)
         try:
-            report = decider.calibrate(scores, targets)
+            report = (
+                decider.calibrate(scores, targets, objective=objective)
+                if hands_objective
+                else decider.calibrate(scores, targets)
+            )
         except Exception as exc:  # noqa: BLE001 - best effort: never lose the weights
+            if raise_out_of_memory and is_cuda_out_of_memory(exc):
+                raise
             records[decider.name] = DeciderCalibration.skipped_decider(
                 decider, DeciderSkip.CALIBRATE_FAILED, f"{type(exc).__name__}: {exc}"
             )

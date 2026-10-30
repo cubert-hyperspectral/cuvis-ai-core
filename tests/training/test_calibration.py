@@ -28,6 +28,7 @@ from cuvis_ai_core.training.calibration import (
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_core.utils.restore import _log_calibration_outcome
 from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_schemas.training import CalibrationConfig
 
 pytestmark = pytest.mark.unit
 
@@ -655,4 +656,157 @@ def test_uncalibrated_required_consumers_names_the_graph_that_would_fail():
     calibrated = _MockCalibratableDecider(name="dec")
     assert (
         uncalibrated_required_consumers(graph(calibrated, _Consumer(name="sink"))) == []
+    )
+
+
+# --- the trainrun's calibration block and an out-of-memory pass ---------------------------
+
+
+class _ObjectiveDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` takes the trainrun's block and records it."""
+
+    def calibrate(self, scores, targets, objective=None):
+        """Record the block, then calibrate as the mock does."""
+        self.objective_seen = objective
+        return super().calibrate(scores, targets)
+
+
+class _KeywordsDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` takes keyword arguments it does not name."""
+
+    def calibrate(self, scores, targets, **kwargs):
+        """Record the keywords, then calibrate as the mock does."""
+        self.keywords_seen = kwargs
+        return super().calibrate(scores, targets)
+
+
+class _OutOfMemorySource(_ScoreMaskSource):
+    """Source whose pass runs the graphics card out of memory."""
+
+    def forward(self, scores, mask, **_):
+        """Fail the way torch does when an allocation does not fit."""
+        raise torch.cuda.OutOfMemoryError(
+            "CUDA out of memory. Tried to allocate 2.00 GiB"
+        )
+
+
+class _OutOfMemoryDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` runs the graphics card out of memory."""
+
+    def calibrate(self, scores, targets):
+        """Fail the way torch does when an allocation does not fit."""
+        raise torch.cuda.OutOfMemoryError(
+            "CUDA out of memory. Tried to allocate 1.00 GiB"
+        )
+
+
+_RECALL = CalibrationConfig(objective="recall", target=0.9, level="frames")
+
+
+def test_a_block_reaches_the_decider_that_takes_it():
+    dec = _ObjectiveDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val", objective=_RECALL
+    )
+    assert outcome.calibrated
+    assert dec.objective_seen is _RECALL
+
+
+def test_a_decider_taking_keywords_gets_the_block():
+    dec = _KeywordsDecider(name="dec")
+    calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val", objective=_RECALL
+    )
+    assert dec.keywords_seen == {"objective": _RECALL}
+
+
+def test_without_a_block_the_call_keeps_two_arguments():
+    plain, taking = _MockCalibratableDecider(name="dec"), _ObjectiveDecider(name="dec")
+    assert calibrate_pipeline_deciders(
+        _pipeline(plain), _ListDataModule(_MIXED)
+    ).calibrated
+    assert calibrate_pipeline_deciders(
+        _pipeline(taking), _ListDataModule(_MIXED)
+    ).calibrated
+    assert taking.objective_seen is None
+
+
+def test_a_block_fails_a_decider_that_takes_none_and_keeps_its_threshold():
+    dec = _MockCalibratableDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val", objective=_RECALL
+    )
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.CALIBRATE_FAILED
+    assert (
+        record.skip_detail
+        == "_MockCalibratableDecider.calibrate takes no calibration objective"
+    )
+    assert dec.calibrated_with is None and dec.threshold == 0.5
+
+
+def test_an_out_of_memory_pass_is_recorded_unless_asked_to_raise():
+    def run(**kwargs):
+        dec = _MockCalibratableDecider(name="dec")
+        return calibrate_pipeline_deciders(
+            _pipeline(dec, source=_OutOfMemorySource(name="src")),
+            _ListDataModule(_MIXED),
+            split="val",
+            **kwargs,
+        )
+
+    outcome = run()
+    assert outcome.phase_skip is CalibrationPhaseSkip.INFERENCE_FAILED
+    assert outcome.phase_detail.startswith("OutOfMemoryError: CUDA out of memory")
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        run(raise_out_of_memory=True)
+
+
+def test_an_out_of_memory_calibrate_raises_when_asked_and_other_errors_stay_recorded():
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        calibrate_pipeline_deciders(
+            _pipeline(_OutOfMemoryDecider(name="dec")),
+            _ListDataModule(_MIXED),
+            raise_out_of_memory=True,
+        )
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(_RaisingDecider(name="dec")),
+        _ListDataModule(_MIXED),
+        raise_out_of_memory=True,
+    )
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.CALIBRATE_FAILED
+
+
+class _PositionalObjectiveDecider(_MockCalibratableDecider):
+    """Decider whose ``calibrate`` names ``objective`` but takes it by position only."""
+
+    def calibrate(self, scores, targets, objective=None, /):
+        """Calibrate as the mock does; a keyword ``objective`` cannot reach it."""
+        return super().calibrate(scores, targets)
+
+
+def test_an_f1_block_lets_a_decider_without_the_parameter_calibrate_by_its_own_rule():
+    plain, taking = _MockCalibratableDecider(name="dec"), _ObjectiveDecider(name="dec")
+    f1 = CalibrationConfig()
+    assert calibrate_pipeline_deciders(
+        _pipeline(plain), _ListDataModule(_MIXED), split="val", objective=f1
+    ).calibrated
+    assert plain.calibrated_with is not None
+    assert calibrate_pipeline_deciders(
+        _pipeline(taking), _ListDataModule(_MIXED), split="val", objective=f1
+    ).calibrated
+    assert taking.objective_seen is f1
+
+
+def test_a_positional_only_objective_is_no_objective_parameter():
+    dec = _PositionalObjectiveDecider(name="dec")
+    outcome = calibrate_pipeline_deciders(
+        _pipeline(dec), _ListDataModule(_MIXED), split="val", objective=_RECALL
+    )
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.CALIBRATE_FAILED
+    assert (
+        record.skip_detail
+        == "_PositionalObjectiveDecider.calibrate takes no calibration objective"
     )
