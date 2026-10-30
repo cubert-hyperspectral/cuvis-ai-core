@@ -312,12 +312,15 @@ def _format_value(value: Any) -> str:
 
 
 def calibratable_deciders(pipeline: CuvisPipeline) -> list[BinaryDecider]:
-    """Decider nodes that override the base ``calibrate`` (i.e. actually support it)."""
+    """Decider nodes that declare a calibration rule or override the base ``calibrate``."""
     return [
         node
         for node in pipeline.nodes()
         if isinstance(node, BinaryDecider)
-        and type(node).calibrate is not BinaryDecider.calibrate
+        and (
+            type(node).CALIBRATION_RULE is not None
+            or type(node).calibrate is not BinaryDecider.calibrate
+        )
     ]
 
 
