@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.3 - 2026-11-04
+
+- The post-fit steps reuse the val and test datasets the fit built instead of building them again. `PostFitCallback.run` calls `setup("validate")` or `setup("test")` only for a split the data module has not built yet, so the standalone calibration phase and a statistical-only fit still get theirs. Inside Lightning's `on_train_end` the fit's loaders are still alive, so the rebuild opened every validation recording a second time while the first readers stayed open; with the SDK processing on the GPU that added one processing context per recording and an 8 GB card aborted the training child natively at the threshold calibration (exit `0xC0000409`). The calibration now reads through the readers the fit already holds, which also skips the context rebuild per recording.
+- The post-fit steps close each split's dataset once no later step reads it: the train dataset before the calibration, the val dataset before the test evaluation, the test dataset at the end. Only a dataset with a `close()` is closed (the cu3s datasets release their reader sessions; they reopen on the next read), a dataset that a later step still reads stays open, and a `close()` that raises is logged without stopping the steps.
+
 ## 0.19.2 - 2026-11-04
 
 - `export-pipeline` on a real catalog pipeline: a span input a node feeds as a numpy array (the wavelength grid of the cu3s loaders) becomes a tensor in `collect_examples` instead of a refusal, and the exporter's eager reference feeds a live node's numpy-typed ports as numpy, so a selector that looks its bands up with numpy no longer fails on a CUDA tensor.
