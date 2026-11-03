@@ -1694,3 +1694,15 @@ def test_spawn_failure_schedules_no_eviction(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="spawn exploded"):
         orchestrator_bridge.ensure_child_for_session(sm, sid, cfg)
     assert scheduled == []
+
+
+def test_a_live_childs_resource_exhausted_reaches_the_client_unchanged():
+    """A client may retry an out-of-memory run on the CPU: no crash probe rewrites the code."""
+    ctx = _InMemoryContext()
+    child = SimpleNamespace(retired_by_parent=False)
+    error = _InMemoryRpcError(
+        grpc.StatusCode.RESOURCE_EXHAUSTED, "Training failed: CUDA out of memory"
+    )
+    orchestrator_bridge._propagate_child_failure(child, error, ctx)
+    assert ctx.code() is grpc.StatusCode.RESOURCE_EXHAUSTED
+    assert ctx.details() == "Training failed: CUDA out of memory"

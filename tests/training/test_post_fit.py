@@ -19,7 +19,11 @@ from torchmetrics.classification import BinaryAUROC
 from cuvis_ai_core.deciders.base_decider import BinaryDecider
 from cuvis_ai_core.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
-from cuvis_ai_core.training.calibration import DeciderCalibrationStatus
+from cuvis_ai_core.training import post_fit as post_fit_mod
+from cuvis_ai_core.training.calibration import (
+    CalibrationOutcome,
+    DeciderCalibrationStatus,
+)
 from cuvis_ai_core.training.evaluation import TrainingCancelled
 from cuvis_ai_core.training.post_fit import (
     CheckpointRestored,
@@ -32,6 +36,7 @@ from cuvis_ai_core.training.post_fit import (
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Metric
 from cuvis_ai_schemas.pipeline import PortSpec
+from cuvis_ai_schemas.training import CalibrationConfig
 
 pytestmark = pytest.mark.unit
 
@@ -334,3 +339,65 @@ def test_describe_event_lines():
     assert (
         describe_event(TrainEvent(TrainHook.POST_FIT_END)) == "Post-fit steps complete"
     )
+
+
+# --- the trainrun's calibration block and an out-of-memory pass ---------------------------
+
+
+class _ObjectiveDecider(_Decider):
+    """Calibratable decider that takes the trainrun's block and records it."""
+
+    def calibrate(self, scores, targets, objective=None):
+        """Record the block, then calibrate as the base mock does."""
+        self.objective_seen = objective
+        return super().calibrate(scores, targets)
+
+
+def _out_of_memory(*_args, **_kwargs):
+    raise torch.cuda.OutOfMemoryError(
+        "CUDA out of memory. Tried to allocate 512.00 MiB"
+    )
+
+
+def test_the_callback_hands_the_trainrun_block_to_the_decider():
+    pipe = CuvisPipeline("post_fit_block")
+    src = _ScoreMaskSource(name="src")
+    dec = _ObjectiveDecider(name="dec")
+    pipe.connect(src.outputs.scores, dec.inputs.logits)
+    block = CalibrationConfig(objective="recall", target=0.9, level="frames")
+    callback = PostFitCallback(emit=lambda _event: None, calibration=block)
+    result = callback.run(pipe, _SplitsModule(_batches(), _batches()), restore=False)
+    assert result.calibration.calibrated
+    assert dec.objective_seen is block
+
+
+def test_the_callback_passes_the_block_and_the_raise_flag_down(monkeypatch):
+    seen = {}
+
+    def calibrate(pipeline, datamodule, **kwargs):
+        seen.update(kwargs)
+        return CalibrationOutcome(split="val", applicable=False)
+
+    monkeypatch.setattr(post_fit_mod, "calibrate_pipeline_deciders", calibrate)
+    block = CalibrationConfig(objective="precision", target=0.95)
+    pipe, _, _ = _pipeline()
+    PostFitCallback(
+        emit=lambda _event: None, calibration=block, raise_out_of_memory=True
+    ).run(pipe, _SplitsModule(_batches(), _batches()), restore=False)
+    assert seen["objective"] is block and seen["raise_out_of_memory"] is True
+
+
+def test_an_out_of_memory_evaluation_is_recorded_unless_asked_to_raise(monkeypatch):
+    monkeypatch.setattr(post_fit_mod, "evaluate_split", _out_of_memory)
+    pipe, _, _ = _pipeline(decider=False)
+    result = PostFitCallback(emit=lambda _event: None).run(
+        pipe, _SplitsModule(_batches(), _batches()), restore=False
+    )
+    assert result.evaluations["val"].status is EvaluationStatus.FAILED
+    assert result.evaluations["val"].error.startswith(
+        "OutOfMemoryError: CUDA out of memory"
+    )
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        PostFitCallback(emit=lambda _event: None, raise_out_of_memory=True).run(
+            pipe, _SplitsModule(_batches(), _batches()), restore=False
+        )

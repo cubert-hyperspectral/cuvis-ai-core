@@ -22,7 +22,7 @@ import torch
 from loguru import logger
 from pytorch_lightning import Callback, LightningModule, Trainer
 
-from cuvis_ai_core.training.config import TrainingConfig
+from cuvis_ai_core.training.config import CalibrationConfig, TrainingConfig
 from cuvis_ai_core.training.post_fit import EmitFn, PostFitCallback
 
 # Soft cap on the process's share of the device, read when the log callback
@@ -214,6 +214,7 @@ def build_runtime_callbacks(
     *,
     emit: EmitFn | None = None,
     stop_event: threading.Event | None = None,
+    calibration: CalibrationConfig | None = None,
 ) -> list[Callback]:
     """Build the callbacks every gradient run gets, regardless of its config.
 
@@ -233,6 +234,8 @@ def build_runtime_callbacks(
         Where the post-fit events go.
     stop_event : threading.Event, optional
         The run's cooperative cancel flag.
+    calibration : CalibrationConfig, optional
+        The trainrun's calibration block, for the post-fit calibration.
 
     Returns
     -------
@@ -246,6 +249,11 @@ def build_runtime_callbacks(
     if release:
         callbacks.append(CudaCacheReleaseCallback())
     callbacks.append(
-        PostFitCallback(emit=emit, stop_event=stop_event, release_cuda_cache=release)
+        PostFitCallback(
+            emit=emit,
+            stop_event=stop_event,
+            release_cuda_cache=release,
+            calibration=calibration,
+        )
     )
     return callbacks

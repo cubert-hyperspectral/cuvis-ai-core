@@ -13,6 +13,7 @@ from torch.optim import Optimizer
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 from cuvis_ai_core.training.config import (
+    CalibrationConfig,
     TrainingConfig,
     create_callbacks_from_config,
 )
@@ -57,6 +58,9 @@ class GradientTrainer(pl.LightningModule):
         optimizer, scheduler, and callbacks. Defaults to ``TrainingConfig()``.
     monitors : list, optional
         List of monitoring objects (TensorBoard, etc.)
+    calibration : CalibrationConfig, optional
+        The trainrun's calibration block, for the post-fit calibration this trainer
+        installs when the caller passes no ``PostFitCallback`` of its own.
 
     Examples
     --------
@@ -112,6 +116,7 @@ class GradientTrainer(pl.LightningModule):
         training_config: TrainingConfig | None = None,
         monitors: list | None = None,
         callbacks: list | None = None,
+        calibration: CalibrationConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -151,6 +156,7 @@ class GradientTrainer(pl.LightningModule):
         self.scheduler_config = self.training_config.scheduler
         self.monitors = monitors or []
         self.callbacks = callbacks or []
+        self.calibration = calibration
         self.trainer = None  # Store trainer instance for reuse in test()
 
     def fit(self) -> None:
@@ -271,7 +277,9 @@ class GradientTrainer(pl.LightningModule):
         present = {type(callback) for callback in callbacks}
         callbacks.extend(
             callback
-            for callback in build_runtime_callbacks(self.training_config)
+            for callback in build_runtime_callbacks(
+                self.training_config, calibration=self.calibration
+            )
             if type(callback) not in present
         )
         trainer_kwargs["callbacks"] = callbacks

@@ -37,10 +37,13 @@ from cuvis_ai_core.training.evaluation import (
     TrainingCancelled,
     default_metric_nodes,
     evaluate_split,
+    is_cuda_out_of_memory,
 )
 from cuvis_ai_schemas.enums import ExecutionStage
 
 if TYPE_CHECKING:
+    from cuvis_ai_schemas.training import CalibrationConfig
+
     from cuvis_ai_core.node.node import Node
     from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
@@ -230,6 +233,14 @@ class PostFitCallback(Callback):
         ``release_cuda_cache_on_validation``).
     metric_nodes : collection of Node, optional
         The nodes the evaluation reduces; every node with a ``metrics`` port by default.
+    calibration : CalibrationConfig, optional
+        The trainrun's calibration block, handed to every decider's ``calibrate``; ``None``
+        calibrates to the F1 optimum.
+    raise_out_of_memory : bool
+        Let a GPU out-of-memory error from the calibration or an evaluation propagate
+        instead of recording it. For a caller with nothing unsaved (the standalone
+        calibration phase), which can run the steps again on the CPU; after a fit the
+        error stays recorded so the fitted weights are still saved.
     """
 
     def __init__(
@@ -239,12 +250,16 @@ class PostFitCallback(Callback):
         stop_event: threading.Event | None = None,
         release_cuda_cache: bool = False,
         metric_nodes: Collection[Node] | None = None,
+        calibration: CalibrationConfig | None = None,
+        raise_out_of_memory: bool = False,
     ) -> None:
         super().__init__()
         self.emit: EmitFn = emit if emit is not None else log_event
         self.stop_event = stop_event
         self.release_cuda_cache = release_cuda_cache
         self.metric_nodes = list(metric_nodes) if metric_nodes is not None else None
+        self.calibration = calibration
+        self.raise_out_of_memory = raise_out_of_memory
         self.result: PostFitResult | None = None
 
     def on_train_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
@@ -328,6 +343,8 @@ class PostFitCallback(Callback):
                     progress=FrameProgress(done, total),
                 )
             ),
+            objective=self.calibration,
+            raise_out_of_memory=self.raise_out_of_memory,
         )
         self.emit(
             TrainEvent(
@@ -379,6 +396,8 @@ class PostFitCallback(Callback):
         except TrainingCancelled:
             raise
         except Exception as exc:  # noqa: BLE001 - best effort: the run is still saved
+            if self.raise_out_of_memory and is_cuda_out_of_memory(exc):
+                raise
             logger.opt(exception=True).warning(
                 f"Post-fit evaluation of {split} failed."
             )

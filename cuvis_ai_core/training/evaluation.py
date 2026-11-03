@@ -54,6 +54,37 @@ class TrainingCancelled(Exception):
         self.swallowed_error = swallowed_error
 
 
+# The CUDA runtime and cuBLAS report a failed device allocation as a plain RuntimeError.
+_CUDA_OUT_OF_MEMORY_TEXT = ("CUDA error: out of memory", "CUBLAS_STATUS_ALLOC_FAILED")
+
+
+def is_cuda_out_of_memory(exc: BaseException | None) -> bool:
+    """Whether ``exc``, or an error it was raised from, is the GPU running out of memory.
+
+    torch raises ``torch.cuda.OutOfMemoryError`` when its caching allocator cannot serve a
+    request; the CUDA runtime and cuBLAS name the same condition in a ``RuntimeError``.
+    The walk follows the chain a traceback prints: the cause of ``raise ... from``, else
+    the error being handled when this one was raised, unless ``from None`` hid it. A chain
+    that loops back on itself ends the walk.
+    """
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+        if isinstance(exc, RuntimeError) and any(
+            text in str(exc) for text in _CUDA_OUT_OF_MEMORY_TEXT
+        ):
+            return True
+        seen.add(id(exc))
+        if exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__suppress_context__:
+            exc = None
+        else:
+            exc = exc.__context__
+    return False
+
+
 @dataclass(frozen=True)
 class SplitBatch:
     """One batch of a split pass: its index, the frames seen so far and the outputs."""

@@ -746,9 +746,11 @@ def restore_trainrun(
                     emit=_log_post_fit_event,
                     metric_nodes=metric_nodes or None,
                     release_cuda_cache=training_config.release_cuda_cache_on_validation,
+                    calibration=trainrun_config.calibration,
                 ),
                 *create_callbacks_from_config(training_config.callbacks),
             ],
+            calibration=trainrun_config.calibration,
         )
     else:
         logger.info("Detected statistical-only training configuration")
@@ -789,7 +791,9 @@ def restore_trainrun(
             # calibrate and evaluate here, on the weights about to be saved.
             logger.info("  Post-fit steps (calibration, evaluation)...")
             PostFitCallback(
-                emit=_log_post_fit_event, metric_nodes=metric_nodes or None
+                emit=_log_post_fit_event,
+                metric_nodes=metric_nodes or None,
+                calibration=trainrun_config.calibration,
             ).run(pipeline, datamodule, restore=False)
 
         # Step 3: Save trained pipeline

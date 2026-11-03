@@ -14,6 +14,7 @@ from cuvis_ai_schemas.pipeline.config import (
     PipelineMetadata,
 )
 from cuvis_ai_schemas.training import (
+    CalibrationConfig,
     CallbacksConfig,
     DataConfig,
     EarlyStoppingConfig,
@@ -28,6 +29,7 @@ from cuvis_ai_schemas.training import (
 
 
 __all__ = [
+    "CalibrationConfig",
     "ConnectionConfig",
     "NodeConfig",
     "EarlyStoppingConfig",

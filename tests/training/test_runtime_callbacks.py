@@ -23,6 +23,7 @@ from cuvis_ai_core.training.callbacks import (
 )
 from cuvis_ai_core.training.post_fit import PostFitCallback
 from cuvis_ai_core.training.config import TrainingConfig
+from cuvis_ai_schemas.training import CalibrationConfig
 
 
 @pytest.fixture
@@ -362,3 +363,14 @@ def test_no_config_still_yields_the_log_callback():
 
 def test_the_env_var_name_is_the_documented_one():
     assert callbacks_mod.CUDA_MEMORY_FRACTION_ENV == "CUVIS_CUDA_MEMORY_FRACTION"
+
+
+def test_the_post_fit_callback_carries_the_trainrun_block():
+    block = CalibrationConfig(objective="recall", target=0.9)
+    built = build_runtime_callbacks(TrainingConfig(), calibration=block)
+    (post_fit,) = [c for c in built if isinstance(c, PostFitCallback)]
+    assert post_fit.calibration is block
+    (default,) = [
+        c for c in build_runtime_callbacks(None) if isinstance(c, PostFitCallback)
+    ]
+    assert default.calibration is None
