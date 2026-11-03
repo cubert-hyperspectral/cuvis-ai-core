@@ -187,6 +187,7 @@ def test_sidecar_records_ports_shapes_constants_and_fingerprints(deployment):
             "name": "data",
             "tensor": "scale.data",
             "dtype": "float32",
+            "port_dtype": "torch.float32",
             "shape": [1, 6, 6, 4],
         }
     ]
@@ -196,6 +197,7 @@ def test_sidecar_records_ports_shapes_constants_and_fingerprints(deployment):
             "name": "scores",
             "tensor": "detect.scores",
             "dtype": "float32",
+            "port_dtype": "torch.float32",
             "shape": [1, 6, 6, 1],
         },
         {
@@ -203,6 +205,7 @@ def test_sidecar_records_ports_shapes_constants_and_fingerprints(deployment):
             "name": "anomaly_score",
             "tensor": "detect.anomaly_score",
             "dtype": "float32",
+            "port_dtype": "torch.float32",
             "shape": [1],
         },
     ]
@@ -210,6 +213,7 @@ def test_sidecar_records_ports_shapes_constants_and_fingerprints(deployment):
     assert constant["port"] == "select.wavelengths"
     assert constant["name"] == "wavelengths"
     assert constant["dtype"] == "float32"
+    assert constant["port_dtype"] == "torch.float32"
     assert constant["shape"] == [4]
     torch.testing.assert_close(
         torch.tensor(constant["value"]),
@@ -385,3 +389,106 @@ def test_export_deployment_refuses_a_non_tensor_span_output(tmp_path):
             outputs=["listy.values"],
             examples=[{"scale.data": torch.rand(1, 2, 2, 4)}],
         )
+
+
+def test_sidecar_records_the_declared_dtype_of_every_port(deployment):
+    result, _, _ = deployment
+    span = result.sidecar["span"]
+
+    assert [e["port_dtype"] for e in span["inputs"]] == ["torch.float32"]
+    assert [e["port_dtype"] for e in span["constants"]] == ["torch.float32"]
+    assert [e["port_dtype"] for e in span["outputs"]] == [
+        "torch.float32",
+        "torch.float32",
+    ]
+
+
+def test_sidecar_keeps_a_numpy_typed_port_as_numpy(tmp_path):
+    from cuvis_ai_core.pipeline.export import export_deployment
+    from tests.pipeline.test_export import _numpy_pipeline
+
+    pipeline, _ = _numpy_pipeline()
+    result = export_deployment(
+        pipeline,
+        tmp_path,
+        examples=_examples(),
+        span_class_name="tests.pipeline.test_export_deployment._StandInSpan",
+        **_ANOMALY_CUT,
+    )
+
+    [constant] = result.sidecar["span"]["constants"]
+    assert constant["port_dtype"] == "numpy.float32"
+    assert constant["dtype"] == "float32"
+    assert [e["port_dtype"] for e in result.sidecar["span"]["inputs"]] == [
+        "torch.float32"
+    ]
+
+
+def test_deploy_plugins_keeps_the_plugins_the_remaining_nodes_still_need():
+    from types import SimpleNamespace as Capability
+
+    from cuvis_ai_core.pipeline.export import deploy_plugins
+
+    capabilities = {
+        "dinomaly": [
+            Capability(kind="node", class_name="cuvis_ai_dinomaly.node.Detector")
+        ],
+        "cuvis_ai_builtin": [
+            Capability(kind="node", class_name="cuvis_ai.node.data.AnomalyDataNode"),
+            Capability(
+                kind="node", class_name="cuvis_ai.node.normalization.MinMaxNormalizer"
+            ),
+        ],
+        "cuvis_ai_dataloader": [
+            Capability(
+                kind="data_module", class_name="cuvis_ai_dataloader.Cu3sDataModule"
+            )
+        ],
+    }
+    remaining = [
+        "cuvis_ai.node.data.AnomalyDataNode",
+        "cuvis_ai.node.deciders.BinaryDecider",
+    ]
+
+    kept = deploy_plugins(
+        ["dinomaly", "cuvis_ai_builtin", "cuvis_ai_dataloader", "mystery"],
+        remaining,
+        capabilities,
+        span_plugin="cuvis_ai_onnx",
+    )
+
+    assert kept == [
+        "cuvis_ai_builtin",
+        "cuvis_ai_dataloader",
+        "mystery",
+        "cuvis_ai_onnx",
+    ]
+
+
+def test_export_deployment_drops_a_plugin_whose_only_nodes_went_into_the_span(tmp_path):
+    from types import SimpleNamespace as Capability
+
+    from cuvis_ai_core.pipeline.export import export_deployment
+
+    pipeline, _ = _anomaly_pipeline()
+    pipeline._plugins = ["mock_span", "mock_rest"]  # noqa: SLF001
+    capabilities = {
+        "mock_span": [
+            Capability(kind="node", class_name="tests.pipeline.test_export._Select")
+        ],
+        "mock_rest": [
+            Capability(kind="node", class_name="tests.pipeline.test_export._Decide")
+        ],
+    }
+
+    result = export_deployment(
+        pipeline,
+        tmp_path,
+        examples=_examples(),
+        span_class_name="tests.pipeline.test_export_deployment._StandInSpan",
+        capabilities=capabilities,
+        **_ANOMALY_CUT,
+    )
+
+    config = yaml.safe_load(result.yaml_path.read_text(encoding="utf-8"))
+    assert config["plugins"] == ["mock_rest", "cuvis_ai_onnx"]

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import networkx as nx
+import numpy as np
 import torch
 import yaml
 from loguru import logger
@@ -328,6 +329,16 @@ class PipelineSpanModule(nn.Module):
 
         self.modules_by_node = nn.ModuleDict()
         self._adapted: set[str] = set()
+        # Ports a node declares with a numpy dtype get numpy values when its own
+        # forward runs (the catalog's selectors take the wavelength grid that way).
+        self._numpy_ports: dict[str, frozenset[str]] = {
+            node.name: frozenset(
+                port
+                for port, spec in node.INPUT_SPECS.items()
+                if _is_numpy_dtype(spec.dtype)
+            )
+            for node in selection.nodes
+        }
         for node in selection.nodes:
             if copy_nodes:
                 node = copy.deepcopy(node)
@@ -418,11 +429,38 @@ class PipelineSpanModule(nn.Module):
         return tuple(produced[ref] for ref in self.output_refs)
 
     def _call(self, node_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Run one node: its adapter with the ports, or its forward with the context."""
+        """Run one node: its adapter with the ports, or its forward with the context.
+
+        An adapter takes tensors. A node's own forward takes a numpy array on every
+        port it declares with a numpy dtype; under the exporter's trace that node
+        then fails on its own and is named, the way a node that needs an adapter is.
+        """
         module = self.module_for(node_name)
         if node_name in self._adapted:
             return module(**kwargs)
+        numpy_ports = self._numpy_ports.get(node_name, frozenset())
+        if numpy_ports:
+            kwargs = {
+                port: _as_numpy(value) if port in numpy_ports else value
+                for port, value in kwargs.items()
+            }
         return module(**kwargs, context=self._context)
+
+
+def _is_numpy_dtype(dtype: Any) -> bool:
+    """Whether a port declares a numpy array or scalar type."""
+    return dtype is np.ndarray or (
+        isinstance(dtype, type) and issubclass(dtype, np.generic)
+    )
+
+
+def _as_numpy(value: Any) -> Any:
+    """A tensor (or a list of them) as numpy; anything else unchanged."""
+    if isinstance(value, Tensor):
+        return value.detach().cpu().numpy()
+    if isinstance(value, list):
+        return [_as_numpy(item) for item in value]
+    return value
 
 
 class _NodeProbe(nn.Module):
@@ -536,9 +574,14 @@ def _dtype_name(tensor: Tensor) -> str:
 
 
 def _port_entries(
-    refs: Sequence[PortRef], tensors: Sequence[Tensor]
+    refs: Sequence[PortRef], tensors: Sequence[Tensor], port_dtypes: Sequence[str]
 ) -> list[dict[str, Any]]:
-    """The sidecar entries of ``refs`` at the shapes and dtypes of ``tensors``."""
+    """The sidecar entries of ``refs`` at the shapes and dtypes of ``tensors``.
+
+    ``dtype`` is the tensor's; ``port_dtype`` is what the port declares, so the
+    stand-in node can declare the same and the deploy yaml connects like the
+    canonical one.
+    """
     names = _span_port_names(refs)
     return [
         {
@@ -546,9 +589,53 @@ def _port_entries(
             "name": name,
             "tensor": str(ref),
             "dtype": _dtype_name(tensor),
+            "port_dtype": port_dtype,
             "shape": list(tensor.shape),
         }
-        for ref, name, tensor in zip(refs, names, tensors)
+        for ref, name, tensor, port_dtype in zip(refs, names, tensors, port_dtypes)
+    ]
+
+
+def _dtype_label(dtype: Any) -> str:
+    """A declared port dtype as the sidecar records it: ``torch.float32``,
+    ``torch.Tensor``, ``numpy.int32``, ``numpy.ndarray`` or ``Any``."""
+    if isinstance(dtype, torch.dtype):
+        return str(dtype)
+    if dtype is torch.Tensor:
+        return "torch.Tensor"
+    if dtype is Any:
+        return "Any"
+    if dtype is np.ndarray:
+        return "numpy.ndarray"
+    if isinstance(dtype, type) and issubclass(dtype, np.generic):
+        return f"numpy.{np.dtype(dtype).name}"
+    return getattr(dtype, "__name__", str(dtype))
+
+
+def _declared_input_dtypes(
+    pipeline: CuvisPipeline, refs: Sequence[PortRef]
+) -> list[str]:
+    """What feeds each span input declares: the source port's dtype when a
+    connection feeds it, else the input port's own."""
+    by_name = {node.name: node for node in pipeline.nodes}
+    labels: list[str] = []
+    for ref in refs:
+        node = by_name[ref.node]
+        declared = node.INPUT_SPECS[ref.port].dtype
+        for pred, from_port, to_port in _inbound_edges(pipeline, node):
+            if to_port == ref.port:
+                declared = pred.OUTPUT_SPECS[from_port].dtype
+        labels.append(_dtype_label(declared))
+    return labels
+
+
+def _declared_output_dtypes(
+    pipeline: CuvisPipeline, refs: Sequence[PortRef]
+) -> list[str]:
+    """What each span output port declares."""
+    by_name = {node.name: node for node in pipeline.nodes}
+    return [
+        _dtype_label(by_name[ref.node].OUTPUT_SPECS[ref.port].dtype) for ref in refs
     ]
 
 
@@ -708,6 +795,7 @@ def _deploy_config(
     span_plugin: str | None,
     input_names: list[str],
     output_names: list[str],
+    capabilities: Mapping[str, Iterable[Any]] | None = None,
 ) -> dict[str, Any]:
     """The deploy yaml: the pipeline with the span replaced by one node."""
     config = pipeline.serialize().to_dict()
@@ -756,10 +844,45 @@ def _deploy_config(
     config["connections"] = connections
 
     plugins = list(config.get("plugins") or [])
+    if capabilities is not None:
+        plugins = deploy_plugins(
+            plugins, [n["class_name"] for n in nodes], capabilities
+        )
     if span_plugin and span_plugin not in plugins:
         plugins.append(span_plugin)
     config["plugins"] = plugins or None
     return config
+
+
+def deploy_plugins(
+    plugins: Iterable[str],
+    class_names: Iterable[str],
+    capabilities: Mapping[str, Iterable[Any]],
+    *,
+    span_plugin: str | None = None,
+) -> list[str]:
+    """The plugins a deploy yaml still needs, in the pipeline's order.
+
+    A listed plugin stays when it provides a data module, when it provides the
+    class of a node that stays outside the span, or when ``capabilities`` does
+    not know it. ``capabilities`` maps a plugin name to its manifest capability
+    entries (``kind`` and ``class_name``). ``span_plugin`` is appended when given.
+    """
+    remaining = set(class_names)
+    kept: list[str] = []
+    for plugin in plugins:
+        entries = capabilities.get(plugin)
+        if entries is None:
+            kept.append(plugin)
+            continue
+        entries = list(entries)
+        if any(
+            getattr(entry, "kind", "node") == "data_module" for entry in entries
+        ) or any(getattr(entry, "class_name", None) in remaining for entry in entries):
+            kept.append(plugin)
+    if span_plugin and span_plugin not in kept:
+        kept.append(span_plugin)
+    return kept
 
 
 def export_deployment(
@@ -777,6 +900,7 @@ def export_deployment(
     span_node_name: str = DEFAULT_SPAN_NODE_NAME,
     span_class_name: str = DEFAULT_SPAN_CLASS,
     span_plugin: str | None = DEFAULT_SPAN_PLUGIN,
+    capabilities: Mapping[str, Iterable[Any]] | None = None,
 ) -> Deployment:
     """Export the span between ``inputs`` and ``outputs`` and write its deploy folder.
 
@@ -807,6 +931,11 @@ def export_deployment(
         The node that stands in for the span in the deploy yaml and the plugin
         manifest that provides it (``cuvis_ai_onnx`` brings ONNX Runtime into a
         composed environment; ``None`` adds no plugin).
+    capabilities : mapping, optional
+        Plugin name to manifest capability entries, as the plugin resolver
+        returns them. When given, the deploy yaml lists only the plugins the
+        nodes outside the span still need (see :func:`deploy_plugins`); without
+        it the pipeline's own list is kept.
 
     Returns
     -------
@@ -957,7 +1086,15 @@ def export_deployment(
         sort_keys=True,
         default=str,
     )
-    output_entries = _port_entries(selection.outputs, list(span_outputs[0]))
+    output_entries = _port_entries(
+        selection.outputs,
+        list(span_outputs[0]),
+        _declared_output_dtypes(pipeline, selection.outputs),
+    )
+    input_entries = _port_entries(
+        input_refs, list(example_args[0]), _declared_input_dtypes(pipeline, input_refs)
+    )
+    constant_dtypes = _declared_input_dtypes(pipeline, span.constant_refs)
     sidecar: dict[str, Any] = {
         "format": SIDECAR_FORMAT,
         "pipeline": pipeline.name,
@@ -966,9 +1103,7 @@ def export_deployment(
             "nodes": _node_sidecar(selection),
             "inputs": [
                 {**entry, "name": in_name_by_ref[ref]}
-                for entry, ref in zip(
-                    _port_entries(input_refs, list(example_args[0])), input_refs
-                )
+                for entry, ref in zip(input_entries, input_refs)
             ],
             "outputs": output_entries,
             "constants": [
@@ -976,10 +1111,11 @@ def export_deployment(
                     "port": str(ref),
                     "name": in_name_by_ref[ref],
                     "dtype": _dtype_name(constant_values[ref]),
+                    "port_dtype": port_dtype,
                     "shape": list(constant_values[ref].shape),
                     "value": constant_values[ref].detach().cpu().tolist(),
                 }
-                for ref in span.constant_refs
+                for ref, port_dtype in zip(span.constant_refs, constant_dtypes)
             ],
         },
         "exporter": {
@@ -1014,6 +1150,7 @@ def export_deployment(
         span_plugin=span_plugin,
         input_names=span_port_in,
         output_names=[entry["name"] for entry in output_entries],
+        capabilities=capabilities,
     )
     yaml_path = out_dir / f"{name}_deploy.yaml"
     with yaml_path.open("w", encoding="utf-8") as handle:
@@ -1112,9 +1249,15 @@ def collect_examples(
             ports = pipeline.forward(batch=batch, stage=ExecutionStage.INFERENCE)
             example: dict[str, Tensor] = {}
             for ref, source in feeds.items():
-                if source is None:
-                    example[str(ref)] = batch[ref.port]
-                else:
-                    example[str(ref)] = ports[(source.node, source.port)]
+                value = (
+                    batch[ref.port]
+                    if source is None
+                    else ports[(source.node, source.port)]
+                )
+                # A numpy value (the wavelength grid of the cu3s loaders) becomes the
+                # tensor the exporter bakes in; anything else is refused later.
+                if isinstance(value, (np.ndarray, np.generic)):
+                    value = torch.as_tensor(value)
+                example[str(ref)] = value
             examples.append(example)
     return examples

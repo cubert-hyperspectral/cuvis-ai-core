@@ -28,7 +28,27 @@ from cuvis_ai_core.pipeline.export import (
     collect_examples,
     export_deployment,
 )
-from cuvis_ai_core.utils.restore import predict_batches, restore_pipeline
+from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
+from cuvis_ai_core.utils.restore import (
+    _discover_plugins_dirs,
+    predict_batches,
+    restore_pipeline,
+)
+from cuvis_ai_schemas.pipeline import PipelineConfig
+
+
+def _plugin_capabilities(
+    pipeline_path: Path, plugins_dirs: list[str | Path] | None
+) -> dict[str, list] | None:
+    """The capabilities of the plugins the pipeline declares, resolved the way
+    ``restore-pipeline`` resolves them, so the deploy yaml lists only the plugins
+    its remaining nodes need; ``None`` when nothing declares or provides plugins."""
+    candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs)
+    config = PipelineConfig.load_from_file(pipeline_path)
+    if not (config.plugins or candidate_dirs):
+        return None
+    manifests = resolve_pipeline_plugins(config, candidate_dirs)
+    return {name: list(manifest.capabilities) for name, manifest in manifests.items()}
 
 
 def _load_example(path: Path, device: str | None) -> dict[str, torch.Tensor]:
@@ -201,6 +221,7 @@ def main(
         config_overrides=list(config_overrides) or None,
         plugins_dirs=plugin_dirs,
     )
+    capabilities = _plugin_capabilities(pipeline_path, plugin_dirs)
     try:
         if example_files:
             examples = [_load_example(path, load_device) for path in example_files]
@@ -225,6 +246,7 @@ def main(
             atol=atol,
             rtol=rtol,
             span_node_name=span_node_name,
+            capabilities=capabilities,
         )
     except (SpanSelectionError, SpanExportError) as exc:
         raise click.ClickException(str(exc)) from exc

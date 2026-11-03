@@ -90,8 +90,8 @@ deployment = export_deployment(
 | Field | Content |
 |---|---|
 | `span.nodes` | name and class of every span node, in execution order |
-| `span.inputs`, `span.outputs` | per port: the pipeline port, the port name on the `ExportedSpan` node, the ONNX tensor name, dtype and shape |
-| `span.constants` | per baked input: port, name, dtype, shape and the value |
+| `span.inputs`, `span.outputs` | per port: the pipeline port, the port name on the `ExportedSpan` node, the ONNX tensor name, the tensor dtype (`dtype`), the dtype the port declares (`port_dtype`: `torch.float32`, `numpy.int32`, `Any`, `torch.Tensor`; the stand-in node declares the same) and shape |
+| `span.constants` | per baked input: port, name, dtype, `port_dtype`, shape and the value |
 | `exporter` | `dynamo`, the opset, the torch and cuvis-ai-core versions |
 | `fingerprint` | a digest of the span weights, wiring and hparams (`utils.trt_engine.tensor_fingerprint`), the key for an engine built from this file |
 | `onnx_md5`, `onnx_data_md5` | the hash of the written file(s); the runtime refuses an edited file |
