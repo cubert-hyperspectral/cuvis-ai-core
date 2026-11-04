@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.2 - 2026-11-04
 
 - `export-pipeline` on a real catalog pipeline: a span input a node feeds as a numpy array (the wavelength grid of the cu3s loaders) becomes a tensor in `collect_examples` instead of a refusal, and the exporter's eager reference feeds a live node's numpy-typed ports as numpy, so a selector that looks its bands up with numpy no longer fails on a CUDA tensor.
 - The sidecar records each port's declared dtype as `port_dtype` (`torch.float32`, `numpy.int32`, `Any`, `torch.Tensor`) next to the tensor dtype, so the stand-in node declares the same and a deploy yaml connects where the canonical one did; cuvis-ai reads it from 0.20.2 on.
