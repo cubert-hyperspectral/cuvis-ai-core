@@ -210,6 +210,25 @@ def _split_name(split: ExecutionStage | None) -> str:
     return split.value if split is not None else "split"
 
 
+def _close_dataset(
+    datasets: dict[str, Any], split: str, *, still_read: Collection[str]
+) -> None:
+    """Close ``split``'s dataset once no later step reads it; best effort, never raises.
+
+    A dataset that is also one of the ``still_read`` splits stays open, and one without
+    ``close()`` is left alone. A failing close is logged: the steps go on and the weights
+    are still saved.
+    """
+    dataset = datasets.get(split)
+    close = getattr(dataset, "close", None)
+    if close is None or any(datasets.get(other) is dataset for other in still_read):
+        return
+    try:
+        close()
+    except Exception as exc:  # noqa: BLE001 - best effort: the run is still saved
+        logger.warning(f"Post-fit: closing the {split} dataset failed: {exc}")
+
+
 def log_event(event: TrainEvent) -> None:
     """The default sink: one info line per event, nothing for progress."""
     line = describe_event(event)
@@ -290,9 +309,22 @@ class PostFitCallback(Callback):
         ``module`` is the gradient trainer whose ``load_best_checkpoint`` performs the
         restore; with ``restore=False`` (a statistical fit, the standalone calibration
         phase) the step is skipped without an event.
+
+        The val and test datasets the fit already built are reused; ``setup`` runs only
+        for a split the module has not built yet. Each split's dataset is closed once no
+        later step reads it (train before the calibration, val before the test pass), when
+        it has a ``close()``. Recording datasets hold reader sessions with device memory,
+        and inside ``on_train_end`` Lightning still holds the fit's loaders, so neither
+        a rebuilt split nor an unused one would be released in time.
         """
-        datamodule.setup("validate")
-        datamodule.setup("test")
+        if getattr(datamodule, "val_ds", None) is None:
+            datamodule.setup("validate")
+        if getattr(datamodule, "test_ds", None) is None:
+            datamodule.setup("test")
+        datasets = {
+            split: getattr(datamodule, f"{split}_ds", None)
+            for split in ("train", "val", "test")
+        }
 
         checkpoint: CheckpointRestored | None = None
         if restore:
@@ -302,6 +334,7 @@ class PostFitCallback(Callback):
                 checkpoint = module.load_best_checkpoint()
             self.emit(TrainEvent(TrainHook.CHECKPOINT_RESTORED, checkpoint=checkpoint))
 
+        _close_dataset(datasets, "train", still_read=("val", "test"))
         self._release()
         calibration = self._calibrate(pipeline, datamodule)
 
@@ -310,6 +343,9 @@ class PostFitCallback(Callback):
             self._release()
             evaluations[split] = self._evaluate(
                 pipeline, datamodule, split, stage, epoch=epoch, global_step=global_step
+            )
+            _close_dataset(
+                datasets, split, still_read=("test",) if split == "val" else ()
             )
 
         self.emit(TrainEvent(TrainHook.POST_FIT_END))

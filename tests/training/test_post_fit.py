@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 import pytorch_lightning as pl
 import torch
+from loguru import logger
 from torchmetrics.classification import BinaryAUROC
 
 from cuvis_ai_core.deciders.base_decider import BinaryDecider
@@ -113,17 +114,26 @@ class _Metrics(Node):
 
 
 class _SplitsModule(pl.LightningDataModule):
-    """A datamodule with fixed val and test batches; records the setup stages it saw."""
+    """A datamodule with fixed val and test batches; records the setup stages it saw.
 
-    def __init__(self, val, test):
+    ``built=False`` starts without split datasets, the way a fresh module does before
+    ``setup``; a ``setup("validate")`` or ``setup("test")`` then installs that split.
+    """
+
+    def __init__(self, val, test, *, train=None, built=True):
         super().__init__()
-        self.val_ds = val
-        self.test_ds = test
+        self._splits = {"validate": ("val_ds", val), "test": ("test_ds", test)}
+        self.train_ds = train
+        self.val_ds = val if built else None
+        self.test_ds = test if built else None
         self.stages: list[str] = []
 
     def setup(self, stage=None):
-        """Record the stage."""
+        """Record the stage and install its split."""
         self.stages.append(stage)
+        if stage in self._splits:
+            attr, dataset = self._splits[stage]
+            setattr(self, attr, dataset)
 
     def val_dataloader(self):
         """The val batches."""
@@ -180,7 +190,8 @@ def test_run_emits_the_event_sequence_of_a_full_run():
         pipe, dm, module=_module(), restore=True, epoch=5, global_step=11
     )
 
-    assert dm.stages[:2] == ["validate", "test"]
+    # The splits the fit built are reused, not rebuilt (a rebuild opens every recording again).
+    assert dm.stages == []
     progress = TrainHook.CALIBRATION_PROGRESS
     evaluating = TrainHook.EVALUATION_PROGRESS
     assert _hooks(events) == [
@@ -262,6 +273,109 @@ def test_run_reports_a_missing_split_and_a_failing_pass_and_still_finishes():
     assert missing.status is EvaluationStatus.NO_SPLIT and missing.frames == 0
     ends = [e for e in events if e.hook is TrainHook.EVALUATION_END]
     assert [e.split for e in ends] == [ExecutionStage.VAL, ExecutionStage.TEST]
+
+
+def test_run_sets_up_only_the_splits_the_module_has_not_built():
+    pipe, _, _ = _pipeline()
+
+    fresh = _SplitsModule(_batches(), _batches(), built=False)
+    result = PostFitCallback(emit=lambda _event: None).run(pipe, fresh, restore=False)
+    assert fresh.stages == ["validate", "test"]
+    assert result.calibration.calibrated
+    assert result.evaluations["test"].status is EvaluationStatus.EVALUATED
+
+    mixed = _SplitsModule(_batches(), _batches())
+    mixed.test_ds = None
+    result = PostFitCallback(emit=lambda _event: None).run(pipe, mixed, restore=False)
+    assert mixed.stages == ["test"]
+    assert result.evaluations["test"].status is EvaluationStatus.EVALUATED
+
+
+class _RecordedSplit(list):
+    """A split's batches that log each pass over them and the ``close()`` call.
+
+    Stands in for a cu3s dataset, whose ``close()`` releases the SDK sessions it holds.
+    """
+
+    def __init__(self, name, batches, log, *, fail_close=False):
+        super().__init__(batches)
+        self.name = name
+        self.log = log
+        self.fail_close = fail_close
+
+    def __iter__(self):
+        self.log.append(("read", self.name))
+        return super().__iter__()
+
+    def close(self):
+        """Log the call; raise when asked to, as a failing native teardown would."""
+        self.log.append(("close", self.name))
+        if self.fail_close:
+            raise RuntimeError("session teardown failed")
+
+
+def _recorded_module(log, *, fail_close=False, train_is_val=False):
+    val = _RecordedSplit("val", _batches(), log)
+    test = _RecordedSplit("test", _batches(), log)
+    train = (
+        val if train_is_val else _RecordedSplit("train", [], log, fail_close=fail_close)
+    )
+    return _SplitsModule(val, test, train=train)
+
+
+def test_run_releases_each_split_once_no_later_step_reads_it():
+    """Train goes before the calibration reads val; val goes before the test pass reads test."""
+    pipe, _, _ = _pipeline()
+    log: list[tuple[str, str]] = []
+
+    PostFitCallback(emit=lambda _event: None).run(
+        pipe, _recorded_module(log), restore=False
+    )
+
+    assert log == [
+        ("close", "train"),
+        ("read", "val"),  # calibration
+        ("read", "val"),  # val evaluation
+        ("close", "val"),
+        ("read", "test"),
+        ("close", "test"),
+    ]
+
+
+def test_a_failing_close_is_logged_and_the_steps_still_run():
+    pipe, _, _ = _pipeline()
+    log: list[tuple[str, str]] = []
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        result = PostFitCallback(emit=lambda _event: None).run(
+            pipe, _recorded_module(log, fail_close=True), restore=False
+        )
+    finally:
+        logger.remove(sink)
+
+    assert result.calibration.calibrated
+    assert {s.status for s in result.evaluations.values()} == {
+        EvaluationStatus.EVALUATED
+    }
+    assert any("train" in w and "session teardown failed" in w for w in warnings)
+
+
+def test_a_dataset_shared_by_train_and_val_stays_open_for_the_calibration():
+    pipe, _, _ = _pipeline()
+    log: list[tuple[str, str]] = []
+
+    PostFitCallback(emit=lambda _event: None).run(
+        pipe, _recorded_module(log, train_is_val=True), restore=False
+    )
+
+    assert log == [
+        ("read", "val"),
+        ("read", "val"),
+        ("close", "val"),
+        ("read", "test"),
+        ("close", "test"),
+    ]
 
 
 def test_on_train_end_skips_everything_when_the_stop_event_is_set():
