@@ -193,3 +193,48 @@ def test_cli_reports_a_bad_cut_as_an_error_message(saved_anomaly: Path, tmp_path
     assert result.exit_code == 1
     assert "detect.heatmap" in result.output
     assert "Traceback" not in result.output
+
+
+def test_cli_lists_only_the_plugins_the_deploy_yaml_still_needs(tmp_path: Path):
+    """A plugin whose only node went into the span leaves the deploy yaml's plugin list."""
+    import yaml
+
+    from scripts.export_pipeline import main
+
+    pipeline, _ = _anomaly_pipeline()
+    pipeline._plugins = ["mock_span", "mock_rest"]  # noqa: SLF001
+    canonical = tmp_path / "canonical" / "anomaly.yaml"
+    pipeline.save_to_file(canonical)
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    provided = {
+        "mock_span": ["_Scale", "_Select", "_Detect"],
+        "mock_rest": ["_Source", "_Decide"],
+    }
+    for name, classes in provided.items():
+        capabilities = [
+            {"class_name": f"tests.pipeline.test_export.{cls}"} for cls in classes
+        ]
+        (plugins_dir / f"{name}.yaml").write_text(
+            yaml.safe_dump({"name": name, "path": ".", "capabilities": capabilities}),
+            encoding="utf-8",
+        )
+    examples = _write_examples(tmp_path)
+    out_dir = tmp_path / "deploy"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--pipeline-path", str(canonical),
+            "--out-dir", str(out_dir),
+            "--plugins-dir", str(plugins_dir),
+            *_CUT,
+        ]
+        + [arg for path in examples for arg in ("--examples", str(path))],
+    )  # fmt: skip
+
+    assert result.exit_code == 0, result.output
+    config = yaml.safe_load(
+        (out_dir / "anomaly_deploy.yaml").read_text(encoding="utf-8")
+    )
+    assert config["plugins"] == ["mock_rest", "cuvis_ai_onnx"]

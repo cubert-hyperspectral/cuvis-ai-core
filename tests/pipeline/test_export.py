@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
@@ -421,3 +422,108 @@ def test_span_module_refuses_a_constant_that_is_not_a_span_input() -> None:
 
     with pytest.raises(SpanSelectionError, match="detect.band"):
         PipelineSpanModule(selection, constants={"detect.band": torch.ones(1)})
+
+
+# ---------------------------------------------------------------------------
+# Numpy-typed ports, the shape the cu3s loaders and the catalog's selectors have
+# ---------------------------------------------------------------------------
+
+_NPVEC = PortSpec(dtype=np.float32, shape=(-1,))
+
+
+class _NumpySource(Node):
+    """A data node whose wavelength grid is a numpy array, as the cu3s loaders emit it."""
+
+    OUTPUT_SPECS = {"cube": _CUBE, "wavelengths": _NPVEC}
+
+    def __init__(self, channels: int = 4, **kwargs) -> None:
+        super().__init__(channels=channels, **kwargs)
+        self.channels = channels
+
+    def forward(self, **_):
+        return {
+            "cube": torch.rand(1, 6, 6, self.channels),
+            "wavelengths": np.linspace(450.0, 950.0, self.channels, dtype=np.float32),
+        }
+
+
+class _TensorSelect(torch.nn.Module):
+    """The export adapter of ``_NumpySelect``: the same lookup as tensor ops."""
+
+    def __init__(self, target_nm: float) -> None:
+        super().__init__()
+        self.target_nm = target_nm
+
+    def forward(self, cube, wavelengths):
+        index = (wavelengths.float() - self.target_nm).abs().argmin().reshape(1)
+        return {"band": torch.index_select(cube, -1, index)}
+
+
+class _NumpySelect(Node):
+    """Picks the band closest to a target wavelength with numpy; refuses a tensor grid."""
+
+    INPUT_SPECS = {"cube": _CUBE, "wavelengths": _NPVEC}
+    OUTPUT_SPECS = {"band": PortSpec(dtype=torch.float32, shape=(-1, -1, -1, 1))}
+
+    def __init__(self, target_nm: float = 800.0, **kwargs) -> None:
+        super().__init__(target_nm=target_nm, **kwargs)
+        self.target_nm = float(target_nm)
+
+    def forward(self, cube, wavelengths, **_):
+        if not isinstance(wavelengths, np.ndarray):
+            raise TypeError(
+                f"wavelengths must be a numpy array, got {type(wavelengths).__name__}"
+            )
+        index = int(np.abs(wavelengths.astype(np.float32) - self.target_nm).argmin())
+        return {"band": cube[..., index : index + 1]}
+
+    def export_module(self):
+        return _TensorSelect(self.target_nm)
+
+
+def _numpy_pipeline() -> tuple[CuvisPipeline, dict[str, Node]]:
+    """Like ``_anomaly_pipeline`` with a numpy wavelength grid and a numpy selector."""
+    nodes = {
+        "source": _NumpySource(name="source"),
+        "scale": _Scale(name="scale"),
+        "select": _NumpySelect(name="select"),
+        "detect": _Detect(name="detect"),
+        "decide": _Decide(name="decide"),
+    }
+    pipeline = CuvisPipeline("anomaly")
+    pipeline.connect(
+        (nodes["source"].outputs.cube, nodes["scale"].inputs.data),
+        (nodes["scale"].outputs.scaled, nodes["select"].inputs.cube),
+        (nodes["source"].outputs.wavelengths, nodes["select"].inputs.wavelengths),
+        (nodes["select"].outputs.band, nodes["detect"].inputs.band),
+        (nodes["detect"].outputs.scores, nodes["decide"].inputs.scores),
+    )
+    return pipeline, nodes
+
+
+def test_span_module_feeds_a_numpy_typed_port_of_a_live_node_as_numpy() -> None:
+    from cuvis_ai_core.pipeline.export import PipelineSpanModule
+
+    pipeline, _ = _numpy_pipeline()
+    selection = select_span(
+        pipeline,
+        ["scale.data", "select.wavelengths"],
+        ["detect.scores", "detect.anomaly_score"],
+    )
+    grid = torch.linspace(450.0, 950.0, 4)
+    live = PipelineSpanModule(
+        selection,
+        constants={"select.wavelengths": grid},
+        copy_nodes=False,
+        use_adapters=False,
+    )
+    torch.manual_seed(0)
+    cube = torch.rand(1, 6, 6, 4)
+
+    scores, anomaly_score = live(cube)
+
+    expected = (cube * 2.0)[..., 2:3]
+    torch.testing.assert_close(scores, expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        anomaly_score, expected.amax(dim=(1, 2, 3)), rtol=0, atol=0
+    )

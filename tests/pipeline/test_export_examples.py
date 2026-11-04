@@ -78,3 +78,16 @@ def test_collect_examples_stops_at_the_limit():
     )
 
     assert len(examples) == 2
+
+
+def test_collect_examples_turns_a_numpy_port_value_into_a_tensor():
+    from tests.pipeline.test_export import _numpy_pipeline
+
+    pipeline, _ = _numpy_pipeline()
+
+    examples = collect_examples(pipeline, ["scale.data", "select.wavelengths"], [{}])
+
+    grid = examples[0]["select.wavelengths"]
+    assert isinstance(grid, torch.Tensor)
+    assert grid.dtype == torch.float32
+    torch.testing.assert_close(grid, torch.linspace(450.0, 950.0, 4), rtol=0, atol=1e-4)

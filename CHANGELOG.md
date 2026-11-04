@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.2 - 2026-11-04
+
+- `export-pipeline` on a real catalog pipeline: a span input a node feeds as a numpy array (the wavelength grid of the cu3s loaders) becomes a tensor in `collect_examples` instead of a refusal, and the exporter's eager reference feeds a live node's numpy-typed ports as numpy, so a selector that looks its bands up with numpy no longer fails on a CUDA tensor.
+- The sidecar records each port's declared dtype as `port_dtype` (`torch.float32`, `numpy.int32`, `Any`, `torch.Tensor`) next to the tensor dtype, so the stand-in node declares the same and a deploy yaml connects where the canonical one did; cuvis-ai reads it from 0.20.2 on.
+- The deploy yaml lists only the plugins the nodes outside the span still need (`pipeline.export.deploy_plugins`; the CLI resolves the manifests the way `restore-pipeline` does), so a composed deploy environment no longer installs the plugins the span absorbed.
+
 ## 0.19.1 - 2026-10-30
 
 - The trainrun's `calibration:` block (cuvis-ai-schemas 0.14.4) reaches the deciders. The post-fit calibration hands it on as `calibrate(scores, targets, objective=block)` after a gradient fit, after a statistical-only fit, in the standalone calibration phase and in `restore-trainrun`; without a block the call keeps its two arguments. With a precision or recall block, a decider whose `calibrate` takes no `objective` keyword is recorded as `CALIBRATE_FAILED` ("takes no calibration objective") and keeps its thresholds; an f1 block asks for the decider's own rule, so such a decider gets the two-argument call. `BinaryDecider.calibrate` names the parameter, and `PostFitCallback`, `build_runtime_callbacks` and `GradientTrainer` take `calibration=`. The session keeps the block when a `Train` request rebuilds its trainrun config, so `SaveTrainRun` writes it back.
