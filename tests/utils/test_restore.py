@@ -235,7 +235,7 @@ def test_restore_pipeline_cli_has_no_plugins_path_flag(
 
 
 # ---------------------------------------------------------------------------
-# _discover_plugins_dirs
+# discover_plugins_dirs
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +250,7 @@ def test_discover_plugins_dirs_walks_up_and_appends_explicit(tmp_path: Path) -> 
     extra = tmp_path / "extra_plugins"
     extra.mkdir()
 
-    found = restore_mod._discover_plugins_dirs(pipeline_path, [str(extra)])
+    found = restore_mod.discover_plugins_dirs(pipeline_path, [str(extra)])
     assert plugins.resolve() in found
     assert extra in found
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A pipeline config that connects two incompatible ports (`PortCompatibilityError`, raised while wiring the pipeline's declared connections) answers `FAILED_PRECONDITION` from `LoadPipeline` instead of `INTERNAL`, since it is the client's config to fix.
+- `utils.restore._discover_plugins_dirs` is now the public `discover_plugins_dirs`. The private name stays as a one-line alias for a known external caller (cuvis-ai's `scripts/calibrate_thresholds.py`) until it moves to the public name, then the alias goes.
+
 ## 0.19.3 - 2026-11-04
 
 - The post-fit steps reuse the val and test datasets the fit built instead of building them again. `PostFitCallback.run` calls `setup("validate")` or `setup("test")` only for a split the data module has not built yet, so the standalone calibration phase and a statistical-only fit still get theirs. Inside Lightning's `on_train_end` the fit's loaders are still alive, so the rebuild opened every validation recording a second time while the first readers stayed open; with the SDK processing on the GPU that added one processing context per recording and an 8 GB card aborted the training child natively at the threshold calibration (exit `0xC0000409`). The calibration now reads through the readers the fit already holds, which also skips the context rebuild per recording.
