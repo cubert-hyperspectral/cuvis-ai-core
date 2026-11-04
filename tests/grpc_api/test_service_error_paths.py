@@ -35,6 +35,53 @@ from cuvis_ai_core.training.post_fit import (
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
 
+import torch
+
+from cuvis_ai_core.node import Node
+from cuvis_ai_schemas.pipeline import PortSpec
+
+
+class _Int32SourceNode(Node):
+    """A node that outputs an int32 tensor, for a port-incompatible config."""
+
+    INPUT_SPECS = {}
+    OUTPUT_SPECS = {"wavelengths": PortSpec(dtype=torch.int32, shape=(-1,))}
+
+    def forward(self, **inputs):
+        return {"wavelengths": torch.zeros(1, dtype=torch.int32)}
+
+
+class _Float32TargetNode(Node):
+    """A node that expects a float32 tensor, incompatible with the source above."""
+
+    INPUT_SPECS = {"wavelengths": PortSpec(dtype=torch.float32, shape=(-1,))}
+    OUTPUT_SPECS = {}
+
+    def forward(self, **inputs):
+        return {}
+
+
+def _port_mismatch_pipeline_config() -> dict:
+    """A pipeline config whose two nodes connect incompatible port dtypes."""
+    return {
+        "nodes": [
+            {
+                "name": "anomaly_data",
+                "class_name": f"{_Int32SourceNode.__module__}._Int32SourceNode",
+            },
+            {
+                "name": "exported_span",
+                "class_name": f"{_Float32TargetNode.__module__}._Float32TargetNode",
+            },
+        ],
+        "connections": [
+            {
+                "source": "anomaly_data.outputs.wavelengths",
+                "target": "exported_span.inputs.wavelengths",
+            }
+        ],
+    }
+
 
 class TestPipelineServiceErrors:
     """Test PipelineService invalid-session and no-pipeline paths."""
@@ -121,6 +168,25 @@ class TestPipelineServiceErrors:
         response = self.service.load_pipeline(request, self.ctx)
         assert response.success is False
         self.ctx.set_code.assert_called_with(grpc.StatusCode.NOT_FOUND)
+
+    def test_load_pipeline_port_dtype_mismatch_is_failed_precondition(self):
+        """A config connecting incompatible ports is the client's to fix."""
+        session_id = self.session_manager.create_session()
+        config = dict(_port_mismatch_pipeline_config())
+        request = cuvis_ai_pb2.LoadPipelineRequest(
+            session_id=session_id,
+            pipeline=cuvis_ai_pb2.PipelineConfig(
+                config_bytes=json.dumps(config).encode()
+            ),
+        )
+
+        response = self.service.load_pipeline(request, self.ctx)
+
+        assert response.success is False
+        self.ctx.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+        details = self.ctx.set_details.call_args.args[0]
+        assert "Dtype mismatch" in details
+        assert self.session_manager.get_session(session_id).pipeline is None
 
 
 class TestTrainRunServiceErrors:

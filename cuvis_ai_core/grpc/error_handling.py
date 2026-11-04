@@ -15,6 +15,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from cuvis_ai_core.training.evaluation import is_cuda_out_of_memory
+from cuvis_ai_schemas.pipeline.exceptions import PortCompatibilityError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,6 +85,7 @@ _EXCEPTION_STATUS_MAP: list[tuple[type[Exception], grpc.StatusCode]] = [
     (FileNotFoundError, grpc.StatusCode.NOT_FOUND),
     (json.JSONDecodeError, grpc.StatusCode.INVALID_ARGUMENT),
     (ValidationError, grpc.StatusCode.INVALID_ARGUMENT),
+    (PortCompatibilityError, grpc.StatusCode.FAILED_PRECONDITION),
     (ValueError, grpc.StatusCode.INVALID_ARGUMENT),
 ]
 
@@ -96,11 +98,25 @@ def grpc_handler(error_prefix: str = "") -> Callable:
     * a GPU out-of-memory error, also behind an error raised from it or while
       handling it (one of the types below included),
       → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
-    * ``FileNotFoundError``    → ``NOT_FOUND``
-    * ``json.JSONDecodeError`` → ``INVALID_ARGUMENT``
-    * ``ValidationError``      → ``INVALID_ARGUMENT``
-    * ``ValueError``           → ``INVALID_ARGUMENT``
-    * ``Exception`` (fallback) → ``INTERNAL`` (with *error_prefix*)
+    * ``FileNotFoundError``        → ``NOT_FOUND``
+    * ``json.JSONDecodeError``     → ``INVALID_ARGUMENT``
+    * ``ValidationError``          → ``INVALID_ARGUMENT``
+    * ``PortCompatibilityError``   → ``FAILED_PRECONDITION``
+    * ``ValueError``               → ``INVALID_ARGUMENT``
+    * ``Exception`` (fallback)     → ``INTERNAL`` (with *error_prefix*)
+
+    ``PortCompatibilityError`` is raised while wiring a pipeline's declared
+    connections (``CuvisPipeline.connect`` / ``verify``): a config names two
+    ports whose dtype or shape cannot line up. The client fixes it by editing
+    the pipeline config, so it maps to ``FAILED_PRECONDITION`` rather than
+    ``INTERNAL``. The other exceptions ``pipeline/factory.py`` raises while
+    building a pipeline from a config are either already client-actionable
+    (``FileNotFoundError`` for a missing config or checkpoint file,
+    ``ValueError`` for a malformed connection spec or an unknown node/port
+    name, both covered above) or signal a server-side misuse of the builder
+    itself (``TypeError`` for a config that failed to resolve to a dict, or a
+    ``node_registry`` of the wrong type) rather than something a pipeline
+    author can fix by editing their YAML, so those stay ``INTERNAL``.
 
     The response type is inferred from the method's return annotation
     and an empty instance is returned on error.

@@ -14,6 +14,7 @@ from cuvis_ai_core.grpc.error_handling import (
 from cuvis_ai_core.grpc.v1 import cuvis_ai_pb2
 from cuvis_ai_core.grpc.session_manager import SessionManager
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
+from cuvis_ai_schemas.pipeline.exceptions import PortCompatibilityError
 
 
 class TestGetSessionOrError:
@@ -139,6 +140,17 @@ class _OutOfMemoryService:
         )
 
 
+class _LoadPipelineService:
+    """A service whose load call hits a bad config while building the pipeline."""
+
+    @grpc_handler("Failed to load pipeline")
+    def load_pipeline(self, request, context) -> cuvis_ai_pb2.LoadPipelineResponse:
+        raise PortCompatibilityError(
+            "Cannot connect anomaly_data.wavelengths to exported_span.wavelengths: "
+            "Dtype mismatch: source has int32, target expects torch.int32"
+        )
+
+
 def test_grpc_handler_answers_cuda_out_of_memory_with_resource_exhausted():
     context = Mock()
     response = _OutOfMemoryService().restore(None, context)
@@ -162,3 +174,12 @@ def test_grpc_handler_finds_out_of_memory_behind_an_error_it_maps():
     context.set_details.assert_called_once_with(
         "Failed to restore train run: Node 'det' cannot run on this device"
     )
+
+
+def test_grpc_handler_answers_port_compatibility_error_with_failed_precondition():
+    """A bad config (incompatible ports) is the client's to fix, not a server bug."""
+    context = Mock()
+    response = _LoadPipelineService().load_pipeline(None, context)
+    assert isinstance(response, cuvis_ai_pb2.LoadPipelineResponse)
+    context.set_code.assert_called_once_with(grpc.StatusCode.FAILED_PRECONDITION)
+    assert "Dtype mismatch" in context.set_details.call_args.args[0]
