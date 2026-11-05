@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `restore-pipeline` and `export-pipeline` take `--splits SPLITS_JSON`, a splits.json whose predict stage selects the samples of `--data-module` (an empty stage means the whole universe). The selector-driven data modules (`npz_multi`, `cu3s_multi`, a plugin's module built on them) refuse to run without one, so the CLIs could not run a pipeline on their data at all. `restore_pipeline` and `predict_batches` take the same `splits`; a relative path is resolved against the current directory before it reaches the module, the way a trainrun-relative `splits_path` is. `--splits` without `--data-module` is an argument error.
+
 ## 0.20.0 - 2026-11-05
 
 - A pipeline config that connects two incompatible ports (`PortCompatibilityError`, raised while wiring the pipeline's declared connections) answers `FAILED_PRECONDITION` from `LoadPipeline` instead of `INTERNAL`, since it is the client's config to fix.

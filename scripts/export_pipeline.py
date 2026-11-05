@@ -135,6 +135,13 @@ def _load_example(path: Path, device: str | None) -> dict[str, torch.Tensor]:
     help="An argument of the selected data module. Repeatable.",
 )
 @click.option(
+    "--splits",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="A splits.json whose predict stage selects the data module's samples (an "
+    "empty stage means the whole universe); the selector-driven modules need one.",
+)
+@click.option(
     "--num-examples",
     default=2,
     show_default=True,
@@ -189,6 +196,7 @@ def main(
     example_files: tuple[Path, ...],
     data_module: str | None,
     data_args: tuple[str, ...],
+    splits: Path | None,
     num_examples: int,
     plugins_dirs: tuple[Path, ...],
     config_overrides: tuple[str, ...],
@@ -204,6 +212,10 @@ def main(
         raise click.UsageError(
             "Pass --examples FILE (repeatable) or --data-module NAME to provide samples "
             "for the span inputs."
+        )
+    if splits is not None and not data_module:
+        raise click.UsageError(
+            "--splits selects samples of a data module: pass --data-module too."
         )
     parsed_args: dict[str, str] = {}
     for pair in data_args:
@@ -232,6 +244,7 @@ def main(
                 data_args=parsed_args,
                 plugins_dirs=plugin_dirs,
                 device=load_device,
+                splits=splits,
             )
             examples = collect_examples(pipeline, inputs, batches, limit=num_examples)
         deployment = export_deployment(

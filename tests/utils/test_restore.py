@@ -1134,3 +1134,98 @@ def test_restore_trainrun_hands_the_calibration_block_to_the_post_fit_steps(
     assert (block.objective, block.target, block.level) == ("recall", 0.9, "frames")
     if use_gradient:
         assert RecordingTrainer.all_instances[1].kwargs["calibration"] == block
+
+
+def test_restore_pipeline_carries_a_splits_json_into_the_data_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``splits`` reaches the data module as an absolute ``splits_path``; without it, none."""
+    FakeRestoreDataModule.instances.clear()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "splits.json").write_text("{}", encoding="utf-8")
+
+    _run_restore_with_fakes(monkeypatch, tmp_path, device="cpu", splits="splits.json")
+    _run_restore_with_fakes(monkeypatch, tmp_path, device="cpu")
+
+    with_splits, without = FakeRestoreDataModule.instances
+    splits_path = Path(with_splits.data_config.splits.splits_path)
+    assert splits_path.is_absolute()
+    assert splits_path == (tmp_path / "splits.json").resolve()
+    assert with_splits.data_config.params == {
+        "cu3s_file_path": str(tmp_path / "sample.cu3s")
+    }
+    assert without.data_config.splits is None
+
+
+def test_predict_batches_reads_the_predict_split_from_a_splits_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A splits.json (here a path relative to the cwd) narrows the fake module's predict
+    split to the listed ids; without one the module serves its whole universe."""
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "fake_dataloader.yaml").write_text(
+        dedent(
+            """
+            name: fake_dataloader
+            path: "."
+            package_name: fake_pkg
+            capabilities:
+              - class_name: tests.fixtures.fake_data_modules.FakeDataModule
+                kind: data_module
+                data_module_name: fake
+            """
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "splits.json").write_text(
+        '{"predict": [{"kind": "file_indices", "source": "fake.cu3s", "ids": [1, 3]}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    pipeline_path = tmp_path / "pipeline.yaml"
+
+    narrowed = list(
+        restore_mod.predict_batches(
+            pipeline_path, "fake", plugins_dirs=[plugins_dir], splits="splits.json"
+        )
+    )
+    whole = list(
+        restore_mod.predict_batches(pipeline_path, "fake", plugins_dirs=[plugins_dir])
+    )
+
+    assert len(narrowed) == 2
+    assert len(whole) == 3
+
+
+def test_restore_pipeline_cli_parses_splits_and_needs_a_data_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        restore_mod, "restore_pipeline", lambda **kwargs: captured.update(kwargs)
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["restore-pipeline", "--pipeline-path", "p.yaml", "--data-module", "npz_multi",
+         "--data-arg", "universe_csv=u.csv", "--splits", "data/splits.json"],
+    )  # fmt: skip
+    restore_mod.restore_pipeline_cli()
+    assert captured["splits"] == "data/splits.json"
+    assert captured["data_args"] == {"universe_csv": "u.csv"}
+
+    captured.clear()
+    monkeypatch.setattr(sys, "argv", ["restore-pipeline", "--pipeline-path", "p.yaml"])
+    restore_mod.restore_pipeline_cli()
+    assert captured["splits"] is None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["restore-pipeline", "--pipeline-path", "p.yaml", "--splits", "s.json"],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        restore_mod.restore_pipeline_cli()
+    assert excinfo.value.code == 2

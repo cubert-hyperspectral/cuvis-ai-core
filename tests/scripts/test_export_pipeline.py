@@ -89,10 +89,8 @@ class _Affine(Node):
         return {"y": x + self.offset_buf}
 
 
-def test_cli_takes_the_examples_from_a_data_module(tmp_path: Path):
-    """The pipeline reads ``x`` from the batch; the fake data module provides it."""
-    from scripts.export_pipeline import main
-
+def _affine_pipeline_with_fake_dataloader(tmp_path: Path) -> tuple[Path, Path]:
+    """Save a two-node affine pipeline and a plugins dir with the fake data module."""
     first, second = _Affine(name="first"), _Affine(name="second", offset=2.0)
     pipeline = CuvisPipeline("affine")
     pipeline.connect(first.outputs.y, second.inputs.x)
@@ -129,6 +127,14 @@ def test_cli_takes_the_examples_from_a_data_module(tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    return pipeline_path, plugins_dir
+
+
+def test_cli_takes_the_examples_from_a_data_module(tmp_path: Path):
+    """The pipeline reads ``x`` from the batch; the fake data module provides it."""
+    from scripts.export_pipeline import main
+
+    pipeline_path, plugins_dir = _affine_pipeline_with_fake_dataloader(tmp_path)
     out_dir = tmp_path / "deploy"
 
     result = CliRunner().invoke(
@@ -238,3 +244,68 @@ def test_cli_lists_only_the_plugins_the_deploy_yaml_still_needs(tmp_path: Path):
         (out_dir / "anomaly_deploy.yaml").read_text(encoding="utf-8")
     )
     assert config["plugins"] == ["mock_rest", "cuvis_ai_onnx"]
+
+
+def test_cli_takes_the_predict_split_from_a_splits_json(tmp_path: Path):
+    """``--splits`` narrows the data module's predict split to the file's ids."""
+    from scripts.export_pipeline import main
+
+    pipeline_path, plugins_dir = _affine_pipeline_with_fake_dataloader(tmp_path)
+    splits = tmp_path / "splits.json"
+    splits.write_text(
+        '{"predict": [{"kind": "file_indices", "source": "fake.cu3s", "ids": [1, 3]}]}',
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "deploy"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--pipeline-path",
+            str(pipeline_path),
+            "--out-dir",
+            str(out_dir),
+            "--input",
+            "first.x",
+            "--output",
+            "second.y",
+            "--data-module",
+            "fake",
+            "--splits",
+            str(splits),
+            "--plugins-dir",
+            str(plugins_dir),
+            "--num-examples",
+            "5",
+        ],  # fmt: skip
+    )
+
+    assert result.exit_code == 0, result.output
+    sidecar = (out_dir / "affine.onnx.json").read_text(encoding="utf-8")
+    assert '"examples": 2' in sidecar
+
+
+def test_cli_refuses_splits_without_a_data_module(saved_anomaly: Path, tmp_path: Path):
+    from scripts.export_pipeline import main
+
+    examples = _write_examples(tmp_path, count=1)
+    splits = tmp_path / "splits.json"
+    splits.write_text("{}", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--pipeline-path",
+            str(saved_anomaly),
+            "--out-dir",
+            str(tmp_path / "deploy"),
+            *_CUT,
+            "--examples",
+            str(examples[0]),
+            "--splits",
+            str(splits),
+        ],  # fmt: skip
+    )
+
+    assert result.exit_code == 2
+    assert "--splits" in result.output and "--data-module" in result.output
