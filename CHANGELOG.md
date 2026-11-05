@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The `_discover_plugins_dirs` alias in `utils.restore` is gone; `discover_plugins_dirs` is the one name. cuvis-ai 0.22.0 already imports the public name; an older cuvis-ai's `calibrate-thresholds` needs 0.22.0 or later from this release on.
+
 ## 0.20.1 - 2026-11-05
 
 - `restore-pipeline` and `export-pipeline` take `--splits SPLITS_JSON`, a splits.json whose predict stage selects the samples of `--data-module` (an empty stage means the whole universe). The selector-driven data modules (`npz_multi`, `cu3s_multi`, a plugin's module built on them) refuse to run without one, so the CLIs could not run a pipeline on their data at all. `restore_pipeline` and `predict_batches` take the same `splits`; a relative path is resolved against the current directory before it reaches the module, the way a trainrun-relative `splits_path` is. `--splits` without `--data-module` is an argument error.

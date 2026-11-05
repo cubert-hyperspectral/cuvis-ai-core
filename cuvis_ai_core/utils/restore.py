@@ -62,12 +62,6 @@ def discover_plugins_dirs(
     return candidates
 
 
-# Back-compat alias for a known external import (cuvis-ai's
-# scripts/calibrate_thresholds.py). Drop once that script moves to the
-# public name.
-_discover_plugins_dirs = discover_plugins_dirs
-
-
 def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
     """Resolve a trainrun's ``pipeline:`` reference to a pipeline YAML on disk.
 
