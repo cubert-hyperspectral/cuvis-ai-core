@@ -35,7 +35,7 @@ from cuvis_ai_schemas.pipeline import PipelineConfig
 from cuvis_ai_schemas.training import DataConfig
 
 
-def _discover_plugins_dirs(
+def discover_plugins_dirs(
     pipeline_path: Path,
     explicit_dirs: list[str | Path] | None,
 ) -> list[Path]:
@@ -45,7 +45,9 @@ def _discover_plugins_dirs(
 
     1. Any ``configs/plugins/`` discovered by walking upward from
        ``pipeline_path``'s parent.
-    2. Any ``--plugins-dir`` values from the CLI.
+    2. ``explicit_dirs``, in the order given (the CLI's repeatable
+       ``--plugins-dir``, or a caller-supplied list such as the deploy
+       export's ``plugins_dirs``).
     """
     candidates: list[Path] = []
     for ancestor in pipeline_path.resolve().parents:
@@ -58,6 +60,12 @@ def _discover_plugins_dirs(
         candidates.extend(Path(p) for p in explicit_dirs)
 
     return candidates
+
+
+# Back-compat alias for a known external import (cuvis-ai's
+# scripts/calibrate_thresholds.py). Drop once that script moves to the
+# public name.
+_discover_plugins_dirs = discover_plugins_dirs
 
 
 def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
@@ -149,7 +157,7 @@ def predict_batches(
     the ``configs/plugins/`` above ``pipeline_path`` and in ``plugins_dirs``.
     Tensors move to ``device`` when one is given.
     """
-    candidate_dirs = _discover_plugins_dirs(Path(pipeline_path), plugins_dirs)
+    candidate_dirs = discover_plugins_dirs(Path(pipeline_path), plugins_dirs)
     registry = NodeRegistry()
     data_config = DataConfig(data_module=data_module, params=dict(data_args or {}))
     datamodule = _build_data_module(registry, data_config, candidate_dirs)
@@ -262,7 +270,7 @@ def restore_pipeline(
     logger.info(f"Loading pipeline from {pipeline_path}")
 
     registry: NodeRegistry | None = None
-    candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs)
+    candidate_dirs = discover_plugins_dirs(pipeline_path, plugins_dirs)
 
     if pipeline_path.is_file():
         # Pipeline-driven plugin resolution: materialise only what the pipeline declares.
@@ -664,7 +672,7 @@ def restore_trainrun(
         return
 
     # Create datamodule (resolve the data_module's plugin from discovered + explicit dirs)
-    candidate_dirs = _discover_plugins_dirs(trainrun_path, plugins_dirs)
+    candidate_dirs = discover_plugins_dirs(trainrun_path, plugins_dirs)
     datamodule = _create_datamodule_from_config(
         trainrun_config, candidate_dirs, base_dir=trainrun_path.parent
     )

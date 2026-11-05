@@ -30,7 +30,7 @@ from cuvis_ai_core.pipeline.export import (
 )
 from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_core.utils.restore import (
-    _discover_plugins_dirs,
+    discover_plugins_dirs,
     predict_batches,
     restore_pipeline,
 )
@@ -43,7 +43,7 @@ def _plugin_capabilities(
     """The capabilities of the plugins the pipeline declares, resolved the way
     ``restore-pipeline`` resolves them, so the deploy yaml lists only the plugins
     its remaining nodes need; ``None`` when nothing declares or provides plugins."""
-    candidate_dirs = _discover_plugins_dirs(pipeline_path, plugins_dirs)
+    candidate_dirs = discover_plugins_dirs(pipeline_path, plugins_dirs)
     config = PipelineConfig.load_from_file(pipeline_path)
     if not (config.plugins or candidate_dirs):
         return None
