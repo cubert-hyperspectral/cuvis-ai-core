@@ -32,7 +32,7 @@ from cuvis_ai_core.utils.plugin_resolver import _build_catalog, resolve_pipeline
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
 from cuvis_ai_schemas.pipeline import PipelineConfig
-from cuvis_ai_schemas.training import DataConfig
+from cuvis_ai_schemas.training import DataConfig, DataSplitConfig
 
 
 def discover_plugins_dirs(
@@ -144,22 +144,43 @@ def _build_data_module(
     return create_data_module(registry, data_config)
 
 
+def _predict_data_config(
+    data_module: str, data_args: dict[str, str] | None, splits: str | Path | None
+) -> DataConfig:
+    """The data config of an inference run: the module, its arguments, an optional splits.json.
+
+    A relative ``splits`` is resolved against the current directory here, so the module only
+    sees an absolute ``splits_path`` (``_resolve_splits_path_in_config`` does the same for a
+    trainrun's, against the trainrun's directory). Without ``splits`` the config carries none:
+    a module that owns its splits then serves its whole universe, a selector-driven one refuses.
+    """
+    split_config = None
+    if splits is not None:
+        split_config = DataSplitConfig(splits_path=str(Path(splits).resolve()))
+    return DataConfig(
+        data_module=data_module, splits=split_config, params=dict(data_args or {})
+    )
+
+
 def predict_batches(
     pipeline_path: str | Path,
     data_module: str,
     data_args: dict[str, str] | None = None,
     plugins_dirs: list[str | Path] | None = None,
     device: str | None = None,
+    splits: str | Path | None = None,
 ):
     """The batches of ``data_module``'s predict split, one dict at a time.
 
     The data module's plugin is found the way ``restore-pipeline`` finds it: in
     the ``configs/plugins/`` above ``pipeline_path`` and in ``plugins_dirs``.
+    ``splits`` is a splits.json whose predict stage selects the samples (an empty
+    stage means the whole universe); the selector-driven modules need one.
     Tensors move to ``device`` when one is given.
     """
     candidate_dirs = discover_plugins_dirs(Path(pipeline_path), plugins_dirs)
     registry = NodeRegistry()
-    data_config = DataConfig(data_module=data_module, params=dict(data_args or {}))
+    data_config = _predict_data_config(data_module, data_args, splits)
     datamodule = _build_data_module(registry, data_config, candidate_dirs)
     datamodule.setup(stage="predict")
     for batch in datamodule.predict_dataloader():
@@ -218,6 +239,7 @@ def restore_pipeline(
     plugins_dirs: list[str | Path] | None = None,
     pipeline_vis_ext: PipelineVisFormat | None = None,
     profile_sync: bool = False,
+    splits: str | Path | None = None,
 ) -> CuvisPipeline:
     """Restore pipeline from configuration and weights for inference.
 
@@ -255,6 +277,11 @@ def restore_pipeline(
         node and the device copy carry their own GPU time and the per-batch loop
         time is GPU-complete. Off by default: the timings are then host wall time,
         and queued GPU work can show up in the next batch's data load.
+    splits : str | Path | None
+        A splits.json (the ``--splits`` path) whose predict stage selects the
+        samples of ``data_module``; an empty stage means the whole universe. The
+        selector-driven modules (``npz_multi``, ``cu3s_multi``) need one. A
+        relative path is resolved against the current directory.
 
     Returns
     -------
@@ -313,7 +340,7 @@ def restore_pipeline(
     if data_module:
         if registry is None:
             registry = NodeRegistry()
-        data_config = DataConfig(data_module=data_module, params=dict(data_args or {}))
+        data_config = _predict_data_config(data_module, data_args, splits)
         datamodule = _build_data_module(registry, data_config, candidate_dirs)
         datamodule.setup(stage="predict")
         dataloader = datamodule.predict_dataloader()
@@ -886,6 +913,14 @@ Examples:
     --data-module cu3s \\
     --data-arg    cu3s_file_path=data/Lentils/Lentils_000.cu3s
 
+  # Run inference over a selector-driven data module (a splits.json picks the samples)
+  uv run restore-pipeline \\
+    --pipeline-path configs/pipeline/adaclip_baseline.yaml \\
+    --plugins-dir   ../cuvis-ai-dataloader/configs/plugins \\
+    --data-module npz_multi \\
+    --data-arg    universe_csv=data/frames/universe.csv \\
+    --splits      data/frames/splits.json
+
   # Use custom device
   uv run restore-pipeline \\
     --pipeline-path configs/pipeline/adaclip_baseline.yaml \\
@@ -926,6 +961,16 @@ Examples:
         metavar="KEY=VALUE",
         help="Module-specific argument for the selected --data-module. Repeatable, "
         "e.g. --data-arg cu3s_file_path=X.cu3s --data-arg annotation_json_path=Y.json.",
+    )
+    parser.add_argument(
+        "--splits",
+        type=str,
+        default=None,
+        metavar="SPLITS_JSON",
+        help="A splits.json whose predict stage selects the samples of --data-module "
+        "(an empty stage means the whole universe). The selector-driven modules "
+        "(npz_multi, cu3s_multi) need one. A relative path is resolved against the "
+        "current directory.",
     )
     parser.add_argument(
         "--override",
@@ -969,6 +1014,10 @@ Examples:
             parser.error(f"--data-arg must be KEY=VALUE, got {pair!r}")
         key, value = pair.split("=", 1)
         data_args[key.strip()] = value
+    if args.splits and not args.data_module:
+        parser.error(
+            "--splits selects samples of a data module: pass --data-module too"
+        )
 
     restore_pipeline(
         pipeline_path=args.pipeline_path,
@@ -980,6 +1029,7 @@ Examples:
         plugins_dirs=args.plugins_dir,
         pipeline_vis_ext=vis_ext,
         profile_sync=args.profile_sync,
+        splits=args.splits,
     )
 
 
