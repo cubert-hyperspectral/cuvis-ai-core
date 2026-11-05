@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 - 2026-11-05
 
 - A pipeline config that connects two incompatible ports (`PortCompatibilityError`, raised while wiring the pipeline's declared connections) answers `FAILED_PRECONDITION` from `LoadPipeline` instead of `INTERNAL`, since it is the client's config to fix.
 - `utils.restore._discover_plugins_dirs` is now the public `discover_plugins_dirs`. The private name stays as a one-line alias for a known external caller (cuvis-ai's `scripts/calibrate_thresholds.py`) until it moves to the public name, then the alias goes.
