@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The in-kernel install of `provision_environment(notebook=True, apply=True)` stops when pip fails. `%pip` prints pip's error without raising, so the install now reads pip's exit status (IPython and Colab leave it in `_exit_code`) and raises a `RuntimeError` instead of reporting the plugins as installed and asking for a restart. It also asks for the restart only when the install changed the installed packages: the data module's spec is listed on every run (an importable package does not prove its extras are installed), so the pass after the restart asked for another one.
+
 ## 0.20.2 - 2026-11-06
 
 - The three `dinomaly_lentils_*` trained pipelines are pinned to the Hub revision `2b6d2164` of `cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`. Their yamls at `3602a04e` named `cuvis_ai.deciders.two_stage_decider.TwoStageBinaryDecider`, a path cuvis-ai 0.18.0 retired, so `download-model` fetched pipelines that failed to load with "Node class not found". At `2b6d2164` they name `cuvis_ai.node.deciders.two_stage_decider.TwoStageBinaryDecider`; the `.pt` files are unchanged.

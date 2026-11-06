@@ -188,14 +188,65 @@ def _inject_ipython(monkeypatch, ip):
     monkeypatch.setitem(sys.modules, "IPython", SimpleNamespace(get_ipython=lambda: ip))
 
 
+def _kernel(calls, *, exit_code=0):
+    """Fake kernel that records %pip calls and, like IPython, leaves pip's exit
+    status in ``user_ns['_exit_code']``."""
+    user_ns: dict = {}
+
+    def run_line_magic(magic, line):
+        calls.append((magic, line))
+        user_ns["_exit_code"] = exit_code
+
+    return SimpleNamespace(run_line_magic=run_line_magic, user_ns=user_ns)
+
+
+def _distributions(monkeypatch, *snapshots):
+    """Make successive ``_installed_distributions()`` calls return ``snapshots``."""
+    it = iter(snapshots)
+    monkeypatch.setattr(prov, "_installed_distributions", lambda: next(it))
+
+
 def test_provision_notebook_apply_runs_magic(monkeypatch, capsys):
     calls: list[tuple[str, str]] = []
-    _inject_ipython(
-        monkeypatch, SimpleNamespace(run_line_magic=lambda m, a: calls.append((m, a)))
-    )
+    _inject_ipython(monkeypatch, _kernel(calls))
+    _distributions(monkeypatch, {("a", "1")}, {("a", "1"), ("b", "2")})
     assert prov._provision_notebook(["a", "b"], apply=True) is None
     assert calls == [("pip", "install 'a' 'b'")]
-    assert "Installed 2 plugin" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Installed 2 plugin" in out
+    assert "Restart the kernel" in out
+
+
+def test_provision_notebook_apply_unchanged_needs_no_restart(monkeypatch, capsys):
+    """The data module's spec is listed on every run; reinstalling it changes nothing."""
+    _inject_ipython(monkeypatch, _kernel([]))
+    _distributions(monkeypatch, {("a", "1")}, {("a", "1")})
+    assert prov._provision_notebook(["a"], apply=True) is None
+    out = capsys.readouterr().out
+    assert "no restart needed" in out
+    assert "Restart the kernel" not in out
+
+
+def test_provision_notebook_apply_raises_when_pip_fails(monkeypatch, capsys):
+    _inject_ipython(monkeypatch, _kernel([], exit_code=1))
+    _distributions(monkeypatch, set())
+    with pytest.raises(RuntimeError, match="exit code 1"):
+        prov._provision_notebook(["a"], apply=True)
+    assert "Restart the kernel" not in capsys.readouterr().out
+
+
+def test_provision_notebook_apply_ignores_an_earlier_exit_code(monkeypatch, capsys):
+    """An exit status an earlier shell command left behind is not read as pip's."""
+    ip = SimpleNamespace(run_line_magic=lambda m, a: None, user_ns={"_exit_code": 1})
+    _inject_ipython(monkeypatch, ip)
+    _distributions(monkeypatch, set(), {("a", "1")})
+    assert prov._provision_notebook(["a"], apply=True) is None
+    assert "Installed 1 plugin" in capsys.readouterr().out
+
+
+def test_installed_distributions_lists_this_environment():
+    names = {name.lower() for name, _version in prov._installed_distributions()}
+    assert "pytest" in names
 
 
 def test_provision_notebook_apply_no_specs(monkeypatch, capsys):
