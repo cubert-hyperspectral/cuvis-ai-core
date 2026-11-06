@@ -16,6 +16,7 @@ Reuse map (everything heavy already exists in the orchestrator):
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import subprocess
 import sys
@@ -131,6 +132,12 @@ def _env_file_text(specs: Sequence[str], pipeline_name: str) -> str:
     return tomli_w.dumps(doc)
 
 
+def _installed_distributions() -> set[tuple[str, str]]:
+    """Name and version of every distribution installed in this interpreter."""
+    importlib.invalidate_caches()  # so importlib.metadata sees what %pip just installed
+    return {(dist.name, dist.version) for dist in importlib.metadata.distributions()}
+
+
 def _provision_notebook(specs: Sequence[str], *, apply: bool) -> str | None:
     """Emit (and optionally run) the in-kernel ``%pip install`` line."""
     line = format_install_command(specs, magic=True)
@@ -152,15 +159,32 @@ def _provision_notebook(specs: Sequence[str], *, apply: bool) -> str | None:
             "provision_environment(notebook=True, apply=True) requires a running "
             "Jupyter/IPython kernel."
         )
-    if specs:
-        ip.run_line_magic("pip", "install " + " ".join(f"'{s}'" for s in specs))
-        print(
-            f"Installed {len(specs)} plugin(s) into this kernel.\n"
-            "Restart the kernel (Kernel > Restart) and re-run from the top so the "
-            "new packages import cleanly."
-        )
-    else:
+    if not specs:
         print("All plugins already provisioned; nothing to install.")
+        return None
+
+    before = _installed_distributions()
+    # %pip prints pip's errors but does not raise; IPython (and Colab) leave pip's
+    # exit status in the user namespace instead.
+    user_ns = getattr(ip, "user_ns", {})
+    user_ns.pop("_exit_code", None)
+    ip.run_line_magic("pip", "install " + " ".join(f"'{s}'" for s in specs))
+    exit_code = user_ns.get("_exit_code", 0)
+    if exit_code:
+        raise RuntimeError(
+            f"%pip install failed with exit code {exit_code}; see the pip output above."
+        )
+    # The data module's spec is listed on every run (an importable package does not
+    # prove its extras are installed), so ask for a restart only when %pip changed
+    # the installed packages.
+    if _installed_distributions() == before:
+        print("All plugins already provisioned; no restart needed.")
+        return None
+    print(
+        f"Installed {len(specs)} plugin(s) into this kernel.\n"
+        "Restart the kernel (Kernel > Restart) and re-run from the top so the "
+        "new packages import cleanly."
+    )
     return None
 
 
@@ -182,7 +206,8 @@ def provision_environment(
     - ``env_file=...``: write an env file (``.toml`` pyproject-shaped, ``.txt``
       flat requirements); ``sync=True`` then ``uv pip install -r`` it.
     - ``notebook=True``: emit the ``%pip install`` line; ``apply=True`` runs it
-      in-kernel and prompts a restart.
+      in-kernel, raises when the install fails, and asks for a restart only when
+      it changed the installed packages.
     """
     if env_file is not None and (apply or notebook):
         raise ValueError(
