@@ -1154,12 +1154,12 @@ class ModelWeights:
                             }
                         )
                         continue
-                    src_primary = cls.snapshot_path(weight, source_dir)
+                    src_root = cls.snapshot_root(weight, source_dir)
+                    src_primary = src_root / weight.entry.filename
                     if not src_primary.is_file():
                         raise ModelDownloadError(
                             f"{weight.name}: {src_primary} is missing from the export folder"
                         )
-                    src_root = cls.snapshot_root(weight, source_dir)
                     staged_root = cls.snapshot_root(weight, staging)
                     for rel, sha, size in cls._files_of(weight):
                         src = src_root / rel
