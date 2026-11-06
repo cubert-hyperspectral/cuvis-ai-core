@@ -301,7 +301,7 @@ def _trained_pipeline(
 
 
 _LENTILS_REPO = f"{HF_ORG}/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils"
-_LENTILS_REVISION = "3602a04ea2a8a19494c4d1bc25bf804e942e9277"
+_LENTILS_REVISION = "2b6d2164840a6a8ab6cd7d232e291d861e66b2bb"
 
 TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
     _trained_pipeline(
@@ -333,8 +333,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="b30719616452b12b95fabfeb41b5c8c81b29e651ef8b482699b176c568360b93",
         size_bytes=592_002_738,
         yaml_path="dinomaly_cir_full_pipeline/dinomaly_cir.yaml",
-        yaml_sha256="81cf48ff6d33b31e1df6d27f1755328e829fec872e8731279a7dbec7ab41c306",
-        yaml_size=2748,
+        yaml_sha256="1331517e13ff13f46be6afef7d28f8b82fc145a405ffb0ebb5794dc80b38a36a",
+        yaml_size=2753,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a CIR channel "
@@ -352,8 +352,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="4d181301f4adae09ffd781f6325a41933c98ef2b8b0e77c79346f0db222396e1",
         size_bytes=592_003_673,
         yaml_path="dinomaly_custom_selector_full_pipeline/dinomaly_custom.yaml",
-        yaml_sha256="b4bfccc2641e6e3f3336db57d6db5d47105f7173bc8e3bb5e8ff0a1f985301b9",
-        yaml_size=2865,
+        yaml_sha256="ef005ce1d1da998aa5d10582aa914ee844b868d888c24c820c8c3831985fb205",
+        yaml_size=2870,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a custom channel "
@@ -371,8 +371,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="b49e21cc66f8dbade7150fa0c5daba5475b2789b8777c13bd4637e466757df47",
         size_bytes=592_002_738,
         yaml_path="dinomaly_rgb_full_pipeline/dinomaly_rgb.yaml",
-        yaml_sha256="81165f3cef2f83640918b82f629c80a33225b35bb762cb175de758f48680a2d7",
-        yaml_size=2765,
+        yaml_sha256="60508a0cb9a7e33194f01bcfcee63d914941d5d11f36a7b6130d4505fbe71f92",
+        yaml_size=2770,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a false-RGB "

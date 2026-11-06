@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.20.2 - 2026-11-06
 
+- The three `dinomaly_lentils_*` trained pipelines are pinned to the Hub revision `2b6d2164` of `cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`. Their yamls at `3602a04e` named `cuvis_ai.deciders.two_stage_decider.TwoStageBinaryDecider`, a path cuvis-ai 0.18.0 retired, so `download-model` fetched pipelines that failed to load with "Node class not found". At `2b6d2164` they name `cuvis_ai.node.deciders.two_stage_decider.TwoStageBinaryDecider`; the `.pt` files are unchanged.
 - The `_discover_plugins_dirs` alias in `utils.restore` is gone; `discover_plugins_dirs` is the one name. cuvis-ai 0.22.0 already imports the public name; an older cuvis-ai's `calibrate-thresholds` needs 0.22.0 or later from this release on.
 
 ## 0.20.1 - 2026-11-05
