@@ -50,11 +50,15 @@ SAM3_BYTES = b"sam3-weights-bytes"
 CONFIG_BYTES = b'{"model": "sam3"}'
 ETAM_S_BYTES = b"efficienttam-small-bytes"
 ETAM_TI_BYTES = b"efficienttam-tiny"
+NESTED_PT_BYTES = b"nested-pipeline-weights"
+NESTED_YAML_BYTES = b"nodes: []\n"
 CONTENT = {
     "sam3.pt": SAM3_BYTES,
     "config.json": CONFIG_BYTES,
     "efficienttam_s.pt": ETAM_S_BYTES,
     "efficienttam_ti.pt": ETAM_TI_BYTES,
+    "nested.pt": NESTED_PT_BYTES,
+    "nested.yaml": NESTED_YAML_BYTES,
 }
 
 
@@ -1455,3 +1459,68 @@ def test_custom_repo_download_retries_once_when_the_hub_client_was_closed(
     )
     assert result.exit_code == 0, result.output
     assert attempts == ["f.bin", "f.bin"]
+
+
+# ----------------------------------------------------------------------------
+# Rows whose files sit in a folder of the repository (the lentils pipelines)
+# ----------------------------------------------------------------------------
+
+REV_NESTED = "2b6d2164840a6a8ab6cd7d232e291d861e66b2bb"
+
+
+@pytest.fixture
+def nested() -> PluginWeightEntry:
+    """A row whose checkpoint and yaml live in a repository folder, not at its root."""
+    entry = sam3_entry(
+        name="dinomaly_nested",
+        repo_id=f"{HF_ORG}/nested-demo",
+        filename="pipe_dir/nested.pt",
+        revision=REV_NESTED,
+        sha256=_sha(NESTED_PT_BYTES),
+        size_bytes=len(NESTED_PT_BYTES),
+        aux_files=[
+            AuxFile(
+                path="pipe_dir/nested.yaml",
+                size_bytes=len(NESTED_YAML_BYTES),
+                sha256=_sha(NESTED_YAML_BYTES),
+            )
+        ],
+    )
+    ModelWeights.register("nested_plugin", [entry])
+    return entry
+
+
+def test_nested_row_is_present_after_download_and_resolves_offline(
+    tmp_path, nested, monkeypatch, fake_hub
+):
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    fake = fake_hub()
+    primary = ModelWeights.resolve("dinomaly_nested", cache_dir=tmp_path)
+    assert primary == _snapshot_dir(tmp_path, nested) / "pipe_dir" / "nested.pt"
+    st = ModelWeights.status("dinomaly_nested", tmp_path, verify=True)
+    assert st.state == "present" and st.aux_ok and st.sha256_ok
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    calls = len(fake.calls)
+    assert ModelWeights.resolve("dinomaly_nested", cache_dir=tmp_path) == primary
+    assert len(fake.calls) == calls  # served from the cache, nothing fetched
+
+
+def test_nested_row_export_import_roundtrip(tmp_path, nested):
+    cache = tmp_path / "cache"
+    _seed(cache, nested)
+    export_dir = tmp_path / "export"
+    [exported] = ModelWeights.export_to(export_dir, ["dinomaly_nested"], cache)
+    assert exported["exported"]
+    snap = _snapshot_dir(export_dir, nested)
+    assert (snap / "pipe_dir" / "nested.yaml").read_bytes() == NESTED_YAML_BYTES
+    target = tmp_path / "target"
+    [imported] = ModelWeights.import_from(export_dir, None, target)
+    assert imported["imported"]
+    assert ModelWeights.status("dinomaly_nested", target, verify=True).sha256_ok
+
+
+def test_nested_row_remove_frees_both_files(tmp_path, nested):
+    _seed(tmp_path, nested)
+    freed = ModelWeights.remove("dinomaly_nested", tmp_path)
+    assert freed == len(NESTED_PT_BYTES) + len(NESTED_YAML_BYTES)
+    assert ModelWeights.status("dinomaly_nested", tmp_path).state == "absent"
