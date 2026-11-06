@@ -301,7 +301,7 @@ def _trained_pipeline(
 
 
 _LENTILS_REPO = f"{HF_ORG}/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils"
-_LENTILS_REVISION = "3602a04ea2a8a19494c4d1bc25bf804e942e9277"
+_LENTILS_REVISION = "2b6d2164840a6a8ab6cd7d232e291d861e66b2bb"
 
 TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
     _trained_pipeline(
@@ -333,8 +333,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="b30719616452b12b95fabfeb41b5c8c81b29e651ef8b482699b176c568360b93",
         size_bytes=592_002_738,
         yaml_path="dinomaly_cir_full_pipeline/dinomaly_cir.yaml",
-        yaml_sha256="81cf48ff6d33b31e1df6d27f1755328e829fec872e8731279a7dbec7ab41c306",
-        yaml_size=2748,
+        yaml_sha256="1331517e13ff13f46be6afef7d28f8b82fc145a405ffb0ebb5794dc80b38a36a",
+        yaml_size=2753,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a CIR channel "
@@ -352,8 +352,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="4d181301f4adae09ffd781f6325a41933c98ef2b8b0e77c79346f0db222396e1",
         size_bytes=592_003_673,
         yaml_path="dinomaly_custom_selector_full_pipeline/dinomaly_custom.yaml",
-        yaml_sha256="b4bfccc2641e6e3f3336db57d6db5d47105f7173bc8e3bb5e8ff0a1f985301b9",
-        yaml_size=2865,
+        yaml_sha256="ef005ce1d1da998aa5d10582aa914ee844b868d888c24c820c8c3831985fb205",
+        yaml_size=2870,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a custom channel "
@@ -371,8 +371,8 @@ TRAINED_PIPELINES: tuple[PluginWeightEntry, ...] = (
         sha256="b49e21cc66f8dbade7150fa0c5daba5475b2789b8777c13bd4637e466757df47",
         size_bytes=592_002_738,
         yaml_path="dinomaly_rgb_full_pipeline/dinomaly_rgb.yaml",
-        yaml_sha256="81165f3cef2f83640918b82f629c80a33225b35bb762cb175de758f48680a2d7",
-        yaml_size=2765,
+        yaml_sha256="60508a0cb9a7e33194f01bcfcee63d914941d5d11f36a7b6130d4505fbe71f92",
+        yaml_size=2770,
         license="Apache-2.0",
         description=(
             "Dinomaly pipeline trained on the lentils foreign-object demo with a false-RGB "
@@ -625,16 +625,18 @@ class ModelWeights:
     # ------------------------------------------------------------------
 
     @classmethod
+    def snapshot_root(cls, weight: RegisteredWeight, cache_dir: Path) -> Path:
+        """``<cache>/<cache_dir_name>/snapshots/<revision>``.
+
+        Every file path of a row (``filename`` and each aux ``path``) is relative
+        to this folder, also when the file sits in a folder of the repository.
+        """
+        return cache_dir / weight.cache_dir_name / "snapshots" / weight.entry.revision
+
+    @classmethod
     def snapshot_path(cls, weight: RegisteredWeight, cache_dir: Path) -> Path:
         """``<cache>/<cache_dir_name>/snapshots/<revision>/<filename>``."""
-        entry = weight.entry
-        return (
-            cache_dir
-            / weight.cache_dir_name
-            / "snapshots"
-            / entry.revision
-            / entry.filename
-        )
+        return cls.snapshot_root(weight, cache_dir) / weight.entry.filename
 
     @classmethod
     def status(
@@ -664,22 +666,23 @@ class ModelWeights:
         cls, weight: RegisteredWeight, root: Path, *, verify: bool
     ) -> ModelStatus:
         entry = weight.entry
-        path = cls.snapshot_path(weight, root)
+        snap = cls.snapshot_root(weight, root)
+        path = snap / entry.filename
         size_on_disk = cls._file_size(path)
         exists = size_on_disk is not None
         size_ok = (size_on_disk == entry.size_bytes) if exists else None
         aux_ok: bool | None = None
         if entry.aux_files:
             aux_ok = all(
-                cls._file_size(path.parent / aux.path) == aux.size_bytes
+                cls._file_size(snap / aux.path) == aux.size_bytes
                 for aux in entry.aux_files
             )
         sha_ok: bool | None = None
         if verify and exists and size_ok:
             sha_ok = sha256_of(path) == entry.sha256 and all(
-                sha256_of(path.parent / aux.path) == aux.sha256
+                sha256_of(snap / aux.path) == aux.sha256
                 for aux in entry.aux_files
-                if (path.parent / aux.path).is_file()
+                if (snap / aux.path).is_file()
             )
         partial: int | None = None
         if not exists:
@@ -1042,11 +1045,13 @@ class ModelWeights:
                         {**weight.to_json_dict(), "exported": False, "path": None}
                     )
                     continue
-                dst_primary = cls.snapshot_path(weight, export_dir)
+                src_root = cls.snapshot_root(weight, root)
+                dst_root = cls.snapshot_root(weight, export_dir)
+                dst_primary = dst_root / weight.entry.filename
                 copied: list[dict[str, Any]] = []
                 for rel, sha, size in cls._files_of(weight):
-                    src = current.path.parent / rel
-                    dst = dst_primary.parent / rel
+                    src = src_root / rel
+                    dst = dst_root / rel
                     cls._copy_with_progress(src, dst, weight.name, size, progress)
                     if progress is not None:
                         progress.verifying(weight.name)
@@ -1149,15 +1154,16 @@ class ModelWeights:
                             }
                         )
                         continue
-                    src_primary = cls.snapshot_path(weight, source_dir)
+                    src_root = cls.snapshot_root(weight, source_dir)
+                    src_primary = src_root / weight.entry.filename
                     if not src_primary.is_file():
                         raise ModelDownloadError(
                             f"{weight.name}: {src_primary} is missing from the export folder"
                         )
-                    staged_primary = cls.snapshot_path(weight, staging)
+                    staged_root = cls.snapshot_root(weight, staging)
                     for rel, sha, size in cls._files_of(weight):
-                        src = src_primary.parent / rel
-                        dst = staged_primary.parent / rel
+                        src = src_root / rel
+                        dst = staged_root / rel
                         cls._copy_with_progress(src, dst, weight.name, size, progress)
                         if progress is not None:
                             progress.verifying(weight.name)
@@ -1166,21 +1172,20 @@ class ModelWeights:
                                 f"Import of {weight.entry.display_name} failed: checksum mismatch "
                                 f"on {rel}. Nothing was changed."
                             )
-                    moves.append((weight, staged_primary))
+                    moves.append((weight, staged_root))
                 # Second pass: every staged file verified; rename snapshots into place.
-                for weight, staged_primary in moves:
-                    final_primary = cls.snapshot_path(weight, root)
-                    final_primary.parent.parent.mkdir(parents=True, exist_ok=True)
-                    if final_primary.parent.exists():
-                        for item in staged_primary.parent.rglob("*"):
+                for weight, staged_root in moves:
+                    final_root = cls.snapshot_root(weight, root)
+                    final_primary = final_root / weight.entry.filename
+                    final_root.parent.mkdir(parents=True, exist_ok=True)
+                    if final_root.exists():
+                        for item in staged_root.rglob("*"):
                             if item.is_file():
-                                target = final_primary.parent / item.relative_to(
-                                    staged_primary.parent
-                                )
+                                target = final_root / item.relative_to(staged_root)
                                 target.parent.mkdir(parents=True, exist_ok=True)
                                 os.replace(item, target)
                     else:
-                        os.replace(staged_primary.parent, final_primary.parent)
+                        os.replace(staged_root, final_root)
                     cls._alias_default_revision(final_primary)
                     results.append(
                         {
@@ -1225,10 +1230,10 @@ class ModelWeights:
         root = cls.resolve_cache_dir(cache_dir)
         freed = 0
         with cls._locked(root):
-            primary = cls.snapshot_path(weight, root)
+            snap = cls.snapshot_root(weight, root)
             repo_dir = root / weight.cache_dir_name
             for rel, _sha, _size in cls._files_of(weight):
-                freed += cls._remove_snapshot_file(primary.parent / rel, repo_dir)
+                freed += cls._remove_snapshot_file(snap / rel, repo_dir)
             cls._prune_repo_dir(repo_dir)
         return freed
 
