@@ -562,6 +562,37 @@ def _load_evaluation_weights(
     return None
 
 
+def _raise_on_unfitted_frozen_nodes(
+    pipeline: CuvisPipeline, freeze_nodes: list[str]
+) -> None:
+    """Raise when a frozen statistical node has no fitted or loaded state.
+
+    Nothing in this run will ever fit a frozen node, in any mode: it must
+    already hold fitted or loaded state by the time this is called (after
+    weights, if any, are loaded), or its arrival here unfitted is a config
+    error rather than a silently-untrained node.
+    """
+    if not freeze_nodes:
+        return
+    frozen_stat_nodes_by_name = {
+        node.name: node
+        for node in pipeline.nodes()
+        if node.requires_initial_fit and node.name in freeze_nodes
+    }
+    unfitted_frozen = [
+        name
+        for name, node in frozen_stat_nodes_by_name.items()
+        if not getattr(node, "_statistically_initialized", False)
+    ]
+    if unfitted_frozen:
+        raise ValueError(
+            f"freeze_nodes names statistical node(s) with no fitted or "
+            f"loaded state: {unfitted_frozen}. A frozen statistical "
+            "node is never fitted by this run, so it must arrive "
+            "already initialized, via --weights-path or an earlier run."
+        )
+
+
 def _log_calibration_outcome(outcome: CalibrationOutcome) -> None:
     """Report the post-fit threshold calibration: info when calibrated, warning when
     a calibratable decider was left with its shipped thresholds, silent otherwise."""
@@ -742,11 +773,15 @@ def restore_trainrun(
     # state that arrived via loaded weights (load_state_dict marks those
     # nodes): re-deriving them would overwrite trained buffers with statistics
     # from this run's train split, so only uncovered nodes are initialized.
+    # A frozen node is excluded here too: freeze_nodes is honoured in every
+    # mode, not just train, so a frozen node the loaded weights did not cover
+    # is never silently refit from whatever split this run happens to use.
     evaluating = mode in ("validate", "test")
     nodes_needing_stat_fit = [
         node.name
         for node in pipeline.nodes()
         if node.requires_initial_fit
+        and node.name not in freeze_nodes
         and not (evaluating and getattr(node, "_statistically_initialized", False))
     ]
     requires_static_fit = bool(nodes_needing_stat_fit)
@@ -838,27 +873,7 @@ def restore_trainrun(
                 device=None if device == "auto" else device,
             )
 
-        # A frozen statistical node must hold fitted or loaded state: nothing
-        # in this run will ever fit it, so arriving here unfitted is a config
-        # error, not a silently-untrained node.
-        if freeze_nodes:
-            frozen_stat_nodes_by_name = {
-                node.name: node
-                for node in pipeline.nodes()
-                if node.requires_initial_fit and node.name in freeze_nodes
-            }
-            unfitted_frozen = [
-                name
-                for name, node in frozen_stat_nodes_by_name.items()
-                if not getattr(node, "_statistically_initialized", False)
-            ]
-            if unfitted_frozen:
-                raise ValueError(
-                    f"freeze_nodes names statistical node(s) with no fitted or "
-                    f"loaded state: {unfitted_frozen}. A frozen statistical "
-                    "node is never fitted by this run, so it must arrive "
-                    "already initialized, via --weights-path or an earlier run."
-                )
+        _raise_on_unfitted_frozen_nodes(pipeline, freeze_nodes)
 
         # Step 1: Statistical initialization (always first, if needed)
         if train_fit_node_names:
@@ -917,7 +932,11 @@ def restore_trainrun(
             )
 
         # Statistical initialization only for nodes the loaded weights did
-        # not cover (none, when a complete .pt was restored).
+        # not cover (none, when a complete .pt was restored); a frozen node
+        # is excluded from this run's fit in every mode, so one that arrives
+        # unfitted here is a config error, not something to silently fit
+        # from this split's own statistics.
+        _raise_on_unfitted_frozen_nodes(pipeline, freeze_nodes)
         if requires_static_fit:
             logger.info(
                 f"  Running statistical initialization for: {nodes_needing_stat_fit}"
@@ -943,7 +962,11 @@ def restore_trainrun(
             )
 
         # Statistical initialization only for nodes the loaded weights did
-        # not cover (none, when a complete .pt was restored).
+        # not cover (none, when a complete .pt was restored); a frozen node
+        # is excluded from this run's fit in every mode, so one that arrives
+        # unfitted here is a config error, not something to silently fit
+        # from this split's own statistics.
+        _raise_on_unfitted_frozen_nodes(pipeline, freeze_nodes)
         if requires_static_fit:
             logger.info(
                 f"  Running statistical initialization for: {nodes_needing_stat_fit}"

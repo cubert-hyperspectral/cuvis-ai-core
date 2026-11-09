@@ -907,6 +907,54 @@ def test_restore_trainrun_train_frozen_node_without_state_raises(
 
 
 @pytest.mark.parametrize("mode", ["validate", "test"])
+def test_restore_trainrun_eval_freeze_nodes_excluded_from_fit(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict, mode
+) -> None:
+    """A frozen statistical node is excluded from the fit selection in
+    validate/test too, even when it is not yet statistically initialized by
+    the time the selection is computed: a sibling statistical node is still
+    fit, but the frozen one is never added to that fit, because nothing in
+    this run is ever allowed to fit it."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+
+    # No weights file: a statistical-only trainrun evaluates without one.
+    # node0 (frozen) is marked statistically initialized directly, simulating
+    # it being fitted through some means other than this run, e.g. restored
+    # in-process earlier in the same session (the companion raise test below
+    # covers the case where it is NOT initialized).
+    fake_pipeline = FakeRestorePipeline(node_fits=(True, True))
+    fake_pipeline.nodes[1]._statistically_initialized = True
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS, test_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode=mode)
+
+    stat_trainer = RecordingTrainer.all_instances[0]
+    # node0 is frozen and never fitted; node1 is not frozen and is fitted.
+    assert stat_trainer.fit_node_names_calls == [["node1"]]
+
+
+@pytest.mark.parametrize("mode", ["validate", "test"])
+def test_restore_trainrun_eval_frozen_node_without_state_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict, mode
+) -> None:
+    """A frozen statistical node that arrives unfitted after the weights load
+    is a config error in validate/test too: a partial checkpoint must not be
+    silently patched over by fitting the frozen node from this split."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+    _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    # The checkpoint does not cover node0, and nothing else initializes it.
+    fake_pipeline.missing_nodes = ["node0"]
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS, test_ds=_DS)
+
+    with pytest.raises(ValueError, match="node0"):
+        restore_mod.restore_trainrun(path, mode=mode)
+
+
+@pytest.mark.parametrize("mode", ["validate", "test"])
 def test_restore_trainrun_eval_missing_split_raises(
     monkeypatch,
     tmp_path: Path,
