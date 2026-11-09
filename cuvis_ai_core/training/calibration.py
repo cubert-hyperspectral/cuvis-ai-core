@@ -375,13 +375,6 @@ def _input_source(
     return None
 
 
-def _logits_source(
-    pipeline: CuvisPipeline, decider: BinaryDecider
-) -> tuple[str, str] | None:
-    """The ``(node, port)`` wired into ``decider.inputs.logits`` - the space it thresholds."""
-    return _input_source(pipeline, decider, "logits")
-
-
 def _join_frames(values: list[Any]) -> Any:
     """Per-batch values of one input joined over the split, in frame order.
 
@@ -474,7 +467,7 @@ def calibrate_pipeline_deciders(
     records: dict[str, DeciderCalibration] = {}
     sources: dict[BinaryDecider, tuple[str, str]] = {}
     for decider in deciders:
-        source = _logits_source(pipeline, decider)
+        source = _input_source(pipeline, decider, "logits")
         if source is None:
             records[decider.name] = DeciderCalibration.skipped_decider(
                 decider, DeciderSkip.NOTHING_WIRED
