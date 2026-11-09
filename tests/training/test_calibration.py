@@ -810,3 +810,196 @@ def test_a_positional_only_objective_is_no_objective_parameter():
         record.skip_detail
         == "_PositionalObjectiveDecider.calibrate takes no calibration objective"
     )
+
+
+# --- extra decider inputs and a normal-only val split -------------------------------------
+
+_VALID = PortSpec(dtype=torch.bool, shape=(-1, -1, -1, -1), optional=True)
+_GROUP = PortSpec(dtype=list, shape=(), optional=True)
+
+
+class _GroupedDecider(_MockCalibratableDecider):
+    """Decider that asks for its validity mask and group and accepts a normal-only split."""
+
+    INPUT_SPECS = {**BinaryDecider.INPUT_SPECS, "valid_mask": _VALID, "group": _GROUP}
+    CALIBRATION_INPUTS = ("valid_mask", "group")
+    CALIBRATION_NORMAL_ONLY = True
+
+    def forward(self, logits, valid_mask=None, group=None, **_):
+        """Threshold the scores; the extra inputs only matter to calibrate."""
+        return {"decisions": (logits >= self.threshold)}
+
+    def calibrate(self, scores, targets, *, inputs):
+        """Record the gathered inputs, then calibrate as the mock does."""
+        self.inputs_seen = inputs
+        return super().calibrate(scores, targets)
+
+
+def _grouped_batch(score: float, anomalous: bool, group: str):
+    batch = _batch(score, anomalous)
+    batch["group"] = [group]
+    return batch
+
+
+def _grouped_pipeline(dec):
+    src = _ScoreMaskSource(name="src")
+    pipe = _pipeline(dec, source=src)
+    pipe.connect(src.outputs.mask, dec.inputs.valid_mask)
+    return pipe
+
+
+def test_calibration_inputs_come_from_their_edge_or_the_batch():
+    dec = _GroupedDecider(name="dec")
+    batches = [
+        _grouped_batch(1.0, True, "day2"),
+        _grouped_batch(0.0, False, "day2"),
+        _grouped_batch(0.0, False, "day3"),
+    ]
+    outcome = calibrate_pipeline_deciders(
+        _grouped_pipeline(dec), _ListDataModule(batches), split="val"
+    )
+
+    assert outcome.calibrated
+    assert dec.inputs_seen["group"] == ["day2", "day2", "day3"]
+    valid = dec.inputs_seen["valid_mask"]
+    assert valid.shape == (3, 4, 4, 1)
+    assert bool(valid[0, 0, 0, 0]) and not bool(valid[1].any())
+
+
+def test_a_normal_only_val_calibrates_a_decider_that_opts_in():
+    dec = _GroupedDecider(name="dec")
+    normals = [_grouped_batch(0.0, False, "day2"), _grouped_batch(0.0, False, "day3")]
+    outcome = calibrate_pipeline_deciders(
+        _grouped_pipeline(dec), _ListDataModule(normals), split="val"
+    )
+
+    assert outcome.calibrated
+    assert (outcome.frames, outcome.anomalous_frames) == (2, 0)
+    assert dec.threshold == 0.42
+
+
+def test_a_normal_only_val_still_skips_when_a_decider_has_not_opted_in():
+    grouped = _GroupedDecider(name="grouped")
+    plain = _MockCalibratableDecider(name="plain")
+    src = _ScoreMaskSource(name="src")
+    pipe = _pipeline(grouped, source=src)
+    pipe.connect(src.outputs.mask, grouped.inputs.valid_mask)
+    pipe.connect(src.outputs.scores, plain.inputs.logits)
+    normals = [_grouped_batch(0.0, False, "day2"), _grouped_batch(0.0, False, "day3")]
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(normals), split="val")
+
+    assert not outcome.calibrated
+    assert outcome.phase_skip is CalibrationPhaseSkip.SINGLE_CLASS
+    assert grouped.threshold == 0.5 and plain.threshold == 0.5
+
+
+def test_an_all_anomalous_val_skips_even_a_decider_that_opts_in():
+    dec = _GroupedDecider(name="dec")
+    anomalous = [_grouped_batch(1.0, True, "day2"), _grouped_batch(1.0, True, "day3")]
+    outcome = calibrate_pipeline_deciders(
+        _grouped_pipeline(dec), _ListDataModule(anomalous), split="val"
+    )
+
+    assert outcome.phase_skip is CalibrationPhaseSkip.SINGLE_CLASS
+    assert dec.threshold == 0.5
+
+
+def test_a_calibration_input_that_receives_nothing_skips_the_decider():
+    dec = _GroupedDecider(name="dec")
+    no_group = [_batch(1.0, True), _batch(0.0, False)]
+    outcome = calibrate_pipeline_deciders(
+        _grouped_pipeline(dec), _ListDataModule(no_group), split="val"
+    )
+
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.NO_SCORES
+    assert record.skip_detail == "dec.group received nothing over val"
+    assert dec.threshold == 0.5
+
+
+@pytest.mark.parametrize("port", ["not_a_port", "logits"])
+def test_calibration_inputs_name_extra_input_ports(port):
+    with pytest.raises(TypeError, match="CALIBRATION_INPUTS"):
+
+        class _Bad(_MockCalibratableDecider):
+            CALIBRATION_INPUTS = (port,)
+
+
+def test_a_calibration_input_missing_from_some_batches_skips_the_decider():
+    dec = _GroupedDecider(name="dec")
+    gappy = [
+        _grouped_batch(1.0, True, "day2"),
+        _batch(0.0, False),
+        _grouped_batch(0.0, False, "day3"),
+    ]
+    outcome = calibrate_pipeline_deciders(
+        _grouped_pipeline(dec), _ListDataModule(gappy), split="val"
+    )
+
+    (record,) = outcome.deciders
+    assert record.skip is DeciderSkip.NO_SCORES
+    assert record.skip_detail == "dec.group covered 2 of 3 frames over val"
+    assert dec.threshold == 0.5
+
+
+def test_calibration_inputs_that_cannot_be_joined_fail_only_their_decider():
+    grouped = _GroupedDecider(name="grouped")
+    plain = _MockCalibratableDecider(name="plain")
+    src = _ScoreMaskSource(name="src")
+    pipe = _pipeline(
+        grouped, source=src
+    )  # valid_mask stays unconnected: read from the batch
+    pipe.connect(src.outputs.scores, plain.inputs.logits)
+    first = _grouped_batch(1.0, True, "day2")
+    first["valid_mask"] = torch.ones((1, 4, 4, 1), dtype=torch.bool)
+    second = _grouped_batch(0.0, False, "day3")
+    second["valid_mask"] = torch.ones((1, 3, 4, 1), dtype=torch.bool)
+    outcome = calibrate_pipeline_deciders(
+        pipe, _ListDataModule([first, second]), split="val"
+    )
+
+    records = {record.name: record for record in outcome.deciders}
+    assert records["grouped"].skip is DeciderSkip.CALIBRATE_FAILED
+    assert records["grouped"].skip_detail.startswith("RuntimeError")
+    assert records["plain"].status is DeciderCalibrationStatus.CALIBRATED
+
+
+def test_variadic_ports_cannot_be_calibration_inputs():
+    with pytest.raises(TypeError, match="variadic"):
+
+        class _Fanned(_MockCalibratableDecider):
+            INPUT_SPECS = {
+                **BinaryDecider.INPUT_SPECS,
+                "extras": PortSpec(dtype=torch.float32, shape=(-1,), variadic=True),
+            }
+            CALIBRATION_INPUTS = ("extras",)
+
+
+class _DeviceRecordingDecider(_GroupedDecider):
+    """Grouped decider that records where its calibration tensors live."""
+
+    def calibrate(self, scores, targets, *, inputs):
+        """Record the devices, then calibrate as the mock does."""
+        self.devices_seen = {
+            "scores": scores.device.type,
+            "targets": targets.device.type,
+            "valid_mask": inputs["valid_mask"].device.type,
+        }
+        return super().calibrate(scores, targets, inputs=inputs)
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_calibration_tensors_leave_the_device_while_the_split_runs():
+    dec = _DeviceRecordingDecider(name="dec")
+    src = _BufferedSource(name="src")
+    pipe = _pipeline(dec, source=src)
+    pipe.connect(
+        src.outputs.mask, dec.inputs.valid_mask
+    )  # the mask is also the ground truth
+    pipe.to("cuda")
+    batches = [_grouped_batch(1.0, True, "day2"), _grouped_batch(0.0, False, "day3")]
+    outcome = calibrate_pipeline_deciders(pipe, _ListDataModule(batches), split="val")
+
+    assert outcome.calibrated
+    assert dec.devices_seen == {"scores": "cpu", "targets": "cpu", "valid_mask": "cpu"}

@@ -39,6 +39,16 @@ class BinaryDecider(Node):
     hooks, :meth:`calibration_scores` and :meth:`calibration_image_scores`; the default
     :meth:`calibrate` does the rest. A decider without a rule is left out of the phase unless
     it overrides :meth:`calibrate` itself.
+
+    Two more class attributes serve a decider whose override needs more than the scores and
+    the mask. ``CALIBRATION_INPUTS`` names extra input ports of the decider (a validity mask,
+    a group id); the phase gathers each one's per-frame values over the split, from the edge
+    that feeds the port or, for an unconnected port, from the batch key of the same name, and
+    calls ``calibrate(scores, targets, inputs={port: values})``. Tensor values are stacked on
+    the frame axis, list values (a collated batch of strings) are joined in frame order.
+    ``CALIBRATION_NORMAL_ONLY`` lets the phase run on a split with no anomalous frame, for a
+    rule that sets its threshold on normal frames alone; the phase does so only when every
+    decider it calibrates opts in.
     """
 
     INPUT_SPECS = {
@@ -62,9 +72,22 @@ class BinaryDecider(Node):
     CALIBRATION_GATE: ClassVar[str | None] = None
     CALIBRATION_CUTOFF: ClassVar[str] = "threshold"
     CALIBRATION_LEVELS: ClassVar[tuple[str, ...]] = CALIBRATION_LEVELS
+    CALIBRATION_INPUTS: ClassVar[tuple[str, ...]] = ()
+    CALIBRATION_NORMAL_ONLY: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        for port in cls.CALIBRATION_INPUTS:
+            if port == "logits" or port not in cls.INPUT_SPECS:
+                raise TypeError(
+                    f"{cls.__name__}.CALIBRATION_INPUTS names {port!r}, which is not one of "
+                    "its extra input ports (the scores already arrive through logits)"
+                )
+            if getattr(cls.INPUT_SPECS[port], "variadic", False):
+                raise TypeError(
+                    f"{cls.__name__}.CALIBRATION_INPUTS names the variadic port {port!r}; "
+                    "the calibration phase reads one source per port"
+                )
         if (
             cls.CALIBRATION_RULE is not None
             and cls.CALIBRATION_RULE not in CALIBRATION_RULES
