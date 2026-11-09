@@ -87,12 +87,16 @@ def is_cuda_out_of_memory(exc: BaseException | None) -> bool:
 
 @dataclass(frozen=True)
 class SplitBatch:
-    """One batch of a split pass: its index, the frames seen so far and the outputs."""
+    """One batch of a split pass: its index, the frames seen so far, the outputs and the batch.
+
+    ``batch`` is the batch as the loader handed it over, before it moved to the device.
+    """
 
     batch_idx: int
     frames_done: int
     frames_total: int
     outputs: dict[tuple[str, str], Any]
+    batch: Any = None
 
 
 @dataclass(frozen=True)
@@ -187,7 +191,7 @@ def forward_split(
             done += batch_frames(batch)
             if on_batch is not None:
                 on_batch(done, total)
-            yield SplitBatch(batch_idx, done, total, outputs)
+            yield SplitBatch(batch_idx, done, total, outputs, batch)
 
 
 def default_metric_nodes(pipeline: CuvisPipeline) -> list[Node]:

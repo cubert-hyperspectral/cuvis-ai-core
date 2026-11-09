@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A decider can ask the threshold calibration for more than its scores: `BinaryDecider.CALIBRATION_INPUTS` names extra input ports (a validity mask, a group id), and the phase passes their values over the split as `calibrate(scores, targets, inputs={port: values})`, read from the output wired into each port or, for an unconnected port, from the batch key of that name. A port that receives nothing skips the decider as `NO_SCORES`.
+- `BinaryDecider.CALIBRATION_NORMAL_ONLY` lets the phase calibrate on a split without anomalous frames, for a rule set on normal frames alone (a false-alarm bound). It applies only when every wired decider opts in; any other single-class split is still skipped.
+- `SplitBatch` carries the batch it was computed from (`batch`), as the loader handed it over.
+
 ## 0.20.2 - 2026-11-06
 
 - The three `dinomaly_lentils_*` trained pipelines are pinned to the Hub revision `2b6d2164` of `cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`. Their yamls at `3602a04e` named `cuvis_ai.deciders.two_stage_decider.TwoStageBinaryDecider`, a path cuvis-ai 0.18.0 retired, so `download-model` fetched pipelines that failed to load with "Node class not found". At `2b6d2164` they name `cuvis_ai.node.deciders.two_stage_decider.TwoStageBinaryDecider`; the `.pt` files are unchanged.
