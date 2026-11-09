@@ -43,13 +43,17 @@ class _NodeList(list):
 
 
 class _FakeNode:
-    """Minimal node stub with the two attributes restore_trainrun inspects."""
+    """Minimal node stub with the attributes restore_trainrun inspects."""
 
     def __init__(
         self, *, name: str = "node", requires_initial_fit: bool = False
     ) -> None:
         self.name = name
         self.requires_initial_fit = requires_initial_fit
+        self.frozen = False
+
+    def freeze(self) -> None:
+        self.frozen = True
 
 
 class FakeRestorePipeline:
@@ -91,6 +95,12 @@ class FakeRestorePipeline:
         # Node names _restore_weights_from_checkpoint reports as absent from
         # the checkpoint. Tests set this to simulate a partial weights file.
         self.missing_nodes: list[str] = []
+        self.freeze_calls: list[list[str]] = []
+        self.initial_weights_calls: list[dict] = []
+        # Node names a required (non-fitted, stateful) node is missing from
+        # the initial-weights checkpoint; tests set this to make
+        # _restore_initial_train_weights raise.
+        self.missing_initial_nodes: list[str] = []
 
     def _restore_weights_from_checkpoint(
         self,
@@ -150,6 +160,47 @@ class FakeRestorePipeline:
     def unfreeze_nodes_by_name(self, names: list[str]) -> None:
         self.unfreeze_calls.append(list(names))
 
+    def freeze_nodes_by_name(self, names: list[str]) -> None:
+        self.freeze_calls.append(list(names))
+        available = {node.name: node for node in self.nodes}
+        missing = [name for name in names if name not in available]
+        if missing:
+            raise ValueError(f"Nodes not found in pipeline: {missing}")
+        for name in names:
+            available[name].freeze()
+
+    def _restore_initial_train_weights(
+        self,
+        weights_path,
+        *,
+        fitted_node_names: set[str],
+        device: str | None = None,
+    ) -> list[str]:
+        """Record the call; raise like the real loader when a required
+        (non-fitted, stateful) node is listed in ``missing_initial_nodes``."""
+        self.initial_weights_calls.append(
+            {
+                "weights_path": str(weights_path),
+                "fitted_node_names": set(fitted_node_names),
+                "device": device,
+            }
+        )
+        required_missing = [
+            name for name in self.missing_initial_nodes if name not in fitted_node_names
+        ]
+        if required_missing:
+            raise ValueError(
+                f"Initial weights file is missing required node(s): {required_missing}"
+            )
+        skipped = [node.name for node in self.nodes if node.name in fitted_node_names]
+        for node in self.nodes:
+            if (
+                node.name not in fitted_node_names
+                and node.name not in self.missing_initial_nodes
+            ):
+                node._statistically_initialized = True
+        return skipped
+
     def visualize(self, *, format: str, output_path) -> None:
         self.visualize_calls.append({"format": format, "output_path": output_path})
 
@@ -206,10 +257,14 @@ class RecordingTrainer:
         self.kwargs = kwargs
         self.calls: list[str] = []
         self.eval_ckpt_paths: list[str | None] = []
+        self.fit_node_names_calls: list[list[str] | None] = []
         self.__class__.all_instances.append(self)
 
-    def fit(self) -> None:
+    def fit(self, node_names: list[str] | None = None) -> None:
         self.calls.append("fit")
+        self.fit_node_names_calls.append(
+            list(node_names) if node_names is not None else None
+        )
 
     def validate(self, ckpt_path: str | None = None) -> None:
         self.calls.append("validate")

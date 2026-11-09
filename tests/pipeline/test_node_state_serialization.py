@@ -4,6 +4,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline.pipeline import CuvisPipeline
 
 
@@ -329,3 +330,120 @@ class TestNodeStateSerialization:
         # Values should be equal (ignoring device)
         assert torch.equal(new_node.fitted_mean.cpu(), node.fitted_mean.cpu())
         assert torch.equal(new_node.linear_weight.cpu(), node.linear_weight.cpu())
+
+
+class _StatelessNode(Node):
+    """A node with no parameters, buffers or extra state: nothing to load."""
+
+    def forward(self, **kwargs):
+        return {}
+
+
+class TestRestoreInitialTrainWeights:
+    """Tests for _restore_initial_train_weights (train-mode initial weights)."""
+
+    def _write_checkpoint(self, path, state_dict: dict) -> None:
+        torch.save({"state_dict": state_dict, "metadata": {}}, path)
+
+    def test_fitted_node_is_never_loaded_even_when_present(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """A node this run fits is skipped even though the checkpoint has a row
+        for it (the row may have an incompatible shape: a 7,200-row coreset
+        against this run's 80,000-row bank)."""
+        pipeline = CuvisPipeline("train_initial")
+        fitted_node = mock_statistical_trainable_node(
+            input_dim=3, hidden_dim=2, name="fitted_node"
+        )
+        pipeline._graph.add_node(fitted_node)
+
+        checkpoint_node = mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        checkpoint_node.statistical_initialization(
+            iter([{"data": torch.randn(1, 4, 4, 3)}])
+        )
+        stale_state = checkpoint_node.state_dict()
+        weights_path = tmp_path / "weights.pt"
+        self._write_checkpoint(weights_path, {"fitted_node": stale_state})
+
+        before = {k: v.clone() for k, v in fitted_node.state_dict().items()}
+        skipped = pipeline._restore_initial_train_weights(
+            weights_path, fitted_node_names={"fitted_node"}
+        )
+
+        assert skipped == ["fitted_node"]
+        for key, value in before.items():
+            assert torch.equal(fitted_node.state_dict()[key], value)
+
+    def test_other_stateful_node_loads_strictly(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """A node not fitted by this run loads its initial weights strictly."""
+        pipeline = CuvisPipeline("train_initial")
+        other_node = mock_statistical_trainable_node(
+            input_dim=3, hidden_dim=2, name="other_node"
+        )
+        pipeline._graph.add_node(other_node)
+
+        source_node = mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        source_node.statistical_initialization(
+            iter([{"data": torch.randn(1, 4, 4, 3)}])
+        )
+        weights_path = tmp_path / "weights.pt"
+        self._write_checkpoint(weights_path, {"other_node": source_node.state_dict()})
+
+        skipped = pipeline._restore_initial_train_weights(
+            weights_path, fitted_node_names=set()
+        )
+
+        assert skipped == []
+        assert torch.equal(other_node.fitted_mean, source_node.fitted_mean)
+        assert other_node._statistically_initialized is True
+
+    def test_missing_required_stateful_node_raises(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        """A stateful node this run does not fit must be present in the
+        checkpoint; a missing one raises, naming it."""
+        pipeline = CuvisPipeline("train_initial")
+        other_node = mock_statistical_trainable_node(
+            input_dim=3, hidden_dim=2, name="other_node"
+        )
+        pipeline._graph.add_node(other_node)
+
+        weights_path = tmp_path / "weights.pt"
+        self._write_checkpoint(weights_path, {})
+
+        with pytest.raises(ValueError, match="other_node"):
+            pipeline._restore_initial_train_weights(
+                weights_path, fitted_node_names=set()
+            )
+
+    def test_stateless_node_is_skipped_without_requiring_a_checkpoint_row(
+        self, tmp_path
+    ):
+        """A stateless node needs no checkpoint entry, fitted or not."""
+        pipeline = CuvisPipeline("train_initial")
+        stateless = _StatelessNode(name="stateless")
+        pipeline._graph.add_node(stateless)
+
+        weights_path = tmp_path / "weights.pt"
+        self._write_checkpoint(weights_path, {})
+
+        skipped = pipeline._restore_initial_train_weights(
+            weights_path, fitted_node_names=set()
+        )
+
+        assert skipped == []
+
+    def test_missing_weights_file_raises_file_not_found(
+        self, mock_statistical_trainable_node, tmp_path
+    ):
+        pipeline = CuvisPipeline("train_initial")
+        pipeline._graph.add_node(
+            mock_statistical_trainable_node(input_dim=3, hidden_dim=2)
+        )
+
+        with pytest.raises(FileNotFoundError):
+            pipeline._restore_initial_train_weights(
+                tmp_path / "absent.pt", fitted_node_names=set()
+            )

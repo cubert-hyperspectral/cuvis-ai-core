@@ -621,14 +621,19 @@ def restore_trainrun(
     plugins_dirs : list[str | Path] | None
         Plugins directories the trainrun's data_module is resolved against
     weights_path : str | Path | None
-        Pipeline weights (.pt) to load for 'validate'/'test' mode. Defaults to
-        the ``<output_dir>/trained_models/<pipeline>_restored.pt`` file train
-        mode writes; a gradient trainrun errors when no weights are found.
+        Pipeline weights (.pt) to load. In 'validate'/'test' mode these are a
+        complete trained checkpoint, loaded as before: defaults to the
+        ``<output_dir>/trained_models/<pipeline>_restored.pt`` file train mode
+        writes; a gradient trainrun errors when no weights are found. In
+        'train' mode these are INITIAL weights: the nodes this run fits
+        (every statistical node minus ``freeze_nodes``) are never loaded from
+        this file, even when it holds a row for them; every other node that
+        holds state (parameters, buffers or extra state) must be present in
+        the file, and a missing one raises naming it.
     """
-    if weights_path is not None and mode not in ("validate", "test"):
+    if weights_path is not None and mode == "info":
         raise ValueError(
-            "--weights-path only applies to --mode validate/test: train mode "
-            "starts from the pipeline config and info mode loads no weights."
+            "--weights-path does not apply to --mode info: info mode loads no weights."
         )
 
     # Absolutize up front, before any Hydra resolution can rewrite the process
@@ -701,6 +706,24 @@ def restore_trainrun(
 
     # Detect training type: a training block means a gradient run.
     has_gradient_training = trainrun_config.training is not None
+
+    # freeze_nodes validation applies in every mode that can read it: unknown
+    # names and an overlap with unfreeze_nodes are config errors regardless of
+    # what else this run does.
+    freeze_nodes = list(trainrun_config.freeze_nodes)
+    if freeze_nodes:
+        all_node_names = {node.name for node in pipeline.nodes()}
+        unknown = [name for name in freeze_nodes if name not in all_node_names]
+        if unknown:
+            raise ValueError(
+                f"freeze_nodes names nodes not found in the pipeline: {unknown}. "
+                f"Available nodes: {sorted(all_node_names)}"
+            )
+        overlap = sorted(set(freeze_nodes) & set(trainrun_config.unfreeze_nodes))
+        if overlap:
+            raise ValueError(
+                f"Node(s) named in both freeze_nodes and unfreeze_nodes: {overlap}."
+            )
 
     # Evaluation modes score an already-trained pipeline: resolve exactly one
     # weight source and load it BEFORE deciding on statistical initialization.
@@ -789,10 +812,58 @@ def restore_trainrun(
     if mode == "train":
         logger.info("Training mode")
 
+        # This run's statistical fit selection: every statistical node minus
+        # freeze_nodes (frozen nodes are never refit; they must already hold
+        # fitted or loaded state, checked below once initial weights, if any,
+        # are loaded).
+        all_stat_node_names = [
+            node.name for node in pipeline.nodes() if node.requires_initial_fit
+        ]
+        train_fit_node_names = [
+            name for name in all_stat_node_names if name not in freeze_nodes
+        ]
+
+        if freeze_nodes:
+            pipeline.freeze_nodes_by_name(freeze_nodes)
+
+        # Initial weights (if given) load before the fit: the nodes this run
+        # fits are never loaded, even when the checkpoint holds a row for
+        # them (a stale shape there is exactly the case this guards against).
+        # Every other stateful node, frozen or not, must be present.
+        if weights_path is not None:
+            logger.info(f"  Loading initial weights: {weights_path}")
+            pipeline._restore_initial_train_weights(
+                weights_path,
+                fitted_node_names=set(train_fit_node_names),
+                device=None if device == "auto" else device,
+            )
+
+        # A frozen statistical node must hold fitted or loaded state: nothing
+        # in this run will ever fit it, so arriving here unfitted is a config
+        # error, not a silently-untrained node.
+        if freeze_nodes:
+            frozen_stat_nodes_by_name = {
+                node.name: node
+                for node in pipeline.nodes()
+                if node.requires_initial_fit and node.name in freeze_nodes
+            }
+            unfitted_frozen = [
+                name
+                for name, node in frozen_stat_nodes_by_name.items()
+                if not getattr(node, "_statistically_initialized", False)
+            ]
+            if unfitted_frozen:
+                raise ValueError(
+                    f"freeze_nodes names statistical node(s) with no fitted or "
+                    f"loaded state: {unfitted_frozen}. A frozen statistical "
+                    "node is never fitted by this run, so it must arrive "
+                    "already initialized, via --weights-path or an earlier run."
+                )
+
         # Step 1: Statistical initialization (always first, if needed)
-        if requires_static_fit:
+        if train_fit_node_names:
             logger.info("  Step 1: Statistical initialization...")
-            stat_trainer.fit()
+            stat_trainer.fit(node_names=train_fit_node_names)
 
         # Step 2: Gradient training (if enabled)
         if grad_trainer is not None:
@@ -851,7 +922,7 @@ def restore_trainrun(
             logger.info(
                 f"  Running statistical initialization for: {nodes_needing_stat_fit}"
             )
-            stat_trainer.fit()
+            stat_trainer.fit(node_names=nodes_needing_stat_fit)
 
         # Run validation
         if grad_trainer is not None:
@@ -877,7 +948,7 @@ def restore_trainrun(
             logger.info(
                 f"  Running statistical initialization for: {nodes_needing_stat_fit}"
             )
-            stat_trainer.fit()
+            stat_trainer.fit(node_names=nodes_needing_stat_fit)
 
         # Run test
         if grad_trainer is not None:
@@ -1062,6 +1133,13 @@ Examples:
     --mode train \\
     --override data.batch_size=16 \\
     --override training.optimizer.lr=0.001
+
+  # Re-fit some nodes from initial weights, keeping the rest (freeze_nodes
+  # and the nodes this run does not fit load strictly from the file)
+  uv run restore-trainrun \\
+    --trainrun-path outputs/.../trainrun.yaml \\
+    --mode train \\
+    --weights-path outputs/.../trained_models/pipeline_restored.pt
         """,
     )
 
@@ -1090,10 +1168,13 @@ Examples:
         "--weights-path",
         type=str,
         default=None,
-        help="Pipeline weights (.pt) to load in --mode validate/test. Defaults "
-        "to <output_dir>/trained_models/<pipeline>_restored.pt as written by "
+        help="Pipeline weights (.pt) to load. In --mode validate/test this is "
+        "a complete trained checkpoint; defaults to "
+        "<output_dir>/trained_models/<pipeline>_restored.pt as written by "
         "--mode train (a relative output_dir resolves against the current "
-        "working directory, exactly as it did when training wrote it).",
+        "working directory, exactly as it did when training wrote it). In "
+        "--mode train this is INITIAL weights: the nodes this run fits are "
+        "never loaded from it, and every other stateful node must be present.",
     )
     parser.add_argument(
         "--device",

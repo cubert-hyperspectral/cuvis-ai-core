@@ -27,6 +27,10 @@ ticket docs. This package depends on `cuvis-ai-schemas`.
 - Tests: `uv run pytest`; coverage `uv run pytest --cov=cuvis_ai_core --cov-report=term-missing`.
 - Markers: `unit`, `integration`, `grpc`, `pipeline`, `slow`, `gpu`, `stress`, `requires_data`.
 - CLI entry points: `restore-pipeline`, `restore-trainrun`, `dataset`, `suggest-plugins-fix`.
+  `restore-trainrun --mode train --weights-path <pipeline.pt>` loads initial weights: nodes the
+  run fits (every statistical node minus a trainrun's `freeze_nodes`) are never loaded from the
+  file, and every other stateful node must be present in it. `freeze_nodes` excludes a node from
+  the statistical fit and requires it to already hold fitted or loaded state.
 - **Test data:** the data-backed tests (training round-trips, `test_config_preservation`)
   expect the Lentils session at `data/Lentils/Lentils_000.cu3s`. Fetch it with
   `uv run dataset download Lentils` (lands in `./data/Lentils/`); `uv run dataset list`

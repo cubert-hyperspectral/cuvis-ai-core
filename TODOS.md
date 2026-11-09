@@ -1,5 +1,25 @@
 # TODOs
 
+## The gRPC training service has no fit or freeze policy
+
+- **What:** `restore-trainrun` now accepts initial weights plus a fit selection and honours
+  `freeze_nodes` (a frozen statistical node is excluded from the fit and must already hold
+  state). The gRPC training service's own `Train` call still has none of this: it always fits
+  every statistical node from scratch and never reads `freeze_nodes` into a fit-time decision,
+  only into the gradient trainer's unfreeze/freeze bookkeeping for the nodes it already handles.
+- **Why:** A session trained once over gRPC cannot do the equivalent of "keep this node's fitted
+  state, refit only that one, freeze a third": the two paths now disagree on what a trainrun's
+  `freeze_nodes` means for the statistical phase.
+- **Pros:** One fit and freeze policy, usable from either the CLI or a live session.
+- **Cons:** The gRPC service's session model (an already-built pipeline, possibly mid-training)
+  makes "nodes this call fits" a different question than a fresh `restore-trainrun` run answers;
+  getting it wrong there risks silently losing a session's fitted state.
+- **Context:** `cuvis_ai_core/grpc/training_service.py` (the `Train` handler building
+  `StatisticalTrainer` and calling `trainer.fit` with no selection) against
+  `cuvis_ai_core/utils/restore.py` (`restore_trainrun`'s `freeze_nodes` handling and the
+  `node_names` selection it passes to `StatisticalTrainer.fit`).
+- **Depends on / blocked by:** nothing.
+
 ## Nodes outside torch report no FLOPs
 
 - **What:** A node can declare its own FLOP count per forward (a method or attribute the

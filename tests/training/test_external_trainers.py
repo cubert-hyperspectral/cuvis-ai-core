@@ -459,6 +459,266 @@ class TestStatisticalTrainer:
         # Should not raise error even with no statistical nodes
         trainer.fit()
 
+    def test_fit_node_names_none_fits_every_statistical_node(self):
+        """node_names=None (the default) keeps today's behaviour: every
+        statistical node is fitted, same as the gRPC training service relies on."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+                self._statistically_initialized = True
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        node1 = StatNode(name="node1")
+        node2 = StatNode(name="node2")
+        pipeline.connect(node1.outputs.out, node2.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+        trainer.fit()
+
+        assert node1.fit_calls == 1
+        assert node2.fit_calls == 1
+
+    def test_fit_node_names_empty_list_fits_nothing(self):
+        """An empty node_names selection fits no statistical node."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+                self._statistically_initialized = True
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        node1 = StatNode(name="node1")
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+        trainer.fit(node_names=[])
+
+        assert node1.fit_calls == 0
+
+    def test_fit_node_names_unknown_name_raises(self):
+        """A name that matches no node in the pipeline is an error, not a silent skip."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+
+            def forward(self, **kwargs):
+                return {"out": torch.zeros(1)}
+
+        pipeline = CuvisPipeline("test")
+        StatNode(name="node1")
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return []
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+
+        with pytest.raises(ValueError, match="node_absent"):
+            trainer.fit(node_names=["node_absent"])
+
+    def test_fit_node_names_non_statistical_name_raises(self):
+        """A node that exists but has no statistical fit cannot be selected."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+
+            def forward(self, **kwargs):
+                return {"out": torch.zeros(1)}
+
+        class RegularNode(Node):
+            INPUT_SPECS = {}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=())}
+
+            def forward(self, **inputs):
+                return {"out": torch.tensor(1.0)}
+
+        pipeline = CuvisPipeline("test")
+        StatNode(name="stat_node")
+        RegularNode(name="regular_node")
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return []
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+
+        with pytest.raises(ValueError, match="regular_node"):
+            trainer.fit(node_names=["regular_node"])
+
+    def test_fit_node_names_ancestor_rule_raises_before_fitting(self):
+        """A selected node whose statistical ancestor is neither selected nor
+        already fitted raises before any fitting starts (no partial side effects)."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+                self._statistically_initialized = True
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        upstream = StatNode(name="upstream")
+        downstream = StatNode(name="downstream")
+        pipeline.connect(upstream.outputs.out, downstream.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+
+        with pytest.raises(ValueError, match="upstream"):
+            trainer.fit(node_names=["downstream"])
+
+        # Nothing fitted: the check runs before any node's fit.
+        assert upstream.fit_calls == 0
+        assert downstream.fit_calls == 0
+
+    def test_fit_node_names_ancestor_already_fitted_is_allowed(self):
+        """An ancestor that is already statistically initialized (not reselected)
+        satisfies the ancestor rule."""
+
+        class StatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+                self._statistically_initialized = False
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+                self._statistically_initialized = True
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        upstream = StatNode(name="upstream")
+        downstream = StatNode(name="downstream")
+        pipeline.connect(upstream.outputs.out, downstream.data)
+        upstream._statistically_initialized = True  # already fitted/loaded earlier
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+        trainer.fit(node_names=["downstream"])
+
+        assert upstream.fit_calls == 0
+        assert downstream.fit_calls == 1
+
+    def test_fit_node_names_keeps_topological_order(self):
+        """A selection naming nodes out of declaration order still fits them
+        in the pipeline's topological order."""
+
+        order: list[str] = []
+
+        class StatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                order.append(self.name)
+                self._statistically_initialized = True
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        first = StatNode(name="first")
+        second = StatNode(name="second")
+        pipeline.connect(first.outputs.out, second.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+        # Name the downstream node first in the list; order must still follow the graph.
+        trainer.fit(node_names=["second", "first"])
+
+        assert order == ["first", "second"]
+
     def test_validate_and_test_run_without_autograd(self):
         """validate()/test() are evaluation passes: no autograd graph is built."""
 
