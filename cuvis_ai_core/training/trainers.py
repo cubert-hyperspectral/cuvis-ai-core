@@ -809,8 +809,13 @@ class StatisticalTrainer:
                     node, train_loader, total=total
                 )
 
-                # Initialize the node from data
+                # Initialize the node from data. The fitted flag is set here,
+                # by the trainer, rather than left to each node's own
+                # statistical_initialization: a node whose implementation
+                # does not set it itself must still be recognized as fitted
+                # by a later selective fit of one of its descendants.
                 node.statistical_initialization(input_stream)
+                node._statistically_initialized = True
                 self.emit(TrainEvent(TrainHook.STATISTICAL_NODE_END, node=node.name))
         finally:
             if outer_owner is None:

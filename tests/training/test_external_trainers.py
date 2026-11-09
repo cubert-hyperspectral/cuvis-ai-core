@@ -687,6 +687,68 @@ class TestStatisticalTrainer:
         assert upstream.fit_calls == 0
         assert downstream.fit_calls == 1
 
+    def test_fit_node_names_second_selective_fit_sees_first_as_fitted(self):
+        """A node whose statistical_initialization does real work but never
+        sets self._statistically_initialized is still recognized as fitted
+        for a later selective fit of its descendant: the trainer, not the
+        node implementation, owns the fitted bookkeeping."""
+
+        class UpstreamStatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+                # Deliberately does not set self._statistically_initialized.
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        class DownstreamStatNode(Node):
+            INPUT_SPECS = {"data": PortSpec(dtype=torch.float32, shape=(-1,))}
+            OUTPUT_SPECS = {"out": PortSpec(dtype=torch.float32, shape=(-1,))}
+
+            def __init__(self, name=None):
+                super().__init__(name=name)
+                self.fit_calls = 0
+
+            def statistical_initialization(self, input_stream):
+                for _ in input_stream:
+                    pass
+                self.fit_calls += 1
+
+            def forward(self, data, **kwargs):
+                return {"out": data}
+
+        pipeline = CuvisPipeline("test")
+        upstream = UpstreamStatNode(name="upstream")
+        downstream = DownstreamStatNode(name="downstream")
+        pipeline.connect(upstream.outputs.out, downstream.data)
+
+        class MockDataModule(pl.LightningDataModule):
+            def setup(self, stage):
+                pass
+
+            def train_dataloader(self):
+                return [{"data": torch.randn(4)}]
+
+        trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
+        trainer.fit(node_names=["upstream"])
+        assert upstream.fit_calls == 1
+
+        # A later selective fit of the descendant must not reject upstream as
+        # unfitted just because its own implementation never set the flag.
+        trainer.fit(node_names=["downstream"])
+
+        assert upstream.fit_calls == 1
+        assert downstream.fit_calls == 1
+
     def test_fit_node_names_keeps_topological_order(self):
         """A selection naming nodes out of declaration order still fits them
         in the pipeline's topological order."""
