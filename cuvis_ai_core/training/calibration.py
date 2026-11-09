@@ -375,6 +375,22 @@ def _input_source(
     return None
 
 
+def _frame_count(values: list[Any]) -> int:
+    """How many frames the per-batch values of one input cover.
+
+    A tensor covers its leading dimension, a list or tuple its length, anything else one frame.
+    """
+    count = 0
+    for value in values:
+        if isinstance(value, torch.Tensor) and value.dim():
+            count += value.shape[0]
+        elif isinstance(value, (list, tuple)):
+            count += len(value)
+        else:
+            count += 1
+    return count
+
+
 def _join_frames(values: list[Any]) -> Any:
     """Per-batch values of one input joined over the split, in frame order.
 
@@ -382,7 +398,7 @@ def _join_frames(values: list[Any]) -> Any:
     flattened into one list.
     """
     if all(isinstance(value, torch.Tensor) for value in values):
-        return torch.cat([value.detach().cpu() for value in values], dim=0)
+        return torch.cat(values, dim=0)
     joined: list[Any] = []
     for value in values:
         joined.extend(value if isinstance(value, (list, tuple)) else [value])
@@ -454,8 +470,10 @@ def calibrate_pipeline_deciders(
 
     A decider that declares ``CALIBRATION_INPUTS`` also gets ``inputs={port: values}``: each
     named port's values over the split, read from the output wired into it or, for an
-    unconnected port, from the batch key of that name. A port that received nothing skips
-    the decider as ``NO_SCORES``. A split without anomalous frames is calibrated only when
+    unconnected port, from the batch key of that name, moved off the device as each batch
+    arrives. A port whose values do not cover every frame of the split skips the decider as
+    ``NO_SCORES``; values that cannot be joined fail it as ``CALIBRATE_FAILED``, and the
+    other deciders still calibrate. A split without anomalous frames is calibrated only when
     every wired decider declares ``CALIBRATION_NORMAL_ONLY``; otherwise it is skipped as
     single-class, as is a split with no normal frame.
     """
@@ -539,6 +557,8 @@ def calibrate_pipeline_deciders(
         ):
             for (node_name, port), value in item.outputs.items():
                 if (node_name, port) in edge_inputs:
+                    if isinstance(value, torch.Tensor):
+                        value = value.detach().cpu()
                     collected.setdefault((node_name, port), []).append(value)
                 elif port in wanted and isinstance(value, torch.Tensor):
                     collected.setdefault((node_name, port), []).append(
@@ -602,32 +622,35 @@ def calibrate_pipeline_deciders(
                 "objective; keeping its shipped thresholds."
             )
             continue
-        extra: dict[str, Any] = {}
-        missing = None
+        gathered: dict[str, list[Any]] = {}
+        short = None
         for port, source in input_sources[decider].items():
-            values = collected.get(source) if source else from_batch.get(port)
-            if not values:
-                missing = port
+            values = (collected.get(source) if source else from_batch.get(port)) or []
+            covered = _frame_count(values)
+            if covered != n_total:
+                short = (
+                    f"{decider.name}.{port} received nothing over {split}"
+                    if not covered
+                    else f"{decider.name}.{port} covered {covered} of {n_total} frames "
+                    f"over {split}"
+                )
                 break
-            extra[port] = _join_frames(values)
-        if missing is not None:
+            gathered[port] = values
+        if short is not None:
             records[decider.name] = DeciderCalibration.skipped_decider(
-                decider,
-                DeciderSkip.NO_SCORES,
-                f"{decider.name}.{missing} received nothing over {split}",
+                decider, DeciderSkip.NO_SCORES, short
             )
-            logger.warning(
-                f"Threshold calibration: {decider.name}.{missing} received nothing over "
-                f"{split}; skipping {decider.name}."
-            )
+            logger.warning(f"Threshold calibration: {short}; skipping {decider.name}.")
             continue
         kwargs: dict[str, Any] = {}
         if hands_objective:
             kwargs["objective"] = objective
-        if type(decider).CALIBRATION_INPUTS:
-            kwargs["inputs"] = extra
         scores = torch.cat(collected[key], dim=0)
         try:
+            if type(decider).CALIBRATION_INPUTS:
+                kwargs["inputs"] = {
+                    port: _join_frames(values) for port, values in gathered.items()
+                }
             report = decider.calibrate(scores, targets, **kwargs)
         except Exception as exc:  # noqa: BLE001 - best effort: never lose the weights
             if raise_out_of_memory and is_cuda_out_of_memory(exc):

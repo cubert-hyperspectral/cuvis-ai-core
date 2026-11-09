@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- A decider can ask the threshold calibration for more than its scores: `BinaryDecider.CALIBRATION_INPUTS` names extra input ports (a validity mask, a group id), and the phase passes their values over the split as `calibrate(scores, targets, inputs={port: values})`, read from the output wired into each port or, for an unconnected port, from the batch key of that name. A port that receives nothing skips the decider as `NO_SCORES`.
+- A decider can ask the threshold calibration for more than its scores: `BinaryDecider.CALIBRATION_INPUTS` names extra input ports (a validity mask, a group id), and the phase passes their values over the split as `calibrate(scores, targets, inputs={port: values})`, read from the output wired into each port or, for an unconnected port, from the batch key of that name, and moved off the device batch by batch. A port whose values do not cover every frame skips the decider as `NO_SCORES`, values that cannot be joined fail only that decider, and a variadic port cannot be named.
 - `BinaryDecider.CALIBRATION_NORMAL_ONLY` lets the phase calibrate on a split without anomalous frames, for a rule set on normal frames alone (a false-alarm bound). It applies only when every wired decider opts in; any other single-class split is still skipped.
 - `SplitBatch` carries the batch it was computed from (`batch`), as the loader handed it over.
 

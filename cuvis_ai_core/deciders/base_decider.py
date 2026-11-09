@@ -83,6 +83,11 @@ class BinaryDecider(Node):
                     f"{cls.__name__}.CALIBRATION_INPUTS names {port!r}, which is not one of "
                     "its extra input ports (the scores already arrive through logits)"
                 )
+            if getattr(cls.INPUT_SPECS[port], "variadic", False):
+                raise TypeError(
+                    f"{cls.__name__}.CALIBRATION_INPUTS names the variadic port {port!r}; "
+                    "the calibration phase reads one source per port"
+                )
         if (
             cls.CALIBRATION_RULE is not None
             and cls.CALIBRATION_RULE not in CALIBRATION_RULES
