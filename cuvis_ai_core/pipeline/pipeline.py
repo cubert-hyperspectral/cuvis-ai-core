@@ -2117,21 +2117,8 @@ class CuvisPipeline:
         """
         if not node_names:
             return
-
-        # Build mapping of available nodes
-        available_nodes = {node.name: node for node in self.nodes()}
-
-        # Validate all requested nodes exist
-        missing_nodes = [name for name in node_names if name not in available_nodes]
-        if missing_nodes:
-            raise ValueError(
-                f"Trainable nodes not found in pipeline: {missing_nodes}. "
-                f"Available nodes: {list(available_nodes.keys())}"
-            )
-
-        # Unfreeze requested nodes
-        for node_name in node_names:
-            available_nodes[node_name].unfreeze()
+        for node in self._nodes_by_name(node_names, "Trainable nodes"):
+            node.unfreeze()
 
     def freeze_nodes_by_name(self, node_names: list[str]) -> None:
         """Freeze specific nodes in this pipeline by their names.
@@ -2155,18 +2142,20 @@ class CuvisPipeline:
         """
         if not node_names:
             return
+        for node in self._nodes_by_name(node_names, "Nodes"):
+            node.freeze()
 
-        # Build mapping of available nodes
+    def _nodes_by_name(self, node_names: list[str], label: str) -> list[Node]:
+        """The pipeline's nodes named in ``node_names``, in that order.
+
+        Raises ``ValueError`` naming every missing name at once (``label`` starts the
+        message) before returning anything, so callers never act on a partial list.
+        """
         available_nodes = {node.name: node for node in self.nodes()}
-
-        # Validate all requested nodes exist
         missing_nodes = [name for name in node_names if name not in available_nodes]
         if missing_nodes:
             raise ValueError(
-                f"Nodes not found in pipeline: {missing_nodes}. "
+                f"{label} not found in pipeline: {missing_nodes}. "
                 f"Available nodes: {list(available_nodes.keys())}"
             )
-
-        # Freeze requested nodes
-        for node_name in node_names:
-            available_nodes[node_name].freeze()
+        return [available_nodes[name] for name in node_names]
