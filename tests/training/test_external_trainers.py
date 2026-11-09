@@ -520,6 +520,8 @@ class TestStatisticalTrainer:
 
         pipeline = CuvisPipeline("test")
         node1 = StatNode(name="node1")
+        pipeline._assign_counter_and_add_node(node1)
+        assert node1 in pipeline.nodes()
 
         class MockDataModule(pl.LightningDataModule):
             def setup(self, stage):
@@ -584,8 +586,11 @@ class TestStatisticalTrainer:
                 return {"out": torch.tensor(1.0)}
 
         pipeline = CuvisPipeline("test")
-        StatNode(name="stat_node")
-        RegularNode(name="regular_node")
+        stat_node = StatNode(name="stat_node")
+        regular_node = RegularNode(name="regular_node")
+        pipeline._assign_counter_and_add_node(stat_node)
+        pipeline._assign_counter_and_add_node(regular_node)
+        assert stat_node in pipeline.nodes() and regular_node in pipeline.nodes()
 
         class MockDataModule(pl.LightningDataModule):
             def setup(self, stage):
@@ -596,7 +601,7 @@ class TestStatisticalTrainer:
 
         trainer = StatisticalTrainer(pipeline=pipeline, datamodule=MockDataModule())
 
-        with pytest.raises(ValueError, match="regular_node"):
+        with pytest.raises(ValueError, match="without statistical initialization"):
             trainer.fit(node_names=["regular_node"])
 
     def test_fit_node_names_ancestor_rule_raises_before_fitting(self):
