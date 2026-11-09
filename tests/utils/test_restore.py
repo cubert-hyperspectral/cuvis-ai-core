@@ -635,7 +635,9 @@ def test_restore_trainrun_eval_loads_weights_and_skips_stat_fit(
 def test_restore_trainrun_eval_partial_weights_still_runs_stat_fit(
     monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
 ) -> None:
-    """A node absent from the .pt still gets statistical initialization."""
+    """A node absent from the .pt still gets statistical initialization, and
+    only that node: this is the regression test for the re-fit trap, where an
+    already-covered node used to be refit wastefully alongside it."""
     path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
     _write_fake_weights(tmp_path)
 
@@ -647,6 +649,25 @@ def test_restore_trainrun_eval_partial_weights_still_runs_stat_fit(
 
     stat_trainer = RecordingTrainer.all_instances[0]
     assert "fit" in stat_trainer.calls
+    assert stat_trainer.fit_node_names_calls == [["node0"]]
+
+
+def test_restore_trainrun_eval_only_refits_the_uncovered_node(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """Two statistical nodes, one covered by the checkpoint and one missing:
+    the re-fit trap fix means only the missing one is re-derived, not both."""
+    path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
+    _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True, True))
+    fake_pipeline.missing_nodes = ["node1"]
+    _patch_restore_components(monkeypatch, fake_pipeline, test_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode="test")
+
+    stat_trainer = RecordingTrainer.all_instances[0]
+    assert stat_trainer.fit_node_names_calls == [["node1"]]
 
 
 def test_restore_trainrun_eval_explicit_weights_path(
@@ -751,14 +772,186 @@ def test_restore_trainrun_eval_checkpoint_missing_raises(
         )
 
 
-@pytest.mark.parametrize("mode", ["train", "info"])
-def test_restore_trainrun_weights_path_rejected_outside_eval_modes(
-    tmp_path: Path, mock_experiment_dict, mock_pipeline_dict, mode
+def test_restore_trainrun_weights_path_rejected_in_info_mode(
+    tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
 ) -> None:
-    """--weights-path is an evaluation flag; misuse fails instead of being ignored."""
+    """info mode loads no weights at all; --weights-path there is a config error."""
     path = _write_trainrun(tmp_path, mock_experiment_dict, mock_pipeline_dict)
-    with pytest.raises(ValueError, match="only applies"):
-        restore_mod.restore_trainrun(path, mode=mode, weights_path=tmp_path / "w.pt")
+    with pytest.raises(ValueError, match="does not apply"):
+        restore_mod.restore_trainrun(path, mode="info", weights_path=tmp_path / "w.pt")
+
+
+# ---------------------------------------------------------------------------
+# restore_trainrun train-mode initial weights and freeze_nodes
+# ---------------------------------------------------------------------------
+
+
+def test_restore_trainrun_train_initial_weights_loads_before_fit(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """--weights-path with --mode train loads initial weights, fitting the
+    pipeline's one statistical node (never loaded from the file)."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    weights = _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+
+    restore_mod.restore_trainrun(path, mode="train", weights_path=weights, device="cpu")
+
+    assert fake_pipeline.initial_weights_calls == [
+        {
+            "weights_path": str(weights),
+            "fitted_node_names": {"node0"},
+            "device": "cpu",
+        }
+    ]
+    stat_trainer = RecordingTrainer.all_instances[0]
+    assert stat_trainer.fit_node_names_calls == [["node0"]]
+
+
+def test_restore_trainrun_train_initial_weights_missing_required_node_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A stateful node this run does not fit must be present in the initial
+    weights; the fake's missing_initial_nodes simulates a bad checkpoint."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+    weights = _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(False,))
+    fake_pipeline.missing_initial_nodes = ["node0"]
+    _patch_restore_components(monkeypatch, fake_pipeline)
+
+    with pytest.raises(ValueError, match="node0"):
+        restore_mod.restore_trainrun(path, mode="train", weights_path=weights)
+
+
+def test_restore_trainrun_train_without_weights_path_is_unaffected(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """No --weights-path: no initial-weights call, the default path is unchanged."""
+    path = _write_trainrun(tmp_path, statistical_experiment_dict, mock_pipeline_dict)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+
+    restore_mod.restore_trainrun(path, mode="train")
+
+    assert fake_pipeline.initial_weights_calls == []
+    stat_trainer = RecordingTrainer.all_instances[0]
+    assert stat_trainer.fit_node_names_calls == [["node0"]]
+
+
+def test_restore_trainrun_train_freeze_nodes_excluded_from_fit(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A frozen statistical node is excluded from the fit selection and gets
+    node.freeze() (it must already hold fitted/loaded state; it does here,
+    because the fake's weight loader marks every non-fitted node initialized)."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+    weights = _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+
+    restore_mod.restore_trainrun(path, mode="train", weights_path=weights)
+
+    assert fake_pipeline.freeze_calls == [["node0"]]
+    # The frozen node is fitted by nobody this run, so the fitted_node_names
+    # passed to the initial-weights loader excludes it (it must load).
+    assert fake_pipeline.initial_weights_calls[0]["fitted_node_names"] == set()
+    stat_trainer = RecordingTrainer.all_instances[0]
+    # No statistical node left to fit: Step 1 is skipped entirely.
+    assert stat_trainer.fit_node_names_calls == []
+
+
+def test_restore_trainrun_train_freeze_nodes_unknown_name_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["not_a_node"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+    _patch_restore_components(monkeypatch, FakeRestorePipeline(node_fits=(True,)))
+
+    with pytest.raises(ValueError, match="not_a_node"):
+        restore_mod.restore_trainrun(path, mode="train")
+
+
+def test_restore_trainrun_train_freeze_unfreeze_overlap_raises(
+    monkeypatch, tmp_path: Path, mock_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A name in both freeze_nodes and unfreeze_nodes is a config error."""
+    cfg = dict(mock_experiment_dict, freeze_nodes=["node0"], unfreeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+    _patch_restore_components(monkeypatch, FakeRestorePipeline(node_fits=(True,)))
+
+    with pytest.raises(ValueError, match="node0"):
+        restore_mod.restore_trainrun(path, mode="train")
+
+
+def test_restore_trainrun_train_frozen_node_without_state_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict
+) -> None:
+    """A frozen statistical node with no fitted or loaded state is a config
+    error: nothing in this run will ever fit it."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    _patch_restore_components(monkeypatch, fake_pipeline)
+
+    # No --weights-path: the frozen node never gets loaded or fitted, so it
+    # stays uninitialized.
+    with pytest.raises(ValueError, match="node0"):
+        restore_mod.restore_trainrun(path, mode="train")
+
+
+@pytest.mark.parametrize("mode", ["validate", "test"])
+def test_restore_trainrun_eval_freeze_nodes_excluded_from_fit(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict, mode
+) -> None:
+    """A frozen statistical node is excluded from the fit selection in
+    validate/test too, even when it is not yet statistically initialized by
+    the time the selection is computed: a sibling statistical node is still
+    fit, but the frozen one is never added to that fit, because nothing in
+    this run is ever allowed to fit it."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+
+    # No weights file: a statistical-only trainrun evaluates without one.
+    # node0 (frozen) is marked statistically initialized directly, simulating
+    # it being fitted through some means other than this run, e.g. restored
+    # in-process earlier in the same session (the companion raise test below
+    # covers the case where it is NOT initialized).
+    fake_pipeline = FakeRestorePipeline(node_fits=(True, True))
+    fake_pipeline.nodes[1]._statistically_initialized = True
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS, test_ds=_DS)
+
+    restore_mod.restore_trainrun(path, mode=mode)
+
+    stat_trainer = RecordingTrainer.all_instances[0]
+    # node0 is frozen and never fitted; node1 is not frozen and is fitted.
+    assert stat_trainer.fit_node_names_calls == [["node1"]]
+
+
+@pytest.mark.parametrize("mode", ["validate", "test"])
+def test_restore_trainrun_eval_frozen_node_without_state_raises(
+    monkeypatch, tmp_path: Path, statistical_experiment_dict, mock_pipeline_dict, mode
+) -> None:
+    """A frozen statistical node that arrives unfitted after the weights load
+    is a config error in validate/test too: a partial checkpoint must not be
+    silently patched over by fitting the frozen node from this split."""
+    cfg = dict(statistical_experiment_dict, freeze_nodes=["node0"])
+    path = _write_trainrun(tmp_path, cfg, mock_pipeline_dict)
+    _write_fake_weights(tmp_path)
+
+    fake_pipeline = FakeRestorePipeline(node_fits=(True,))
+    # The checkpoint does not cover node0, and nothing else initializes it.
+    fake_pipeline.missing_nodes = ["node0"]
+    _patch_restore_components(monkeypatch, fake_pipeline, val_ds=_DS, test_ds=_DS)
+
+    with pytest.raises(ValueError, match="node0"):
+        restore_mod.restore_trainrun(path, mode=mode)
 
 
 @pytest.mark.parametrize("mode", ["validate", "test"])

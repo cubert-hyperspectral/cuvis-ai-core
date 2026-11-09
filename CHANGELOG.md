@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `restore-trainrun --mode train --weights-path` loads initial weights: the nodes this run fits (every statistical node minus `freeze_nodes`) are never loaded from the file, even when it holds a row for them, so a node whose shape changes between runs (a resized memory bank, for instance) is never clobbered by a stale checkpoint entry. Every other node that holds state must be present in the file; a missing one raises naming it. `--weights-path` previously applied only to `--mode validate/test`.
+- `freeze_nodes` in a trainrun config is honoured in every mode, not just `train`: an unknown name or a name also listed in `unfreeze_nodes` raises, a frozen statistical node is excluded from the fit and must already hold fitted or loaded state (otherwise a clear error names it), and `CuvisPipeline.freeze_nodes_by_name` mirrors the existing `unfreeze_nodes_by_name`.
+- `StatisticalTrainer.fit` takes an optional `node_names` selection: `None` keeps fitting every statistical node (unchanged default, what the gRPC training service relies on), an empty list fits nothing, and an explicit list validates unknown names, non-statistical names and that a selected node's statistical ancestors are themselves selected or already initialized, before any fitting starts.
+- `restore-trainrun`'s validate and test modes now pass their existing uncovered-node selection explicitly to the statistical fit instead of refitting every statistical node regardless of what the loaded weights already covered.
+
 ## 0.20.2 - 2026-11-06
 
 - The three `dinomaly_lentils_*` trained pipelines are pinned to the Hub revision `2b6d2164` of `cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`. Their yamls at `3602a04e` named `cuvis_ai.deciders.two_stage_decider.TwoStageBinaryDecider`, a path cuvis-ai 0.18.0 retired, so `download-model` fetched pipelines that failed to load with "Node class not found". At `2b6d2164` they name `cuvis_ai.node.deciders.two_stage_decider.TwoStageBinaryDecider`; the `.pt` files are unchanged.

@@ -292,3 +292,93 @@ class TestUnfreezeNodesByName:
                 assert torch.allclose(param, initial_weights[name], rtol=1e-5), (
                     f"Parameter {name} changed after freeze/unfreeze"
                 )
+
+
+class TestFreezeNodesByName:
+    """Tests for freeze_nodes_by_name utility function."""
+
+    @pytest.fixture
+    def mock_pipeline(self):
+        """Create a mock pipeline with named nodes."""
+        pipeline = CuvisPipeline(name="test_pipeline")
+
+        selector = SoftChannelSelector(
+            name="SoftChannelSelector",
+            n_select=3,
+            input_channels=10,
+            init_method="uniform",
+        )
+        trainable = MockStatisticalTrainableNode(
+            name="MockStatisticalTrainableNode", input_dim=3, hidden_dim=5
+        )
+
+        # Connect nodes to add them to pipeline (pipeline auto-adds nodes on connect)
+        pipeline.connect(selector.outputs.selected, trainable.inputs.data)
+
+        # Nodes start frozen (buffers, not parameters); unfreeze so there is
+        # something for freeze_nodes_by_name to meaningfully undo.
+        for node in pipeline.nodes():
+            node.unfreeze()
+
+        return pipeline
+
+    def test_freeze_with_empty_list_does_nothing(self, mock_pipeline):
+        """An empty node list does nothing; no error, nothing frozen."""
+        mock_pipeline.freeze_nodes_by_name([])
+
+        for node in mock_pipeline.nodes():
+            assert sum(p.numel() for p in node.parameters() if p.requires_grad) > 0
+
+    def test_freeze_valid_nodes(self, mock_pipeline):
+        """Freezing by name disables gradients on the named nodes."""
+        selector = None
+        trainable = None
+        for node in mock_pipeline.nodes():
+            if node.name == "SoftChannelSelector":
+                selector = node
+            elif node.name == "MockStatisticalTrainableNode":
+                trainable = node
+
+        assert selector is not None
+        assert trainable is not None
+        assert sum(p.numel() for p in selector.parameters() if p.requires_grad) > 0
+        assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) > 0
+
+        mock_pipeline.freeze_nodes_by_name(
+            ["SoftChannelSelector", "MockStatisticalTrainableNode"]
+        )
+
+        assert sum(p.numel() for p in selector.parameters() if p.requires_grad) == 0
+        assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) == 0
+
+    def test_freeze_missing_nodes_raises_error(self, mock_pipeline):
+        """Unknown node names raise ValueError naming them and the available nodes."""
+        with pytest.raises(ValueError) as exc_info:
+            mock_pipeline.freeze_nodes_by_name(
+                ["NonExistentNode", "AnotherMissingNode"]
+            )
+
+        error_msg = str(exc_info.value)
+        assert "Nodes not found in pipeline" in error_msg
+        assert "NonExistentNode" in error_msg
+        assert "AnotherMissingNode" in error_msg
+        assert "Available nodes" in error_msg
+        assert "SoftChannelSelector" in error_msg
+        assert "MockStatisticalTrainableNode" in error_msg
+
+    def test_freeze_single_node(self, mock_pipeline):
+        """A single node can be frozen without touching the others."""
+        mock_pipeline.freeze_nodes_by_name(["SoftChannelSelector"])
+
+        selector = None
+        trainable = None
+        for node in mock_pipeline.nodes():
+            if node.name == "SoftChannelSelector":
+                selector = node
+            elif node.name == "MockStatisticalTrainableNode":
+                trainable = node
+
+        assert selector is not None
+        assert trainable is not None
+        assert sum(p.numel() for p in selector.parameters() if p.requires_grad) == 0
+        assert sum(p.numel() for p in trainable.parameters() if p.requires_grad) > 0

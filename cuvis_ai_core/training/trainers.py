@@ -5,6 +5,7 @@ from pathlib import Path
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import networkx as nx
 import pytorch_lightning as pl
 import torch
 from loguru import logger
@@ -684,21 +685,97 @@ class StatisticalTrainer:
         if self.stop_event is not None and self.stop_event.is_set():
             raise TrainingCancelled("Statistical training stopped via StopTrain")
 
-    def fit(self) -> None:
-        """Train all statistical nodes in topological order.
+    def _resolve_selected_nodes(
+        self, node_names: list[str], all_stat_nodes: list[Node]
+    ) -> list[Node]:
+        """Validate an explicit node_names selection and return the selected nodes.
+
+        Raises ValueError on an unknown name, a name naming a node without
+        ``requires_initial_fit``, or a selected node whose statistical
+        ancestor is neither selected nor already initialized. Nothing is
+        fitted by this method; it only validates and selects, so a raise here
+        leaves no partial fit behind.
+        """
+        all_nodes_by_name = {node.name: node for node in self.pipeline.nodes()}
+        stat_names = {node.name for node in all_stat_nodes}
+
+        unknown = [name for name in node_names if name not in all_nodes_by_name]
+        if unknown:
+            raise ValueError(
+                f"node_names names nodes not found in the pipeline: {unknown}. "
+                f"Available nodes: {sorted(all_nodes_by_name)}"
+            )
+
+        non_statistical = [name for name in node_names if name not in stat_names]
+        if non_statistical:
+            raise ValueError(
+                f"node_names names nodes without statistical initialization: "
+                f"{non_statistical}. Statistical nodes: {sorted(stat_names)}"
+            )
+
+        selected_names = set(node_names)
+        graph = self.pipeline._graph
+        for name in node_names:
+            node = all_nodes_by_name[name]
+            ancestor_names = {
+                ancestor.name
+                for ancestor in nx.ancestors(graph, node)
+                if ancestor.name in stat_names
+            }
+            unmet = [
+                ancestor_name
+                for ancestor_name in ancestor_names
+                if ancestor_name not in selected_names
+                and not getattr(
+                    all_nodes_by_name[ancestor_name],
+                    "_statistically_initialized",
+                    False,
+                )
+            ]
+            if unmet:
+                raise ValueError(
+                    f"'{name}' has statistical ancestor(s) {sorted(unmet)} that "
+                    "are neither selected for this fit nor already "
+                    "statistically initialized. Select them too, or fit them "
+                    "first."
+                )
+
+        return [node for node in all_stat_nodes if node.name in selected_names]
+
+    def fit(self, node_names: list[str] | None = None) -> None:
+        """Train statistical nodes in topological order.
 
         Unified API - both GradientTrainer and StatisticalTrainer use .fit()
+
+        Parameters
+        ----------
+        node_names : list[str] | None
+            Which statistical nodes to fit. ``None`` (the default) fits every
+            statistical node in the pipeline, exactly as before this parameter
+            existed; the gRPC training service relies on this default and must
+            not be affected by a selection. An empty list fits nothing. A name
+            that matches no pipeline node, or a node without
+            ``requires_initial_fit``, raises before any fitting starts. A
+            selected node whose statistical ancestor is neither selected nor
+            already initialized also raises before any fitting starts: a
+            partial fit (some nodes trained, the ancestor check failing on a
+            later one) is never left behind.
         """
         # Setup datamodule
         self.datamodule.setup("fit")
         train_loader = self.datamodule.train_dataloader()
 
         # Find nodes requiring statistical initialization
-        stat_nodes = [
+        all_stat_nodes = [
             node
             for node in self.pipeline.nodes()
             if getattr(node, "requires_initial_fit", False)
         ]
+
+        if node_names is None:
+            stat_nodes = all_stat_nodes
+        else:
+            stat_nodes = self._resolve_selected_nodes(node_names, all_stat_nodes)
 
         if not stat_nodes:
             logger.info("No statistical nodes to train")
@@ -732,8 +809,13 @@ class StatisticalTrainer:
                     node, train_loader, total=total
                 )
 
-                # Initialize the node from data
+                # Initialize the node from data. The fitted flag is set here,
+                # by the trainer, rather than left to each node's own
+                # statistical_initialization: a node whose implementation
+                # does not set it itself must still be recognized as fitted
+                # by a later selective fit of one of its descendants.
                 node.statistical_initialization(input_stream)
+                node._statistically_initialized = True
                 self.emit(TrainEvent(TrainHook.STATISTICAL_NODE_END, node=node.name))
         finally:
             if outer_owner is None:

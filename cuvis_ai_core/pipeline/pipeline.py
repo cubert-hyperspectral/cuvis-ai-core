@@ -738,6 +738,77 @@ class CuvisPipeline:
             )
         return missing_keys
 
+    def _restore_initial_train_weights(
+        self,
+        weights_path: str | Path,
+        *,
+        fitted_node_names: set[str],
+        device: str | None = None,
+    ) -> list[str]:
+        """Load initial weights for a train-mode run that also fits some nodes.
+
+        Unlike :meth:`_restore_weights_from_checkpoint` (used for validate/test,
+        where a complete checkpoint is expected), this is for a train run that
+        starts from initial weights and then overwrites some nodes with a fresh
+        statistical or gradient fit:
+
+        - A node named in ``fitted_node_names`` is never loaded from the
+          checkpoint, even when the checkpoint holds a row for it: this run
+          fits it, so a stale shape (a 7,200-row PatchCore coreset loaded into
+          an 80,000-row run) would either fail to load or silently clobber the
+          fit this run is about to do.
+        - A stateless node (empty ``state_dict()``) is skipped either way.
+        - Every other node is stateful and not refit this run, so it must be
+          present in the checkpoint: a missing one raises ``ValueError``
+          naming it, instead of silently keeping a randomly initialized
+          parameter or buffer.
+
+        Returns the names of the nodes skipped because this run fits them
+        (for logging; distinct from a missing required node, which raises).
+        """
+        weights_path = Path(weights_path)
+
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Weights file not found: {weights_path}")
+
+        checkpoint = torch.load(
+            weights_path, map_location=device if device else None, weights_only=False
+        )
+        state_dict = checkpoint.get("state_dict", {})
+
+        skipped_fitted: list[str] = []
+        missing_required: list[str] = []
+
+        for node in self.nodes:
+            if node.name in fitted_node_names:
+                skipped_fitted.append(node.name)
+                continue
+
+            if not node.state_dict():
+                # Stateless: nothing to load, nothing to require.
+                continue
+
+            if node.name not in state_dict:
+                missing_required.append(node.name)
+                continue
+
+            node.load_state_dict(state_dict[node.name], strict=True)
+
+        if missing_required:
+            raise ValueError(
+                f"Initial weights file is missing required node(s): "
+                f"{missing_required}. These nodes hold state and are not "
+                f"fitted by this run, so they must be present in "
+                f"{weights_path}. Nodes fitted by this run (never loaded): "
+                f"{sorted(fitted_node_names)}."
+            )
+
+        if skipped_fitted:
+            logger.info(
+                f"Initial weights: not loading {skipped_fitted} (this run fits them)."
+            )
+        return skipped_fitted
+
     @classmethod
     def load_pipeline(
         cls,
@@ -2046,18 +2117,45 @@ class CuvisPipeline:
         """
         if not node_names:
             return
+        for node in self._nodes_by_name(node_names, "Trainable nodes"):
+            node.unfreeze()
 
-        # Build mapping of available nodes
+    def freeze_nodes_by_name(self, node_names: list[str]) -> None:
+        """Freeze specific nodes in this pipeline by their names.
+
+        This method validates that all requested nodes exist in the pipeline and
+        freezes them, the mirror of :meth:`unfreeze_nodes_by_name`.
+
+        Parameters
+        ----------
+        node_names : list[str]
+            List of node names to freeze. Names must match exactly.
+
+        Raises
+        ------
+        ValueError
+            If any specified node name is not found in the pipeline
+
+        Examples
+        --------
+        >>> pipeline.freeze_nodes_by_name(["PatchCoreDetector"])
+        """
+        if not node_names:
+            return
+        for node in self._nodes_by_name(node_names, "Nodes"):
+            node.freeze()
+
+    def _nodes_by_name(self, node_names: list[str], label: str) -> list[Node]:
+        """The pipeline's nodes named in ``node_names``, in that order.
+
+        Raises ``ValueError`` naming every missing name at once (``label`` starts the
+        message) before returning anything, so callers never act on a partial list.
+        """
         available_nodes = {node.name: node for node in self.nodes()}
-
-        # Validate all requested nodes exist
         missing_nodes = [name for name in node_names if name not in available_nodes]
         if missing_nodes:
             raise ValueError(
-                f"Trainable nodes not found in pipeline: {missing_nodes}. "
+                f"{label} not found in pipeline: {missing_nodes}. "
                 f"Available nodes: {list(available_nodes.keys())}"
             )
-
-        # Unfreeze requested nodes
-        for node_name in node_names:
-            available_nodes[node_name].unfreeze()
+        return [available_nodes[name] for name in node_names]
