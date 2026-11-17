@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `tools/mirror_weights.py` mirrors the SAM 3.1 Object Multiplex checkpoint that `SAM31TextPropagation` of cuvis-ai-sam3 loads: `cubert-gmbh/sam3.1` holds `sam3.1_multiplex.pt`, its `config.json` and the licence text of `facebook/sam3.1` (a gated repository), each pinned by sha256. The SAM licence note of the model card takes the upstream repository as a parameter; the `sam3` card renders as before.
 - CI: the two jobs that run in the `cuvis_pyil` Ubuntu 24.04 container (the tests of `ci.yml` and of the release workflow) run on `ubuntu-24.04` instead of `ubuntu-latest`. `ubuntu-latest` became Ubuntu 26.04, and `actions/setup-python` mounts the host's Python into the container, where `import ssl` then fails (`OPENSSL_3.3.0 not found`).
 - Lock: soupsieve 2.10 to 4.1.1 (CVE-2026-126190, CVE-2026-126191, CVE-2026-126193) and tornado 6.6 to 6.6.1 (CVE-2026-126347), the advisories pip-audit flags on main. Both reach the lock through the `dev` extra only (`ipykernel`, `jupyterlab`). soupsieve 3 and later need CPython 3.11.5, so `uv.lock` is restricted to 3.11.5 and newer (`[tool.uv].environments`). `requires-python` is unchanged and the package installs from 3.11.0 as before; a development checkout on an older patch release stops at `uv sync` with a message about the lock's supported environments, and the README's development section names the `--python` range to pass. Two tests in `tests/test_lock_python_floor.py` keep the floor and refuse a package that resolves to different versions by Python version.
 
