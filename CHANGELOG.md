@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.3 - 2026-11-18
 
 - `tools/mirror_weights.py` mirrors the SAM 3.1 Object Multiplex checkpoint that `SAM31TextPropagation` of cuvis-ai-sam3 loads: `cubert-gmbh/sam3.1` holds `sam3.1_multiplex.pt`, its `config.json` and the licence text of `facebook/sam3.1` (a gated repository), each pinned by sha256. The SAM licence note of the model card takes the upstream repository as a parameter; the `sam3` card renders as before.
 - CI: the two jobs that run in the `cuvis_pyil` Ubuntu 24.04 container (the tests of `ci.yml` and of the release workflow) run on `ubuntu-24.04` instead of `ubuntu-latest`. `ubuntu-latest` became Ubuntu 26.04, and `actions/setup-python` mounts the host's Python into the container, where `import ssl` then fails (`OPENSSL_3.3.0 not found`).
