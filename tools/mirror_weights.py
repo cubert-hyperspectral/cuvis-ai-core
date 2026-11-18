@@ -120,6 +120,7 @@ class Mirror:
 
 
 _SAM3_REV = "3c879f39826c281e95690f02c7821c4de09afae7"
+_SAM31_REV = "daa63191845a41281374e725f4c9e51c7a824460"
 _ETAM_REV = "9bdd8ab585b19ef95f9c9ed847ac9478301890b4"
 _ETAM_REPO = "yunyangx/efficient-track-anything"
 _DINOMALY_REPO_DIR = Path("D:/code-repos/cuvis-ai-dinomaly/cuvis-ai-dinomaly")
@@ -128,7 +129,8 @@ _TIMM_DINOV2_REV = "4685c99dabffe5affac90bd99dbffd25801ae58d"
 _ROBERTA_REPO = "FacebookAI/roberta-large"
 _ROBERTA_REV = "722cf37b1afa9454edce342e7895e588b6ff1d59"
 
-_SAM_LICENSE_TEXT = """\
+_SAM_LICENSE_TEXT = Template(
+    """\
 These files are Meta's "SAM Materials" and are distributed under the **SAM License**
 (Last Updated: November 19, 2025), reproduced verbatim in `LICENSE`. By downloading
 or using them you agree to be bound by that Agreement. Section 1.b.i allows
@@ -157,12 +159,13 @@ Obligations that travel with the files:
   (section 5.b). On termination you must delete and cease use of the SAM Materials
   (section 6).
 
-The upstream repository `facebook/sam3` is gated; this mirror is ungated. Cubert GmbH
+The upstream repository `$upstream` is gated; this mirror is ungated. Cubert GmbH
 redistributes these files as a Licensee under section 1.b.i and is itself bound by
 the Agreement, including the indemnity in section 5.b, for its own distribution. You
 are bound directly and separately by the same Agreement, including sections 5.b and
 6 above. Cubert GmbH is not affiliated with or endorsed by Meta.
 """
+)
 
 _APACHE_TEXT = Template(
     """\
@@ -229,7 +232,7 @@ MIRRORS: dict[str, Mirror] = {
         upstream_md=f"[`facebook/sam3`](https://huggingface.co/facebook/sam3) at revision `{_SAM3_REV}`",
         base_model="facebook/sam3",
         extra_tags=("sam3", "segmentation"),
-        license_text=_SAM_LICENSE_TEXT,
+        license_text=_SAM_LICENSE_TEXT.substitute(upstream="facebook/sam3"),
         files=(
             MirrorFile(
                 name="sam3.pt",
@@ -263,6 +266,59 @@ MIRRORS: dict[str, Mirror] = {
                     repo_id="facebook/sam3",
                     filename="LICENSE",
                     revision=_SAM3_REV,
+                    needs_token=True,
+                ),
+                sha256="bec48f70bd37bf8280a9d1ebf01642d26086f6122ba735baa08fe03c5a6e7448",
+            ),
+        ),
+    ),
+    "sam3.1": Mirror(
+        repo="sam3.1",
+        title="SAM 3.1 (Object Multiplex) checkpoint",
+        plugin="cuvis-ai-sam3",
+        license_id="other",
+        license_name="SAM License",
+        license_front_matter_extra=(
+            "license_name: sam-license",
+            "license_link: LICENSE",
+        ),
+        upstream_md=f"[`facebook/sam3.1`](https://huggingface.co/facebook/sam3.1) at revision `{_SAM31_REV}`",
+        base_model="facebook/sam3.1",
+        extra_tags=("sam3", "segmentation"),
+        license_text=_SAM_LICENSE_TEXT.substitute(upstream="facebook/sam3.1"),
+        files=(
+            MirrorFile(
+                name="sam3.1_multiplex.pt",
+                source=Source(
+                    "hf",
+                    repo_id="facebook/sam3.1",
+                    filename="sam3.1_multiplex.pt",
+                    revision=_SAM31_REV,
+                    needs_token=True,
+                ),
+                sha256="0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6",
+                registry_name="sam3.1",
+                description="SAM 3.1 Object Multiplex checkpoint (mirror of facebook/sam3.1)",
+            ),
+            MirrorFile(
+                name="config.json",
+                source=Source(
+                    "hf",
+                    repo_id="facebook/sam3.1",
+                    filename="config.json",
+                    revision=_SAM31_REV,
+                    needs_token=True,
+                ),
+                sha256="4616385e4b21f2e5e22c875b65679185cbccfa95de42542b9166f7dc3d57160f",
+                aux_of="sam3.1",
+            ),
+            MirrorFile(
+                name="LICENSE",
+                source=Source(
+                    "hf",
+                    repo_id="facebook/sam3.1",
+                    filename="LICENSE",
+                    revision=_SAM31_REV,
                     needs_token=True,
                 ),
                 sha256="bec48f70bd37bf8280a9d1ebf01642d26086f6122ba735baa08fe03c5a6e7448",
