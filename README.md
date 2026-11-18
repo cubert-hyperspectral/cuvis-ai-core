@@ -70,7 +70,7 @@ Create or refresh a development environment at the repository root with:
 uv sync --all-extras --dev
 ```
 
-This installs the runtime dependencies declared in `pyproject.toml`. `uv` automatically provisions the Python version declared in the project metadata, so no manual interpreter management is required.
+This installs the runtime dependencies declared in `pyproject.toml`. `uv` picks a Python that satisfies the project metadata and downloads one if none is installed. `uv.lock` resolves for Python 3.11.5 and newer, so a checkout needs at least that; the package itself still installs from 3.11.0. If `uv` picks an older 3.11 patch release, name the range: `uv sync --all-extras --dev --python ">=3.11.5,<3.14"`.
 
 #### Enable Git Hooks (Required)
 

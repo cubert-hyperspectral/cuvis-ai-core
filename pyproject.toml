@@ -218,6 +218,13 @@ skips = ["B101"]
 version_scheme = "post-release"
 local_scheme = "node-and-date"
 
+[tool.uv]
+# uv.lock resolves for CPython 3.11.5 and newer only. The package itself still installs from
+# 3.11.0 (`requires-python`), but soupsieve 3 and later need 3.11.5: for 3.11.0 to 3.11.4 uv
+# would lock an older soupsieve next to the current one, and the audit job, which runs on one
+# interpreter, would never check that side of the lock.
+environments = ["python_full_version >= '3.11.5'"]
+
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
