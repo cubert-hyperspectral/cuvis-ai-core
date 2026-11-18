@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- CI: the two jobs that run in the `cuvis_pyil` Ubuntu 24.04 container (the tests of `ci.yml` and of the release workflow) run on `ubuntu-24.04` instead of `ubuntu-latest`. `ubuntu-latest` became Ubuntu 26.04, and `actions/setup-python` mounts the host's Python into the container, where `import ssl` then fails (`OPENSSL_3.3.0 not found`).
+- Lock: soupsieve 2.10 to 4.1.1 (CVE-2026-126190, CVE-2026-126191, CVE-2026-126193) and tornado 6.6 to 6.6.1 (CVE-2026-126347), the advisories pip-audit flags on main. Both reach the lock through the `dev` extra only (`ipykernel`, `jupyterlab`). soupsieve 3 and later need CPython 3.11.5, so `uv.lock` is restricted to 3.11.5 and newer (`[tool.uv].environments`). `requires-python` is unchanged and the package installs from 3.11.0 as before; a development checkout on an older patch release stops at `uv sync` with a message about the lock's supported environments. Two tests in `tests/test_lock_python_floor.py` keep the floor and refuse a package that resolves to different versions by Python version.
+
 ## 0.20.2 - 2026-11-06
 
 - The three `dinomaly_lentils_*` trained pipelines are pinned to the Hub revision `2b6d2164` of `cubert-gmbh/XMR_Demo_Industrial_Foreign_Object_Detection_Lentils`. Their yamls at `3602a04e` named `cuvis_ai.deciders.two_stage_decider.TwoStageBinaryDecider`, a path cuvis-ai 0.18.0 retired, so `download-model` fetched pipelines that failed to load with "Node class not found". At `2b6d2164` they name `cuvis_ai.node.deciders.two_stage_decider.TwoStageBinaryDecider`; the `.pt` files are unchanged.
