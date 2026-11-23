@@ -35,6 +35,11 @@ from cuvis_ai_core.utils.plugin_resolver import resolve_pipeline_plugins
 from cuvis_ai_schemas.pipeline.config import PipelineConfig
 
 
+# Set once an in-kernel install asked for a restart. It lives as long as this module
+# stays imported, i.e. until the kernel restarts.
+_restart_pending = False
+
+
 def _top_import_module(cfg) -> str | None:
     """Top-level import package of a plugin (from its first provides FQCN)."""
     for entry in cfg.capabilities:
@@ -106,11 +111,14 @@ def format_install_command(specs: Sequence[str], *, magic: bool = False) -> str:
     """Format specs into a single install command line.
 
     ``magic=False`` -> ``uv pip install '...'`` (terminal / CLI).
-    ``magic=True``  -> ``%pip install '...'`` (the Jupyter in-kernel magic).
+    ``magic=True``  -> ``%pip install "..."`` (the Jupyter in-kernel magic). Double
+    quotes, because on Windows ``%pip`` runs through cmd.exe, which passes single
+    quotes on to pip as part of the spec.
     """
     if not specs:
         return "# all plugins already provisioned; nothing to install"
-    quoted = " ".join(f"'{s}'" for s in specs)
+    q = '"' if magic else "'"
+    quoted = " ".join(f"{q}{s}{q}" for s in specs)
     return f"%pip install {quoted}" if magic else f"uv pip install {quoted}"
 
 
@@ -140,6 +148,7 @@ def _installed_distributions() -> set[tuple[str, str]]:
 
 def _provision_notebook(specs: Sequence[str], *, apply: bool) -> str | None:
     """Emit (and optionally run) the in-kernel ``%pip install`` line."""
+    global _restart_pending
     line = format_install_command(specs, magic=True)
     if not apply:
         print(line)
@@ -165,10 +174,11 @@ def _provision_notebook(specs: Sequence[str], *, apply: bool) -> str | None:
 
     before = _installed_distributions()
     # %pip prints pip's errors but does not raise; IPython (and Colab) leave pip's
-    # exit status in the user namespace instead.
+    # exit status in the user namespace instead. A shell that leaves none behind
+    # counts as success, as before this check existed.
     user_ns = getattr(ip, "user_ns", {})
     user_ns.pop("_exit_code", None)
-    ip.run_line_magic("pip", "install " + " ".join(f"'{s}'" for s in specs))
+    ip.run_line_magic("pip", line.removeprefix("%pip "))
     exit_code = user_ns.get("_exit_code", 0)
     if exit_code:
         raise RuntimeError(
@@ -176,10 +186,14 @@ def _provision_notebook(specs: Sequence[str], *, apply: bool) -> str | None:
         )
     # The data module's spec is listed on every run (an importable package does not
     # prove its extras are installed), so ask for a restart only when %pip changed
-    # the installed packages.
-    if _installed_distributions() == before:
+    # the installed packages. Two exceptions: pip rebuilds a local path on every run
+    # at the same version, so its code may have changed unseen; and a restart asked
+    # for by an earlier run in this kernel is still owed.
+    local_path = any("@ file:" in s for s in specs)
+    if not local_path and not _restart_pending and _installed_distributions() == before:
         print("All plugins already provisioned; no restart needed.")
         return None
+    _restart_pending = True
     print(
         f"Installed {len(specs)} plugin(s) into this kernel.\n"
         "Restart the kernel (Kernel > Restart) and re-run from the top so the "
@@ -206,8 +220,9 @@ def provision_environment(
     - ``env_file=...``: write an env file (``.toml`` pyproject-shaped, ``.txt``
       flat requirements); ``sync=True`` then ``uv pip install -r`` it.
     - ``notebook=True``: emit the ``%pip install`` line; ``apply=True`` runs it
-      in-kernel, raises when the install fails, and asks for a restart only when
-      it changed the installed packages.
+      in-kernel, raises when the install fails, and asks for a restart when it
+      changed the installed packages, installed a local path, or an earlier call
+      in this kernel asked for one.
     """
     if env_file is not None and (apply or notebook):
         raise ValueError(

@@ -58,7 +58,7 @@ def test_format_install_command():
     )
     assert (
         prov.format_install_command(specs, magic=True)
-        == "%pip install 'pkg @ git+https://x@v1'"
+        == '%pip install "pkg @ git+https://x@v1"'
     )
     assert "nothing to install" in prov.format_install_command([])
 
@@ -183,6 +183,12 @@ def test_is_satisfied_false_when_find_spec_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _fresh_kernel_state(monkeypatch):
+    """Each test starts like a freshly started kernel: no restart pending."""
+    monkeypatch.setattr(prov, "_restart_pending", False)
+
+
 def _inject_ipython(monkeypatch, ip):
     """Make ``from IPython import get_ipython`` return a fake yielding ``ip``."""
     monkeypatch.setitem(sys.modules, "IPython", SimpleNamespace(get_ipython=lambda: ip))
@@ -211,7 +217,9 @@ def test_provision_notebook_apply_runs_magic(monkeypatch, capsys):
     _inject_ipython(monkeypatch, _kernel(calls))
     _distributions(monkeypatch, {("a", "1")}, {("a", "1"), ("b", "2")})
     assert prov._provision_notebook(["a", "b"], apply=True) is None
-    assert calls == [("pip", "install 'a' 'b'")]
+    # Double quotes: cmd.exe (what %pip runs through on Windows) keeps single
+    # quotes as part of the argument, and pip then rejects the spec.
+    assert calls == [("pip", 'install "a" "b"')]
     out = capsys.readouterr().out
     assert "Installed 2 plugin" in out
     assert "Restart the kernel" in out
@@ -237,11 +245,59 @@ def test_provision_notebook_apply_raises_when_pip_fails(monkeypatch, capsys):
 
 def test_provision_notebook_apply_ignores_an_earlier_exit_code(monkeypatch, capsys):
     """An exit status an earlier shell command left behind is not read as pip's."""
-    ip = SimpleNamespace(run_line_magic=lambda m, a: None, user_ns={"_exit_code": 1})
+    ip = _kernel([], exit_code=0)
+    ip.user_ns["_exit_code"] = 1  # left behind by an earlier failed `!cmd`
     _inject_ipython(monkeypatch, ip)
     _distributions(monkeypatch, set(), {("a", "1")})
     assert prov._provision_notebook(["a"], apply=True) is None
     assert "Installed 1 plugin" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        SimpleNamespace(run_line_magic=lambda m, a: None, user_ns={}),
+        SimpleNamespace(run_line_magic=lambda m, a: None),
+    ],
+    ids=["exit-status-never-written", "no-user-namespace"],
+)
+def test_provision_notebook_apply_unreadable_exit_status_counts_as_success(
+    monkeypatch, capsys, ip
+):
+    """A shell that leaves no ``_exit_code`` behind keeps the behaviour from before
+    the exit-status check: the install counts as done."""
+    _inject_ipython(monkeypatch, ip)
+    _distributions(monkeypatch, set(), {("a", "1")})
+    assert prov._provision_notebook(["a"], apply=True) is None
+    assert "Installed 1 plugin" in capsys.readouterr().out
+
+
+def test_provision_notebook_apply_local_path_always_asks_for_restart(
+    monkeypatch, capsys
+):
+    """pip rebuilds a local path on every run at the same version, so equal
+    snapshots do not prove the kernel's imported code is current."""
+    _inject_ipython(monkeypatch, _kernel([]))
+    _distributions(monkeypatch, {("dl", "1")}, {("dl", "1")})
+    spec = "cuvis-ai-dataloader[cu3s] @ file:///C:/src/cuvis-ai-dataloader"
+    assert prov._provision_notebook([spec], apply=True) is None
+    out = capsys.readouterr().out
+    assert "Restart the kernel" in out
+    assert "no restart needed" not in out
+
+
+def test_provision_notebook_apply_restart_stays_pending_until_kernel_restart(
+    monkeypatch, capsys
+):
+    """Re-running the cell without restarting must not clear the restart request."""
+    _inject_ipython(monkeypatch, _kernel([]))
+    _distributions(monkeypatch, {("a", "1")}, {("a", "2")}, {("a", "2")}, {("a", "2")})
+    prov._provision_notebook(["a"], apply=True)
+    assert "Restart the kernel" in capsys.readouterr().out
+    prov._provision_notebook(["a"], apply=True)
+    out = capsys.readouterr().out
+    assert "Restart the kernel" in out
+    assert "no restart needed" not in out
 
 
 def test_installed_distributions_lists_this_environment():

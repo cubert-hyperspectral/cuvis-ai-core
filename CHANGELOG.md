@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- The in-kernel install of `provision_environment(notebook=True, apply=True)` stops when pip fails. `%pip` prints pip's error without raising, so the install now reads pip's exit status (IPython and Colab leave it in `_exit_code`) and raises a `RuntimeError` instead of reporting the plugins as installed and asking for a restart. It also asks for the restart only when the install changed the installed packages: the data module's spec is listed on every run (an importable package does not prove its extras are installed), so the pass after the restart asked for another one.
+- The in-kernel install of `provision_environment(notebook=True, apply=True)` stops when pip fails. `%pip` prints pip's error without raising, so the install now reads pip's exit status (IPython and Colab leave it in `_exit_code`) and raises a `RuntimeError` instead of reporting the plugins as installed and asking for a restart. It also asks for the restart only when the install changed the installed packages: the data module's spec is listed on every run (an importable package does not prove its extras are installed), so the pass after the restart asked for another one. A local-path plugin always gets the restart request, because pip rebuilds it on every run at the same version, and a restart asked for once stays asked for until the kernel restarts, so running the cell again does not report "no restart needed" while the old modules are still loaded.
+- The `%pip install` line `provision_environment(notebook=True)` prints and runs puts each spec in double quotes instead of single quotes. On Windows `%pip` runs through cmd.exe, which handed the single quotes to pip as part of the spec, so the in-kernel install failed on Windows for every spec.
 
 ## 0.20.3 - 2026-11-18
 
