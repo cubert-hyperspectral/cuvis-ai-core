@@ -104,16 +104,48 @@ def test_restore_of_unreadable_bytes_raises_unpickling_error(
         pipeline._restore_weights_from_checkpoint(weights)
 
 
-def test_restore_of_a_truncated_archive_keeps_torchs_runtime_error(
-    mock_statistical_trainable_node, tmp_path
+@pytest.mark.parametrize("keep", [-64, 30], ids=["tail-cut", "header-only"])
+def test_restore_of_a_damaged_archive_raises_unpickling_error(
+    mock_statistical_trainable_node, tmp_path, keep
 ):
-    """A damaged zip archive fails inside torch's reader, which raises RuntimeError."""
+    """torch's zip reader raises RuntimeError on a damaged archive; it is the file's fault."""
+    pipeline, node = _fitted_pipeline(mock_statistical_trainable_node)
+    before = node.fitted_mean.clone()
+    _, weights = _save(pipeline, tmp_path)
+    weights.write_bytes(weights.read_bytes()[:keep])
+
+    with pytest.raises(pickle.UnpicklingError, match="could not be read"):
+        pipeline._restore_weights_from_checkpoint(weights)
+
+    assert torch.equal(node.fitted_mean, before)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("CUDA error: out of memory"),
+        RuntimeError("Attempting to deserialize object on a CUDA device"),
+        MemoryError(),
+        OSError("disk read failed"),
+    ],
+    ids=["cuda-runtime", "cuda-device", "memory", "os"],
+)
+def test_restore_passes_server_side_errors_through(
+    mock_statistical_trainable_node, tmp_path, monkeypatch, error
+):
+    """Errors that are the server's problem, not the checkpoint's, keep their type."""
     pipeline, _ = _fitted_pipeline(mock_statistical_trainable_node)
     _, weights = _save(pipeline, tmp_path)
-    weights.write_bytes(weights.read_bytes()[:-64])
 
-    with pytest.raises(RuntimeError):
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(torch, "load", fail)
+
+    with pytest.raises(type(error)) as raised:
         pipeline._restore_weights_from_checkpoint(weights)
+
+    assert raised.value is error
 
 
 def test_restore_without_state_dict_loads_nothing(

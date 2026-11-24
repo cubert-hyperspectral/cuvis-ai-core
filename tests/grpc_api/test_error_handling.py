@@ -1,5 +1,6 @@
 """Unit tests for gRPC error handling helpers."""
 
+import pickle
 from unittest.mock import Mock
 
 import grpc
@@ -173,6 +174,29 @@ def test_grpc_handler_finds_out_of_memory_behind_an_error_it_maps():
     context.set_code.assert_called_once_with(grpc.StatusCode.RESOURCE_EXHAUSTED)
     context.set_details.assert_called_once_with(
         "Failed to restore train run: Node 'det' cannot run on this device"
+    )
+
+
+class _LoadWeightsService:
+    """A service whose weights call gets a checkpoint the restricted loader refuses."""
+
+    @grpc_handler("Failed to load weights")
+    def load_weights(
+        self, request, context
+    ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
+        raise pickle.UnpicklingError(
+            "Weights only load failed: Unsupported global: GLOBAL module.Canary"
+        )
+
+
+def test_grpc_handler_answers_unpickling_error_with_invalid_argument():
+    """A refused or unreadable checkpoint is the client's input to fix, not a server bug."""
+    context = Mock()
+    response = _LoadWeightsService().load_weights(None, context)
+    assert isinstance(response, cuvis_ai_pb2.LoadPipelineWeightsResponse)
+    context.set_code.assert_called_once_with(grpc.StatusCode.INVALID_ARGUMENT)
+    context.set_details.assert_called_once_with(
+        "Weights only load failed: Unsupported global: GLOBAL module.Canary"
     )
 
 

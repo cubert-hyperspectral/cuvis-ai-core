@@ -66,6 +66,38 @@ def test_bytes_load_from_memory_and_restore_the_state(session, tmp_path, no_temp
     assert torch.equal(node.fitted_mean, expected)
 
 
+def test_damaged_archive_bytes_answer_invalid_argument(session, tmp_path):
+    """A truncated upload is the client's to fix; the next valid upload still loads."""
+    service, session_id, pipeline, node, ctx = session
+    node.statistical_initialization(iter([{"data": torch.randn(1, 4, 4, 3)}]))
+    config_path = tmp_path / "fitted.yaml"
+    pipeline.save_to_file(config_path)
+    blob = config_path.with_suffix(".pt").read_bytes()
+    expected = node.fitted_mean.clone()
+    node.fitted_mean.zero_()
+
+    refused = service.load_pipeline_weights(
+        cuvis_ai_pb2.LoadPipelineWeightsRequest(
+            session_id=session_id, weights_bytes=blob[:-64]
+        ),
+        ctx,
+    )
+
+    assert refused.success is False
+    ctx.set_code.assert_called_once_with(grpc.StatusCode.INVALID_ARGUMENT)
+    assert torch.count_nonzero(node.fitted_mean) == 0
+
+    loaded = service.load_pipeline_weights(
+        cuvis_ai_pb2.LoadPipelineWeightsRequest(
+            session_id=session_id, weights_bytes=blob
+        ),
+        Mock(),
+    )
+
+    assert loaded.success is True
+    assert torch.equal(node.fitted_mean, expected)
+
+
 def test_bytes_with_a_non_tensor_object_are_refused(session, tmp_path):
     service, session_id, _, node, ctx = session
     before = node.fitted_mean.clone()

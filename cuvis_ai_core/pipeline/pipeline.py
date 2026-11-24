@@ -86,23 +86,30 @@ def _checkpoint_label(source: Path | BinaryIO) -> str:
     return str(source) if isinstance(source, Path) else "<in-memory checkpoint>"
 
 
+# torch's zip reader starts every error about a damaged archive with this text.
+_DAMAGED_ARCHIVE = "PytorchStreamReader failed"
+
+
 def _load_checkpoint(source: Path | BinaryIO, device: str | None) -> dict[str, Any]:
     """Load a checkpoint that holds only tensors and plain containers.
 
     ``weights_only=True`` makes torch refuse any other object with a
     ``pickle.UnpicklingError`` that names it, so a checkpoint from a client, a
     download or a shared folder cannot run code while it loads. Bytes that are
-    no checkpoint at all, an empty file included, make the restricted unpickler
-    fail with whatever error it meets first (``EOFError``, ``IndexError``,
-    ``KeyError``); those surface as an ``UnpicklingError`` too. torch's own
-    ``RuntimeError`` (a damaged zip archive, a CUDA tensor without CUDA) and
-    ``OSError`` pass through unchanged.
+    no checkpoint at all, an empty file or a damaged zip archive included, make
+    torch fail with whatever error it meets first (``EOFError``, ``IndexError``,
+    ``KeyError``, or a ``RuntimeError`` from its zip reader); those surface as an
+    ``UnpicklingError`` too. Errors that are the machine's rather than the
+    checkpoint's pass through unchanged: any other ``RuntimeError`` (a GPU out of
+    memory, a CUDA tensor without CUDA), ``OSError`` and ``MemoryError``.
     """
     try:
         checkpoint = torch.load(source, map_location=device or None, weights_only=True)
-    except (pickle.UnpicklingError, RuntimeError, OSError):
+    except (pickle.UnpicklingError, OSError, MemoryError):
         raise
     except Exception as exc:
+        if isinstance(exc, RuntimeError) and not str(exc).startswith(_DAMAGED_ARCHIVE):
+            raise
         raise pickle.UnpicklingError(
             f"Checkpoint {_checkpoint_label(source)} could not be read: {exc!r}"
         ) from exc
