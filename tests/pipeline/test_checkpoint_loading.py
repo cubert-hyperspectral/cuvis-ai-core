@@ -88,6 +88,34 @@ def test_restore_rejects_a_malformed_checkpoint(
         pipeline._restore_weights_from_checkpoint(weights)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"this is not a torch checkpoint"],
+    ids=["empty-file", "garbage-bytes"],
+)
+def test_restore_of_unreadable_bytes_raises_unpickling_error(
+    mock_statistical_trainable_node, tmp_path, content
+):
+    pipeline, _ = _fitted_pipeline(mock_statistical_trainable_node)
+    weights = tmp_path / "unreadable.pt"
+    weights.write_bytes(content)
+
+    with pytest.raises(pickle.UnpicklingError, match="could not be read"):
+        pipeline._restore_weights_from_checkpoint(weights)
+
+
+def test_restore_of_a_truncated_archive_keeps_torchs_runtime_error(
+    mock_statistical_trainable_node, tmp_path
+):
+    """A damaged zip archive fails inside torch's reader, which raises RuntimeError."""
+    pipeline, _ = _fitted_pipeline(mock_statistical_trainable_node)
+    _, weights = _save(pipeline, tmp_path)
+    weights.write_bytes(weights.read_bytes()[:-64])
+
+    with pytest.raises(RuntimeError):
+        pipeline._restore_weights_from_checkpoint(weights)
+
+
 def test_restore_without_state_dict_loads_nothing(
     mock_statistical_trainable_node, tmp_path
 ):

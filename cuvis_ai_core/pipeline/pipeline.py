@@ -92,13 +92,15 @@ def _load_checkpoint(source: Path | BinaryIO, device: str | None) -> dict[str, A
     ``weights_only=True`` makes torch refuse any other object with a
     ``pickle.UnpicklingError`` that names it, so a checkpoint from a client, a
     download or a shared folder cannot run code while it loads. Bytes that are
-    no checkpoint at all make the restricted unpickler fail with whatever error
-    it meets first (``IndexError``, ``KeyError``); those surface as an
-    ``UnpicklingError`` too.
+    no checkpoint at all, an empty file included, make the restricted unpickler
+    fail with whatever error it meets first (``EOFError``, ``IndexError``,
+    ``KeyError``); those surface as an ``UnpicklingError`` too. torch's own
+    ``RuntimeError`` (a damaged zip archive, a CUDA tensor without CUDA) and
+    ``OSError`` pass through unchanged.
     """
     try:
         checkpoint = torch.load(source, map_location=device or None, weights_only=True)
-    except (pickle.UnpicklingError, RuntimeError, EOFError, OSError):
+    except (pickle.UnpicklingError, RuntimeError, OSError):
         raise
     except Exception as exc:
         raise pickle.UnpicklingError(
