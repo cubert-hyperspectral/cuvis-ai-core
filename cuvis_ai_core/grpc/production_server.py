@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -31,6 +32,29 @@ _MAINTENANCE_INTERVAL_SECONDS = 3600.0
 # Kill switch: "0" disables the maintenance loop entirely (test suites and
 # operators who want eviction to run only via the explicit CLI).
 _MAINTENANCE_ENV = "CUVIS_RUN_CACHE_MAINTENANCE"
+
+# The server authenticates nobody, so it listens on loopback unless the operator
+# says otherwise in so many words.
+DEFAULT_BIND_HOST = "localhost"
+_BIND_HOST_ENV = "GRPC_BIND_HOST"
+_INSECURE_REMOTE_ENV = "GRPC_ALLOW_INSECURE_REMOTE"
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Whether ``host`` names this machine only (``localhost`` or a loopback address)."""
+    bare = host.strip("[]").lower()
+    if bare == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bare).is_loopback
+    except ValueError:
+        return False
+
+
+def _bind_address(host: str, port: int) -> str:
+    """``host:port`` for grpc, with an IPv6 literal in brackets."""
+    bare = host.strip("[]")
+    return f"[{bare}]:{port}" if ":" in bare else f"{bare}:{port}"
 
 
 class JSONFormatter(logging.Formatter):
@@ -107,6 +131,8 @@ class ProductionServer:
         use_tls: bool = False,
         tls_cert_path: str | None = None,
         tls_key_path: str | None = None,
+        host: str = DEFAULT_BIND_HOST,
+        allow_insecure_remote: bool = False,
     ) -> None:
         self.port = port
         self.max_workers = max_workers
@@ -114,6 +140,8 @@ class ProductionServer:
         self.use_tls = use_tls
         self.tls_cert_path = tls_cert_path
         self.tls_key_path = tls_key_path
+        self.host = host
+        self.allow_insecure_remote = allow_insecure_remote
 
         self.server: grpc.Server | None = None
         self.health_service: HealthService | None = None
@@ -147,6 +175,7 @@ class ProductionServer:
             return
 
         self.logger.info("Starting gRPC server")
+        self._check_bind_host()
 
         grpc_srv_opts = []
         if self.max_msg_size is not None:
@@ -166,23 +195,26 @@ class ProductionServer:
         self.health_service = HealthService()
         health_pb2_grpc.add_HealthServicer_to_server(self.health_service, self.server)
 
+        address = _bind_address(self.host, self.port)
         if self.use_tls:
             if not self.tls_cert_path or not self.tls_key_path:
                 raise ValueError("TLS enabled but cert/key paths not provided")
 
             self.logger.info("Configuring TLS/SSL")
             credentials = load_tls_credentials(self.tls_cert_path, self.tls_key_path)
-            bound_port = self.server.add_secure_port(
-                f"0.0.0.0:{self.port}", credentials
-            )
+            bound_port = self.server.add_secure_port(address, credentials)
             if bound_port == 0:
                 raise RuntimeError("Failed to bind secure port")
-            self.logger.info("Server listening on 0.0.0.0:%s (TLS enabled)", bound_port)
+            self.logger.info(
+                "Server listening on %s (port %s, TLS enabled)", address, bound_port
+            )
         else:
-            bound_port = self.server.add_insecure_port(f"0.0.0.0:{self.port}")
+            bound_port = self.server.add_insecure_port(address)
             if bound_port == 0:
                 raise RuntimeError("Failed to bind insecure port")
-            self.logger.info("Server listening on 0.0.0.0:%s (insecure)", bound_port)
+            self.logger.info(
+                "Server listening on %s (port %s, insecure)", address, bound_port
+            )
 
         self.server.start()
         self.health_service.set_serving()
@@ -190,6 +222,29 @@ class ProductionServer:
         self.logger.info("Server started successfully")
         self._setup_signal_handlers()
         self._start_maintenance_thread()
+
+    def _check_bind_host(self) -> None:
+        """Refuse a non-loopback bind unless the operator opted in explicitly.
+
+        Any caller that reaches the port can load plugins and weights, which runs
+        code under this account, and the server checks no identity yet. So a host
+        other than loopback needs ``GRPC_ALLOW_INSECURE_REMOTE=1``.
+        """
+        if _is_loopback_host(self.host):
+            return
+        if not self.allow_insecure_remote:
+            raise RuntimeError(
+                f"Refusing to bind {self.host}: the server checks no identity, so it "
+                f"listens on loopback only. Set {_INSECURE_REMOTE_ENV}=1 to expose it "
+                "on the network anyway."
+            )
+        self.logger.warning(
+            "Binding %s with %s=1: any machine that reaches port %s can run code "
+            "through this server",
+            self.host,
+            _INSECURE_REMOTE_ENV,
+            self.port,
+        )
 
     def _start_maintenance_thread(self) -> None:
         """Kick off the background cache-maintenance loop (post-bind).
@@ -294,6 +349,20 @@ class ProductionServer:
                 )
 
 
+def server_from_env() -> ProductionServer:
+    """Build the server from the ``GRPC_*`` environment variables."""
+    return ProductionServer(
+        port=int(os.getenv("GRPC_PORT", "50051")),
+        max_workers=int(os.getenv("GRPC_MAX_WORKERS", "10")),
+        max_msg_size=int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024)),  # 300 MB
+        use_tls=os.getenv("GRPC_USE_TLS", "false").lower() == "true",
+        tls_cert_path=os.getenv("GRPC_TLS_CERT_PATH"),
+        tls_key_path=os.getenv("GRPC_TLS_KEY_PATH"),
+        host=os.getenv(_BIND_HOST_ENV, DEFAULT_BIND_HOST),
+        allow_insecure_remote=os.getenv(_INSECURE_REMOTE_ENV, "").strip() == "1",
+    )
+
+
 def serve() -> None:  # pragma: no cover
     """Start the production gRPC server with configuration from environment."""
     load_dotenv(override=True)
@@ -305,24 +374,13 @@ def serve() -> None:  # pragma: no cover
     logger = logging.getLogger(__name__)
     logger.info("Starting cuvis.ai gRPC server")
 
-    port = int(os.getenv("GRPC_PORT", "50051"))
-    max_workers = int(os.getenv("GRPC_MAX_WORKERS", "10"))
-    max_msg_size = int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024))  # 300 MB
-    use_tls = os.getenv("GRPC_USE_TLS", "false").lower() == "true"
-    tls_cert_path = os.getenv("GRPC_TLS_CERT_PATH")
-    tls_key_path = os.getenv("GRPC_TLS_KEY_PATH")
-
+    server = server_from_env()
     logger.info(
-        "Configuration: port=%s, workers=%s, tls=%s", port, max_workers, use_tls
-    )
-
-    server = ProductionServer(
-        port=port,
-        max_workers=max_workers,
-        max_msg_size=max_msg_size,
-        use_tls=use_tls,
-        tls_cert_path=tls_cert_path,
-        tls_key_path=tls_key_path,
+        "Configuration: host=%s, port=%s, workers=%s, tls=%s",
+        server.host,
+        server.port,
+        server.max_workers,
+        server.use_tls,
     )
 
     try:

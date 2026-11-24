@@ -476,3 +476,119 @@ def test_start_launches_maintenance_and_shutdown_stops_it(
         server.shutdown()
     server._maintenance_thread.join(timeout=10)
     assert not server._maintenance_thread.is_alive()
+
+
+# ---------------------------------------------------------------------------
+# bind host
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_grpc_server(monkeypatch):
+    """A grpc.server stand-in that records the bind string and binds port 4321."""
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "0")
+    fake = MagicMock()
+    fake.add_insecure_port.return_value = 4321
+    fake.add_secure_port.return_value = 4321
+    monkeypatch.setattr(
+        "cuvis_ai_core.grpc.production_server.grpc.server", lambda *a, **k: fake
+    )
+    return fake
+
+
+def test_default_bind_host_is_localhost(fake_grpc_server) -> None:
+    server = ProductionServer(port=50551)
+    try:
+        server.start()
+    finally:
+        server.shutdown()
+
+    fake_grpc_server.add_insecure_port.assert_called_once_with("localhost:50551")
+
+
+@pytest.mark.parametrize(
+    ("host", "bind"),
+    [
+        ("localhost", "localhost:50551"),
+        ("127.0.0.1", "127.0.0.1:50551"),
+        ("::1", "[::1]:50551"),
+        ("[::1]", "[::1]:50551"),
+    ],
+)
+def test_loopback_hosts_bind_as_given(fake_grpc_server, host, bind) -> None:
+    server = ProductionServer(port=50551, host=host)
+    try:
+        server.start()
+    finally:
+        server.shutdown()
+
+    fake_grpc_server.add_insecure_port.assert_called_once_with(bind)
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.5", "ai-box.lan"])
+def test_non_loopback_host_is_refused(fake_grpc_server, monkeypatch, host) -> None:
+    """Off loopback the server refuses to start, even with a token in the env."""
+    monkeypatch.setenv("CUVIS_GRPC_TOKEN", "configured-but-not-checked-yet")
+    server = ProductionServer(port=50551, host=host)
+
+    with pytest.raises(RuntimeError, match="GRPC_ALLOW_INSECURE_REMOTE"):
+        server.start()
+
+    fake_grpc_server.add_insecure_port.assert_not_called()
+    assert server.server is None
+
+
+def test_insecure_remote_override_binds_and_warns(fake_grpc_server, caplog) -> None:
+    server = ProductionServer(port=50551, host="0.0.0.0", allow_insecure_remote=True)
+    try:
+        with caplog.at_level(logging.WARNING):
+            server.start()
+    finally:
+        server.shutdown()
+
+    fake_grpc_server.add_insecure_port.assert_called_once_with("0.0.0.0:50551")
+    assert any(
+        "0.0.0.0" in r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.WARNING
+    )
+
+
+def test_tls_binds_the_configured_host(fake_grpc_server, monkeypatch) -> None:
+    monkeypatch.setattr(
+        production_server_mod, "load_tls_credentials", lambda cert, key: "credentials"
+    )
+    server = ProductionServer(
+        port=50551, use_tls=True, tls_cert_path="cert.pem", tls_key_path="key.pem"
+    )
+    try:
+        server.start()
+    finally:
+        server.shutdown()
+
+    fake_grpc_server.add_secure_port.assert_called_once_with(
+        "localhost:50551", "credentials"
+    )
+
+
+def test_server_from_env_reads_bind_host_and_override(monkeypatch) -> None:
+    monkeypatch.setenv("GRPC_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("GRPC_ALLOW_INSECURE_REMOTE", "1")
+    monkeypatch.setenv("GRPC_PORT", "50552")
+
+    server = production_server_mod.server_from_env()
+
+    assert server.host == "0.0.0.0"
+    assert server.allow_insecure_remote is True
+    assert server.port == 50552
+
+
+def test_server_from_env_defaults_to_localhost_without_override(monkeypatch) -> None:
+    for var in ("GRPC_BIND_HOST", "GRPC_ALLOW_INSECURE_REMOTE", "GRPC_PORT"):
+        monkeypatch.delenv(var, raising=False)
+
+    server = production_server_mod.server_from_env()
+
+    assert server.host == "localhost"
+    assert server.allow_insecure_remote is False
+    assert server.port == 50051

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import pickle
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator
 from copy import copy
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 import networkx as nx
 import torch
@@ -78,6 +79,46 @@ def _tensor_bytes(value: Any) -> tuple[int, int]:
         elif isinstance(item, dict):
             stack.extend(item.values())
     return total, cuda
+
+
+def _checkpoint_label(source: Path | BinaryIO) -> str:
+    """Name a checkpoint source in an error message."""
+    return str(source) if isinstance(source, Path) else "<in-memory checkpoint>"
+
+
+# torch's zip reader starts every error about a damaged archive with this text.
+_DAMAGED_ARCHIVE = "PytorchStreamReader failed"
+
+
+def _load_checkpoint(source: Path | BinaryIO, device: str | None) -> dict[str, Any]:
+    """Load a checkpoint that holds only tensors and plain containers.
+
+    ``weights_only=True`` makes torch refuse any other object with a
+    ``pickle.UnpicklingError`` that names it, so a checkpoint from a client, a
+    download or a shared folder cannot run code while it loads. Bytes that are
+    no checkpoint at all, an empty file or a damaged zip archive included, make
+    torch fail with whatever error it meets first (``EOFError``, ``IndexError``,
+    ``KeyError``, or a ``RuntimeError`` from its zip reader); those surface as an
+    ``UnpicklingError`` too. Errors that are the machine's rather than the
+    checkpoint's pass through unchanged: any other ``RuntimeError`` (a GPU out of
+    memory, a CUDA tensor without CUDA), ``OSError`` and ``MemoryError``.
+    """
+    try:
+        checkpoint = torch.load(source, map_location=device or None, weights_only=True)
+    except (pickle.UnpicklingError, OSError, MemoryError):
+        raise
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and not str(exc).startswith(_DAMAGED_ARCHIVE):
+            raise
+        raise pickle.UnpicklingError(
+            f"Checkpoint {_checkpoint_label(source)} could not be read: {exc!r}"
+        ) from exc
+    if not isinstance(checkpoint, dict):
+        raise ValueError(
+            f"Checkpoint {_checkpoint_label(source)} is not a dict "
+            f"(found {type(checkpoint).__name__})"
+        )
+    return checkpoint
 
 
 # Minimal, dependency-free pan/zoom for the pipeline SVG in a Jupyter / VS Code cell.
@@ -677,35 +718,43 @@ class CuvisPipeline:
 
     def _restore_weights_from_checkpoint(
         self,
-        weights_path: str | Path,
+        weights_path: str | Path | BinaryIO,
         strict_weight_loading: bool = True,
         device: str | None = None,
     ) -> list[str]:
         """Restore node weights from checkpoint.
 
         Args:
-            weights_path: Path to .pt weights file
+            weights_path: Path to a .pt weights file, or a binary file object
+                holding its bytes (client-sent weights are loaded from memory)
             strict_weight_loading: If True, raise error on state_dict key mismatch
             device: Device to load weights to
 
         Returns:
             Names of pipeline nodes absent from the checkpoint (they keep
-            their initialized weights).
+            their initialized weights). A checkpoint without a ``state_dict``
+            entry loads nothing, so every node is reported.
 
         Raises:
             FileNotFoundError: If weights file doesn't exist
+            pickle.UnpicklingError: If the checkpoint holds anything other than
+                tensors and plain containers
+            ValueError: If the checkpoint or its ``state_dict`` is not a dict
             RuntimeError: If strict loading fails
         """
-        weights_path = Path(weights_path)
+        if isinstance(weights_path, (str, os.PathLike)):
+            weights_path = Path(weights_path)
+            if not weights_path.exists():
+                raise FileNotFoundError(f"Weights file not found: {weights_path}")
 
-        if not weights_path.exists():
-            raise FileNotFoundError(f"Weights file not found: {weights_path}")
-
-        checkpoint = torch.load(
-            weights_path, map_location=device if device else None, weights_only=False
-        )
+        checkpoint = _load_checkpoint(weights_path, device)
 
         state_dict = checkpoint.get("state_dict", {})
+        if not isinstance(state_dict, dict):
+            raise ValueError(
+                f"'state_dict' in checkpoint {_checkpoint_label(weights_path)} is not "
+                f"a dict (found {type(state_dict).__name__})"
+            )
         missing_keys = []
 
         for node in self.nodes:
@@ -848,11 +897,7 @@ class CuvisPipeline:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location=device if device else None,
-            weights_only=False,
-        )
+        checkpoint = _load_checkpoint(checkpoint_path, device)
 
         state: dict[str, Any] = {"metadata": checkpoint.get("metadata", {})}
 
