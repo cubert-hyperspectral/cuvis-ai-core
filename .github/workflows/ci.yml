@@ -151,6 +151,10 @@ jobs:
         run: |
           uv run detect-secrets scan --baseline .secrets.baseline
 
+      - name: Run bandit (torch.load must pass weights_only=True)
+        run: |
+          uv run bandit -r cuvis_ai_core/ scripts/ -t B614
+
       - name: Run bandit
         run: |
           uv run bandit -r cuvis_ai_core/ || true
