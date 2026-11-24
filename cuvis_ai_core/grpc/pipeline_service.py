@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
-import tempfile
 from datetime import datetime
-from pathlib import Path
 
 import grpc
 import torch
@@ -62,17 +61,10 @@ class PipelineService:
             resolved_path = str(resolved)
             session.weights_source = resolved_path
         elif request.HasField("weights_bytes") and request.weights_bytes:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmp:
-                tmp.write(request.weights_bytes)
-                tmp_path = Path(tmp.name)
-
-            try:
-                pipeline._restore_weights_from_checkpoint(
-                    weights_path=str(tmp_path),
-                    strict_weight_loading=strict,
-                )
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            pipeline._restore_weights_from_checkpoint(
+                weights_path=io.BytesIO(request.weights_bytes),
+                strict_weight_loading=strict,
+            )
             resolved_path = "(client-bytes)"
             session.weights_source = resolved_path
         else:

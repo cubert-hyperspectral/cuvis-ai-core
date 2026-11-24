@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Checkpoints load with `torch.load(weights_only=True)`. `CuvisPipeline._restore_weights_from_checkpoint` (behind the gRPC `LoadPipelineWeights`, `restore-pipeline`, `restore-trainrun` and `CuvisPipeline.load_pipeline`) and `CuvisPipeline.load_trainer_state` accept tensors and plain containers only: a checkpoint that carries any other object stops with a `pickle.UnpicklingError` naming its class instead of unpickling it, which could run code from a checkpoint sent over gRPC or downloaded. Checkpoints written by `save_to_file`, `SaveTrainRun` and `export-pipeline` hold tensors and plain metadata and load as before. A checkpoint that is not a dict, or whose `state_dict` is not a dict, raises a `ValueError` naming the type it found; a dict without `state_dict` still loads nothing and reports every node as missing. Bytes that are no checkpoint at all raise `pickle.UnpicklingError`.
+- `LoadPipelineWeights` with `weights_bytes` loads the bytes from memory instead of writing them to a temporary file first.
+- The gRPC server listens on `localhost` instead of `0.0.0.0`; `GRPC_BIND_HOST` picks another address. The server checks no caller identity, so an address other than loopback refuses to start unless `GRPC_ALLOW_INSECURE_REMOTE=1` is set, which starts it with a warning. Clients on the same machine are unaffected (CuvisNEXT dials `localhost`); a setup that reached the server from another machine needs both variables. `production_server.server_from_env()` builds the server from the `GRPC_*` variables.
+- CI: bandit's `B614` check (`torch.load` without `weights_only=True`) runs on `cuvis_ai_core/` and `scripts/` and fails the build, and `tests/test_torch_load_weights_only.py` checks the same in the test suite.
+
 ## 0.19.3 - 2026-11-04
 
 - The post-fit steps reuse the val and test datasets the fit built instead of building them again. `PostFitCallback.run` calls `setup("validate")` or `setup("test")` only for a split the data module has not built yet, so the standalone calibration phase and a statistical-only fit still get theirs. Inside Lightning's `on_train_end` the fit's loaders are still alive, so the rebuild opened every validation recording a second time while the first readers stayed open; with the SDK processing on the GPU that added one processing context per recording and an 8 GB card aborted the training child natively at the threshold calibration (exit `0xC0000409`). The calibration now reads through the readers the fit already holds, which also skips the context rebuild per recording.
