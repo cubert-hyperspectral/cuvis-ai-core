@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import json
+import pickle
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 import grpc
@@ -82,6 +83,9 @@ def require_pipeline(
 # exception type wins, so ``Exception`` must come last.
 _EXCEPTION_STATUS_MAP: list[tuple[type[Exception], grpc.StatusCode]] = [
     (FileNotFoundError, grpc.StatusCode.NOT_FOUND),
+    # A checkpoint that is unreadable or carries anything but tensors and plain
+    # containers is the caller's input to fix, not a server fault.
+    (pickle.UnpicklingError, grpc.StatusCode.INVALID_ARGUMENT),
     (json.JSONDecodeError, grpc.StatusCode.INVALID_ARGUMENT),
     (ValidationError, grpc.StatusCode.INVALID_ARGUMENT),
     (ValueError, grpc.StatusCode.INVALID_ARGUMENT),
@@ -96,11 +100,12 @@ def grpc_handler(error_prefix: str = "") -> Callable:
     * a GPU out-of-memory error, also behind an error raised from it or while
       handling it (one of the types below included),
       → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
-    * ``FileNotFoundError``    → ``NOT_FOUND``
-    * ``json.JSONDecodeError`` → ``INVALID_ARGUMENT``
-    * ``ValidationError``      → ``INVALID_ARGUMENT``
-    * ``ValueError``           → ``INVALID_ARGUMENT``
-    * ``Exception`` (fallback) → ``INTERNAL`` (with *error_prefix*)
+    * ``FileNotFoundError``        → ``NOT_FOUND``
+    * ``pickle.UnpicklingError``   → ``INVALID_ARGUMENT`` (a refused checkpoint)
+    * ``json.JSONDecodeError``     → ``INVALID_ARGUMENT``
+    * ``ValidationError``          → ``INVALID_ARGUMENT``
+    * ``ValueError``               → ``INVALID_ARGUMENT``
+    * ``Exception`` (fallback)     → ``INTERNAL`` (with *error_prefix*)
 
     The response type is inferred from the method's return annotation
     and an empty instance is returned on error.

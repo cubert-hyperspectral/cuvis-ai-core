@@ -4,6 +4,7 @@ import tempfile
 from dataclasses import dataclass
 from unittest.mock import Mock
 
+import grpc
 import pytest
 import torch
 
@@ -79,5 +80,6 @@ def test_bytes_with_a_non_tensor_object_are_refused(session, tmp_path):
     )
 
     assert response.success is False
+    ctx.set_code.assert_called_once_with(grpc.StatusCode.INVALID_ARGUMENT)
     assert "_Canary" in ctx.set_details.call_args.args[0]
     assert torch.equal(node.fitted_mean, before)
