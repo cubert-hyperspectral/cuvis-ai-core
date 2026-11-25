@@ -415,3 +415,116 @@ def test_save_train_run_outside_the_roots_answers_permission_denied(
     context.set_code.assert_called_with(grpc.StatusCode.PERMISSION_DENIED)
     assert not response.success
     assert not (tmp_path / "outside" / "runs").exists()
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: derived writes, the sibling fallback, Hydra search paths
+# ---------------------------------------------------------------------------
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("creating symlinks is not permitted here")
+
+
+def test_weights_climbing_out_of_a_search_path_are_refused(root, tmp_path):
+    (tmp_path / "outside" / "model.pt").write_bytes(b"")
+    (root / "weights").mkdir()
+
+    with pytest.raises(PathNotAllowedError):
+        helpers.find_weights_file("../../outside/model.pt", [str(root / "weights")])
+
+
+def test_a_save_whose_checkpoint_links_outside_the_roots_is_refused(root, tmp_path):
+    victim = tmp_path / "outside" / "model.pt"
+    victim.write_bytes(b"keep me")
+    _symlink_or_skip(root / "model.pt", victim)
+
+    with pytest.raises(PathNotAllowedError):
+        helpers.resolve_pipeline_save_path(str(root / "model.yaml"))
+    assert victim.read_bytes() == b"keep me"
+
+
+def test_save_train_run_whose_pipeline_sibling_links_outside_is_refused(root, tmp_path):
+    victim = tmp_path / "outside" / "run_pipeline.yaml"
+    victim.write_text("keep: me\n", encoding="utf-8")
+    _symlink_or_skip(root / "run_pipeline.yaml", victim)
+    context = MagicMock()
+
+    response = TrainRunService(MagicMock()).save_train_run(
+        cuvis_ai_pb2.SaveTrainRunRequest(
+            session_id="s", trainrun_path=str(root / "run.yaml"), save_weights=True
+        ),
+        context,
+    )
+
+    context.set_code.assert_called_with(grpc.StatusCode.PERMISSION_DENIED)
+    assert not response.success
+    assert victim.read_text(encoding="utf-8") == "keep: me\n"
+
+
+def test_a_sibling_pipeline_that_links_outside_the_roots_is_refused(
+    root, tmp_path, mock_experiment_dict
+):
+    outside_pipeline = tmp_path / "outside" / "pipeline.yaml"
+    outside_pipeline.write_text("nodes: []\n", encoding="utf-8")
+    cfg = {k: v for k, v in mock_experiment_dict.items() if k != "pipeline"}
+    trainrun = root / "run.yaml"
+    trainrun.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    _symlink_or_skip(root / "run_pipeline.yaml", outside_pipeline)
+
+    with pytest.raises(PathNotAllowedError):
+        TrainRunService.parse_trainrun_yaml(trainrun)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "hydra.searchpath=[file:////fileserver/share]",
+        "+hydra.searchpath=[file:///elsewhere]",
+        "++hydra.searchpath=[pkg://somewhere]",
+        "hydra/job_logging=disabled",
+    ],
+)
+def test_hydra_settings_in_overrides_are_refused(
+    root, no_remote_filesystem_calls, override
+):
+    (root / "trainrun.yaml").write_text("name: run\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowedError, match="hydra"):
+        config_helpers.resolve_config_with_hydra(
+            "trainrun", "trainrun.yaml", [str(root)], [override]
+        )
+
+
+def test_a_config_that_sets_its_own_hydra_search_path_is_refused(root):
+    (root / "trainrun.yaml").write_text(
+        "name: run\nhydra:\n  searchpath:\n    - file:////fileserver/share\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PathNotAllowedError, match="hydra"):
+        config_helpers.resolve_config_with_hydra(
+            "trainrun", "trainrun.yaml", [str(root)], []
+        )
+
+
+def test_plain_overrides_still_resolve_with_roots(root, monkeypatch):
+    seen = {}
+
+    def compose(config_name, overrides):
+        seen["overrides"] = overrides
+        return {"name": "run"}
+
+    monkeypatch.setattr("hydra.compose", compose)
+    (root / "trainrun.yaml").write_text("name: run\n", encoding="utf-8")
+
+    with pytest.raises(
+        Exception
+    ):  # the stub config is no valid trainrun; only the screen matters
+        config_helpers.resolve_config_with_hydra(
+            "trainrun", "trainrun.yaml", [str(root)], ["name=other"]
+        )
+    assert seen["overrides"] == ["name=other"]

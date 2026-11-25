@@ -65,7 +65,15 @@ then refused with `PERMISSION_DENIED` when it is a network or device path (`\\ho
 `//host/share`, `\\?\...`), contains a `..` segment, or resolves outside every root. Network and
 device paths are refused on their text, before any filesystem call, so the server never opens an SMB
 session to a host a client named. Session search paths outside the roots come back in
-`rejected_paths`.
+`rejected_paths`. Files the server writes next to a requested one (the `.pt` beside a saved
+pipeline, the pipeline and weights beside a saved trainrun) have to lie inside the roots too, and
+`ResolveConfig` refuses Hydra's own settings (`hydra.searchpath` and the like), from overrides or
+from the config file.
+
+The roots cover the locations a client chooses. The server's own pipeline library
+(`CUVIS_CONFIGS_DIR`), which `ListAvailablePipelines` and `GetPipelineInfo` read, is not
+restricted by them: `GetPipelineInfo` takes only relative names, refuses `..`, and stays inside
+that library.
 
 ### Plugins directory
 

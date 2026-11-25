@@ -178,3 +178,13 @@ def test_without_a_plugins_dir_any_manifest_is_registered(monkeypatch, service):
 
     assert response.registered_plugin == "sam3"
     assert registered["sam3"]["repo"] == anything["repo"]
+
+
+def test_a_broken_plugins_dir_is_the_servers_problem(plugins_dir, service):
+    (plugins_dir / "dup.yaml").write_text(yaml.safe_dump(GIT), encoding="utf-8")
+
+    response, context, registered = _load(service, GIT)
+
+    context.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+    assert str(plugins_dir) in context.set_details.call_args.args[0]
+    assert "sam3" not in registered

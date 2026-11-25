@@ -81,9 +81,12 @@ class TrainRunService:
 
         # The trainrun's pipeline is persisted as a reference: the live pipeline
         # is written to a sibling YAML and the trainrun points at it by name.
-        sibling_pipeline_path = trainrun_path.with_name(
-            f"{trainrun_path.stem}_pipeline.yaml"
+        sibling_pipeline_path = confine_resolved(
+            trainrun_path.with_name(f"{trainrun_path.stem}_pipeline.yaml"),
+            what="trainrun_path",
         )
+        # The weights go beside the pipeline sibling; a link there must not lead out either.
+        confine_resolved(sibling_pipeline_path.with_suffix(".pt"), what="trainrun_path")
 
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
@@ -249,8 +252,11 @@ class TrainRunService:
             )
 
         # No explicit reference: fall back to the ``<name>_pipeline.yaml`` sibling.
-        sibling = trainrun_path.with_stem(f"{trainrun_path.stem}_pipeline").with_suffix(
-            ".yaml"
+        sibling = confine_resolved(
+            trainrun_path.with_stem(f"{trainrun_path.stem}_pipeline").with_suffix(
+                ".yaml"
+            ),
+            what="trainrun pipeline",
         )
         if sibling.exists():
             return trainrun_config, sibling

@@ -20,7 +20,11 @@ from cuvis_ai_schemas.training import (
     TrainRunConfig,
 )
 
-from cuvis_ai_core.utils.path_confinement import confine_resolved
+from cuvis_ai_core.utils.path_confinement import (
+    PathNotAllowedError,
+    allowed_roots,
+    confine_resolved,
+)
 
 # ------------------------------------------------------------------
 # Config registry and validation helpers
@@ -123,6 +127,28 @@ def apply_config_overrides(
     return OmegaConf.to_container(config_omega, resolve=True)  # type: ignore[return-value]
 
 
+def _refuse_hydra_settings(config_file: Path, overrides: list[str]) -> None:
+    """Refuse Hydra's own settings while ``CUVIS_ALLOWED_ROOTS`` is set.
+
+    ``hydra.searchpath`` (from an override or from the primary config) makes Hydra test
+    folders the caller names before anything else runs, a network share included.
+    """
+    for override in overrides:
+        key = override.split("=", 1)[0].lstrip("+~").strip()
+        if key == "hydra" or key.startswith(("hydra.", "hydra/")):
+            raise PathNotAllowedError(
+                f"overrides may not change hydra settings while CUVIS_ALLOWED_ROOTS "
+                f"is set: {override!r}"
+            )
+    with config_file.open("r", encoding="utf-8") as f:
+        primary = yaml.safe_load(f)
+    if isinstance(primary, dict) and "hydra" in primary:
+        raise PathNotAllowedError(
+            f"{config_file} sets hydra options, which are not allowed while "
+            "CUVIS_ALLOWED_ROOTS is set"
+        )
+
+
 def resolve_config_with_hydra(
     config_type: str,
     config_path: str,
@@ -155,6 +181,8 @@ def resolve_config_with_hydra(
         break
 
     hydra_overrides = overrides if isinstance(overrides, list) else []
+    if allowed_roots() is not None:
+        _refuse_hydra_settings(config_file, hydra_overrides)
 
     with initialize_config_dir(config_dir=str(config_root), version_base="1.3"):
         cfg = compose(config_name=config_name, overrides=hydra_overrides)

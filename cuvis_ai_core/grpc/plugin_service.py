@@ -379,6 +379,16 @@ class PluginService:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
             context.set_details(str(exc))
             return cuvis_ai_pb2.LoadPluginResponse(error=str(exc))
+        except ValueError as exc:
+            # A duplicate name or an invalid manifest in the launcher's own folder.
+            msg = (
+                f"The server's plugins directory "
+                f"{os.environ.get(PLUGINS_DIR_ENV, '').strip()} is broken: {exc}"
+            )
+            logger.error(msg)
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(msg)
+            return cuvis_ai_pb2.LoadPluginResponse(error=msg)
 
         session.node_registry.register_plugins_catalog({manifest.name: manifest})
         session.registered_plugins[manifest.name] = manifest.model_dump()

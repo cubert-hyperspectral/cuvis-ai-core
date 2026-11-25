@@ -623,7 +623,8 @@ def resolve_pipeline_save_path(
 
     If the path is absolute, use it as-is.
     If the path is relative, resolve it relative to base_dir.
-    With ``CUVIS_ALLOWED_ROOTS`` set, the result is resolved and has to lie inside a root.
+    With ``CUVIS_ALLOWED_ROOTS`` set, the result is resolved and has to lie inside a root, and
+    so does the ``.pt`` beside it that ``save_to_file`` writes.
 
     Args:
         pipeline_path: Path to save pipeline (absolute or relative)
@@ -638,6 +639,8 @@ def resolve_pipeline_save_path(
     path = Path(pipeline_path)
     if not path.is_absolute():
         path = base_dir / path
+    # save_to_file writes the weights beside the yaml; a link there must not lead out either.
+    confine_resolved(path.with_suffix(".pt"), what="pipeline_path")
     return confine_resolved(path, what="pipeline_path")
 
 
