@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.4 - 2026-11-24
+## 0.20.4 - 2026-11-25
 
 - Checkpoints load with `torch.load(weights_only=True)`. `CuvisPipeline._restore_weights_from_checkpoint` (behind the gRPC `LoadPipelineWeights`, `restore-pipeline`, `restore-trainrun` and `CuvisPipeline.load_pipeline`) and `CuvisPipeline.load_trainer_state` accept tensors and plain containers only: a checkpoint that carries any other object stops with a `pickle.UnpicklingError` naming its class instead of unpickling it, which could run code from a checkpoint sent over gRPC or downloaded. Checkpoints written by `save_to_file`, `SaveTrainRun` and `export-pipeline` hold tensors and plain metadata and load as before. A checkpoint that is not a dict, or whose `state_dict` is not a dict, raises a `ValueError` naming the type it found; a dict without `state_dict` still loads nothing and reports every node as missing. Bytes that are no checkpoint at all, an empty file or a damaged zip archive included, raise `pickle.UnpicklingError`; errors that are the machine's rather than the checkpoint's (a GPU out of memory, `MemoryError`, `OSError`) keep their type. Over gRPC a refused or unreadable checkpoint answers `INVALID_ARGUMENT` instead of `INTERNAL`.
 - `LoadPipelineWeights` with `weights_bytes` loads the bytes from memory instead of writing them to a temporary file first.
