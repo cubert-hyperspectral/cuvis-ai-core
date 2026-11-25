@@ -29,6 +29,10 @@ This is the central concept and the biggest difference from older versions:
    **`LoadPlugin` is a prerequisite of `LoadPipeline`**: a pipeline naming a plugin that was never
    registered fails with `FAILED_PRECONDITION`. **Install/import failures surface at `LoadPipeline`,
    not `LoadPlugin`.**
+3. When the server runs with `CUVIS_PLUGINS_DIR`, `LoadPlugin` registers only a plugin whose
+   manifest lies in that directory with the same source (repo and tag, or local path), and it
+   registers the copy from disk. Any other manifest answers `PERMISSION_DENIED`. See
+   [server_security.md](server_security.md).
 
 This split keeps the server process clean: a plugin's dependencies are never installed into the
 server's own environment, so conflicting plugin dependencies cannot corrupt the server.

@@ -35,7 +35,7 @@ Cuvis.AI bridges the gap between hyperspectral hardware and real world applicati
 - **Plugin System**: Dynamic node loading from Git repositories or local filesystem paths
 - **Serialization & Restoration**: Save and restore complete pipeline states and configurations
 - **Type Safety**: Strongly-typed port system with runtime validation
-- **gRPC Services**: Remote pipeline management, training, and inference APIs
+- **gRPC Services**: Remote pipeline management, training, and inference APIs (see [docs/server_security.md](docs/server_security.md) before you expose the server)
 - **Training Framework**: Integration with PyTorch Lightning for model training workflows
 
 This separation allows the core framework to evolve independently while the catalog of domain-specific nodes grows through a plugin architecture.
