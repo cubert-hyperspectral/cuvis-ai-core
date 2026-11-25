@@ -13,6 +13,7 @@ import yaml
 from loguru import logger
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.utils.path_confinement import check_not_remote, confine_resolved
 from cuvis_ai_core.utils.restore import (
     _resolve_pipeline_reference,
     _resolve_splits_path_in_config,
@@ -73,7 +74,9 @@ class TrainRunService:
             context.set_details("trainrun_path is required")
             return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
 
-        trainrun_path = Path(request.trainrun_path)
+        trainrun_path = confine_resolved(
+            Path(request.trainrun_path), what="trainrun_path"
+        )
         trainrun_path.parent.mkdir(parents=True, exist_ok=True)
 
         # The trainrun's pipeline is persisted as a reference: the live pipeline
@@ -207,6 +210,7 @@ class TrainRunService:
         to learn its plugin set before forwarding the restore request; the child
         rebuilds it against its own ``NodeRegistry`` via :func:`restore_train_run`.
         """
+        trainrun_path = confine_resolved(trainrun_path, what="trainrun_path")
         if not trainrun_path.exists():
             raise FileNotFoundError(f"Train run file not found: {trainrun_path}")
 
@@ -236,8 +240,12 @@ class TrainRunService:
             # An explicit reference must resolve; a failure surfaces loudly with
             # the tried-paths diagnostic (mirrors the CLI restore path) rather
             # than being masked by the sibling fallback.
-            return trainrun_config, _resolve_pipeline_reference(
-                trainrun_config.pipeline, trainrun_path.parent
+            check_not_remote(trainrun_config.pipeline, what="trainrun pipeline")
+            return trainrun_config, confine_resolved(
+                _resolve_pipeline_reference(
+                    trainrun_config.pipeline, trainrun_path.parent
+                ),
+                what="trainrun pipeline",
             )
 
         # No explicit reference: fall back to the ``<name>_pipeline.yaml`` sibling.
@@ -277,7 +285,9 @@ class TrainRunService:
         # Resolve weights override from the request, if any.
         weights_path_from_request: Path | None = None
         if request.HasField("weights_path") and request.weights_path:
-            weights_path_from_request = Path(request.weights_path)
+            weights_path_from_request = confine_resolved(
+                Path(request.weights_path), what="weights_path"
+            )
             if not weights_path_from_request.exists():
                 raise FileNotFoundError(
                     f"Weights file not found: {weights_path_from_request}"

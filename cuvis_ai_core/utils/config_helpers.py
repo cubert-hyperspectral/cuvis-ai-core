@@ -20,6 +20,8 @@ from cuvis_ai_schemas.training import (
     TrainRunConfig,
 )
 
+from cuvis_ai_core.utils.path_confinement import confine_resolved
+
 # ------------------------------------------------------------------
 # Config registry and validation helpers
 # ------------------------------------------------------------------
@@ -206,14 +208,14 @@ def _find_config_file(path: str, search_paths: list[str]) -> Path:
 
     if path_obj.is_absolute():
         if path_obj.exists():
-            return path_obj
+            return confine_resolved(path_obj, what="config path")
         raise FileNotFoundError(f"Config file not found: {path_obj}")
 
     for search_dir in search_paths:
         candidate = Path(search_dir) / path_obj
         if candidate.exists():
             logger.debug(f"Found config in {search_dir}: {path_obj}")
-            return candidate.resolve()
+            return confine_resolved(candidate.resolve(), what="config path")
 
     raise FileNotFoundError(
         f"Config file '{path}' not found in search paths: {search_paths}"

@@ -15,6 +15,9 @@ import numpy as np
 import torch
 import yaml
 from loguru import logger
+
+from cuvis_ai_core.utils.path_confinement import confine_resolved
+
 from .v1 import cuvis_ai_pb2
 
 
@@ -620,6 +623,7 @@ def resolve_pipeline_save_path(
 
     If the path is absolute, use it as-is.
     If the path is relative, resolve it relative to base_dir.
+    With ``CUVIS_ALLOWED_ROOTS`` set, the result is resolved and has to lie inside a root.
 
     Args:
         pipeline_path: Path to save pipeline (absolute or relative)
@@ -632,11 +636,9 @@ def resolve_pipeline_save_path(
         base_dir = get_server_base_dir() / "pipeline"
 
     path = Path(pipeline_path)
-    if path.is_absolute():
-        return path
-
-    # Relative path - resolve relative to base_dir
-    return base_dir / path
+    if not path.is_absolute():
+        path = base_dir / path
+    return confine_resolved(path, what="pipeline_path")
 
 
 # ------------------------------------------------------------------
@@ -895,14 +897,14 @@ def find_weights_file(path: str, search_paths: list[str]) -> Path:
 
     if path_obj.is_absolute():
         if path_obj.exists():
-            return path_obj
+            return confine_resolved(path_obj, what="weights_path")
         raise FileNotFoundError(f"Weights file not found: {path_obj}")
 
     for search_dir in search_paths:
         candidate = Path(search_dir) / path_obj
         if candidate.exists():
             logger.debug(f"Found weights in {search_dir}: {path_obj}")
-            return candidate.resolve()
+            return confine_resolved(candidate.resolve(), what="weights_path")
 
     raise FileNotFoundError(
         f"Weights file '{path}' not found in search paths: {search_paths}"
