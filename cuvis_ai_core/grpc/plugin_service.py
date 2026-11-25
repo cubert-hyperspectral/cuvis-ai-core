@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
 
 import grpc
@@ -21,7 +22,12 @@ from cuvis_ai_core.orchestrator.plugin_capabilities import (
 )
 from cuvis_ai_core.utils.icon_helpers import get_node_icon
 from cuvis_ai_core.utils.node_registry import NodeRegistry
-from cuvis_ai_schemas.plugin import LocalPluginSource, parse_plugin_manifest
+from cuvis_ai_schemas.plugin import (
+    GitPluginSource,
+    LocalPluginSource,
+    PluginManifest,
+    parse_plugin_manifest,
+)
 from cuvis_ai_schemas.enums import NodeCategory, NodeTag
 from cuvis_ai_schemas.grpc.conversions import (
     node_category_to_proto,
@@ -248,6 +254,48 @@ def _plugin_info(name: str, config: dict) -> cuvis_ai_pb2.PluginInfo:
     )
 
 
+# The launcher's plugins directory. Set, LoadPlugin registers only manifests found there.
+PLUGINS_DIR_ENV = "CUVIS_PLUGINS_DIR"
+
+
+def _path_key(path: str) -> str:
+    """A local plugin path compared on its text; the client's text is never opened."""
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _same_source(sent: PluginManifest, on_disk: PluginManifest) -> bool:
+    if isinstance(sent, GitPluginSource) and isinstance(on_disk, GitPluginSource):
+        return sent.repo == on_disk.repo and sent.tag == on_disk.tag
+    if isinstance(sent, LocalPluginSource) and isinstance(on_disk, LocalPluginSource):
+        return _path_key(sent.path) == _path_key(on_disk.path)
+    return False
+
+
+def _launcher_manifest(sent: PluginManifest) -> PluginManifest | None:
+    """The manifest from ``CUVIS_PLUGINS_DIR`` that ``sent`` has to match; ``None`` when unset.
+
+    Raises ``PermissionError`` when the directory holds no manifest of that name or one with
+    another source (repo and tag, or local path): the plugin's code would come from somewhere
+    the launcher did not name.
+    """
+    plugins_dir = os.environ.get(PLUGINS_DIR_ENV, "").strip()
+    if not plugins_dir:
+        return None
+    from cuvis_ai_core.utils.plugin_resolver import _build_catalog
+
+    on_disk = _build_catalog([Path(plugins_dir)]).get(sent.name)
+    if on_disk is None:
+        raise PermissionError(
+            f"{sent.name}: no manifest of that name in the plugins directory {plugins_dir}"
+        )
+    if not _same_source(sent, on_disk):
+        raise PermissionError(
+            f"{sent.name}: the manifest sent names another source than the one in "
+            f"the plugins directory {plugins_dir}"
+        )
+    return on_disk
+
+
 class PluginService:
     """gRPC service layer for plugin management operations."""
 
@@ -275,6 +323,10 @@ class PluginService:
         resolved server-side and is rejected here. Per-manifest validation /
         precondition failures are reported in ``error`` (empty on success);
         structurally malformed ``config_bytes`` is an INVALID_ARGUMENT status.
+
+        With ``CUVIS_PLUGINS_DIR`` set, the plugins directory decides: the manifest
+        must name a plugin found there with the same source, and the server
+        registers its own copy. Anything else answers PERMISSION_DENIED.
         """
         session = get_session_or_error(
             self.session_manager, request.session_id, context
@@ -319,6 +371,14 @@ class PluginService:
             )
             logger.error(msg)
             return cuvis_ai_pb2.LoadPluginResponse(error=msg)
+
+        try:
+            manifest = _launcher_manifest(manifest) or manifest
+        except PermissionError as exc:
+            logger.error(f"Refused plugin manifest: {exc}")
+            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+            context.set_details(str(exc))
+            return cuvis_ai_pb2.LoadPluginResponse(error=str(exc))
 
         session.node_registry.register_plugins_catalog({manifest.name: manifest})
         session.registered_plugins[manifest.name] = manifest.model_dump()
