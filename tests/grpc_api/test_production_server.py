@@ -526,9 +526,8 @@ def test_loopback_hosts_bind_as_given(fake_grpc_server, host, bind) -> None:
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.5", "ai-box.lan"])
-def test_non_loopback_host_is_refused(fake_grpc_server, monkeypatch, host) -> None:
-    """Off loopback the server refuses to start, even with a token in the env."""
-    monkeypatch.setenv("CUVIS_GRPC_TOKEN", "configured-but-not-checked-yet")
+def test_non_loopback_host_is_refused(fake_grpc_server, host) -> None:
+    """Off loopback, with neither a token nor TLS, the server refuses to start."""
     server = ProductionServer(port=50551, host=host)
 
     with pytest.raises(RuntimeError, match="GRPC_ALLOW_INSECURE_REMOTE"):

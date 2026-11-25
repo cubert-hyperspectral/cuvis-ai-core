@@ -4,7 +4,8 @@ Launched by :class:`LocalChildRuntimeSpawner` inside a per-pipeline
 composed venv. Binds an ephemeral loopback port, writes the chosen
 endpoint to a file the parent reads, and blocks on
 ``server.wait_for_termination`` until ``StopRun`` sets the shutdown
-event.
+event. Every call has to carry the token the parent put in
+``CUVIS_RUNTIME_TOKEN``; a child started by hand without one checks nothing.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2_grpc
 from loguru import logger
 
 from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV, TokenInterceptor, pop_token
 
 _DEFAULT_BIND = "127.0.0.1:0"
 _DEFAULT_MAX_WORKERS = 8
@@ -29,6 +31,12 @@ _DEFAULT_MAX_WORKERS = 8
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    # Read before any plugin code is imported, and removed so that code cannot read it.
+    token = pop_token(RUNTIME_TOKEN_ENV)
+    if token is None:
+        logger.warning(
+            f"No {RUNTIME_TOKEN_ENV} set: every process on this machine may call this runtime"
+        )
     shutdown_event = threading.Event()
     servicer = RunRuntimeServicer(shutdown_event=shutdown_event)
 
@@ -38,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
             ("grpc.max_send_message_length", -1),
             ("grpc.max_receive_message_length", -1),
         ],
+        interceptors=[TokenInterceptor(token)] if token else [],
     )
     cuvis_ai_pb2_grpc.add_RunRuntimeServicer_to_server(servicer, server)
     chosen_port = server.add_insecure_port(args.bind)

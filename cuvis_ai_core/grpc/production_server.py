@@ -19,6 +19,12 @@ from dotenv import load_dotenv
 from grpc_health.v1 import health_pb2_grpc
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
+from cuvis_ai_core.utils.grpc_auth import (
+    TOKEN_ENV,
+    TokenInterceptor,
+    normalize_token,
+    pop_token,
+)
 from cuvis_ai_core.grpc.health import HealthService
 from cuvis_ai_core.grpc.service import CuvisAIService
 from cuvis_ai_core.orchestrator.composer import evict_run_cache, resolve_cache_root
@@ -33,8 +39,8 @@ _MAINTENANCE_INTERVAL_SECONDS = 3600.0
 # operators who want eviction to run only via the explicit CLI).
 _MAINTENANCE_ENV = "CUVIS_RUN_CACHE_MAINTENANCE"
 
-# The server authenticates nobody, so it listens on loopback unless the operator
-# says otherwise in so many words.
+# Any caller that reaches the port can load plugins and weights, so the server listens on
+# loopback unless the operator says otherwise in so many words.
 DEFAULT_BIND_HOST = "localhost"
 _BIND_HOST_ENV = "GRPC_BIND_HOST"
 _INSECURE_REMOTE_ENV = "GRPC_ALLOW_INSECURE_REMOTE"
@@ -133,6 +139,7 @@ class ProductionServer:
         tls_key_path: str | None = None,
         host: str = DEFAULT_BIND_HOST,
         allow_insecure_remote: bool = False,
+        token: str | None = None,
     ) -> None:
         self.port = port
         self.max_workers = max_workers
@@ -142,6 +149,7 @@ class ProductionServer:
         self.tls_key_path = tls_key_path
         self.host = host
         self.allow_insecure_remote = allow_insecure_remote
+        self.token = normalize_token(token)
 
         self.server: grpc.Server | None = None
         self.health_service: HealthService | None = None
@@ -182,9 +190,16 @@ class ProductionServer:
             grpc_srv_opts.append(("grpc.max_send_message_length", self.max_msg_size))
             grpc_srv_opts.append(("grpc.max_receive_message_length", self.max_msg_size))
 
+        interceptors = [TokenInterceptor(self.token)] if self.token else []
+        if not self.token:
+            self.logger.info(
+                "No %s set: every process on this machine may call the server",
+                TOKEN_ENV,
+            )
         self.server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=self.max_workers),
             options=grpc_srv_opts,
+            interceptors=interceptors,
         )
 
         self.cuvis_service = CuvisAIService()
@@ -224,27 +239,38 @@ class ProductionServer:
         self._start_maintenance_thread()
 
     def _check_bind_host(self) -> None:
-        """Refuse a non-loopback bind unless the operator opted in explicitly.
+        """Refuse a network address unless it has a token and TLS, or the operator opted out.
 
-        Any caller that reaches the port can load plugins and weights, which runs
-        code under this account, and the server checks no identity yet. So a host
-        other than loopback needs ``GRPC_ALLOW_INSECURE_REMOTE=1``.
+        Any caller that reaches the port can load plugins and weights, which runs code under
+        this account. Off loopback the token keeps strangers out and TLS keeps the token from
+        being read off the wire; ``GRPC_ALLOW_INSECURE_REMOTE=1`` starts without them anyway.
         """
         if _is_loopback_host(self.host):
             return
-        if not self.allow_insecure_remote:
-            raise RuntimeError(
-                f"Refusing to bind {self.host}: the server checks no identity, so it "
-                f"listens on loopback only. Set {_INSECURE_REMOTE_ENV}=1 to expose it "
-                "on the network anyway."
+        if self.allow_insecure_remote:
+            self.logger.warning(
+                "Binding %s with %s=1: a machine that reaches port %s may run code "
+                "through this server unless it holds the token, and TLS is %s",
+                self.host,
+                _INSECURE_REMOTE_ENV,
+                self.port,
+                "on" if self.use_tls else "off",
             )
-        self.logger.warning(
-            "Binding %s with %s=1: any machine that reaches port %s can run code "
-            "through this server",
-            self.host,
-            _INSECURE_REMOTE_ENV,
-            self.port,
-        )
+            return
+        missing = []
+        if not self.token:
+            missing.append(f"a token in {TOKEN_ENV}")
+        if not self.use_tls:
+            missing.append(
+                "TLS (GRPC_USE_TLS=true with GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH)"
+            )
+        if missing:
+            raise RuntimeError(
+                f"Refusing to bind {self.host}: a network address needs "
+                f"{' and '.join(missing)}. Set {_INSECURE_REMOTE_ENV}=1 to expose the "
+                "server without them anyway."
+            )
+        self.logger.info("Binding %s with a token and TLS", self.host)
 
     def _start_maintenance_thread(self) -> None:
         """Kick off the background cache-maintenance loop (post-bind).
@@ -350,7 +376,11 @@ class ProductionServer:
 
 
 def server_from_env() -> ProductionServer:
-    """Build the server from the ``GRPC_*`` environment variables."""
+    """Build the server from the ``GRPC_*`` variables and ``CUVIS_GRPC_TOKEN``.
+
+    The token variable is removed from the environment once read, so the processes the
+    server starts later do not inherit it.
+    """
     return ProductionServer(
         port=int(os.getenv("GRPC_PORT", "50051")),
         max_workers=int(os.getenv("GRPC_MAX_WORKERS", "10")),
@@ -360,6 +390,7 @@ def server_from_env() -> ProductionServer:
         tls_key_path=os.getenv("GRPC_TLS_KEY_PATH"),
         host=os.getenv(_BIND_HOST_ENV, DEFAULT_BIND_HOST),
         allow_insecure_remote=os.getenv(_INSECURE_REMOTE_ENV, "").strip() == "1",
+        token=pop_token(TOKEN_ENV),
     )
 
 

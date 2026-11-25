@@ -32,6 +32,10 @@ inherits:
   shared cache out-of-band by a trusted tool (the ``download-model`` CLI or
   the CuvisNEXT provisioning action); see ``model_cache`` and the
   sandbox-seams tests.
+- The server's own token (``CUVIS_GRPC_TOKEN``) is excluded too. The child
+  gets a fresh token of its own instead (``CUVIS_RUNTIME_TOKEN``), checks it
+  on every call, and the handle sends it; another local process that finds
+  the child's port is refused.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -55,6 +60,11 @@ from loguru import logger
 from cuvis_ai_core.orchestrator.env_config import number_from_env
 from cuvis_ai_core.orchestrator.model_cache import model_cache_env
 from cuvis_ai_core.orchestrator.venv_paths import venv_bin_dir, venv_python
+from cuvis_ai_core.utils.grpc_auth import (
+    RUNTIME_TOKEN_ENV,
+    TOKEN_ENV,
+    authorized_channel,
+)
 
 # Child-runtime startup deadlines (seconds), both overridable via env (unset,
 # non-positive or invalid falls back to the default). The endpoint deadline
@@ -121,6 +131,7 @@ def _timeout_from_env(env_name: str, default: float) -> float:
 _DENY_EXACT = frozenset(
     {
         "PYTHONPATH",  # uv's .pth files handle site-packages; PYTHONPATH would shadow
+        TOKEN_ENV,  # the server's token; the child gets its own (RUNTIME_TOKEN_ENV)
         "SSH_AUTH_SOCK",
         "SSH_AGENT_PID",
         "GH_TOKEN",
@@ -297,6 +308,8 @@ class ChildHandle:
     process: subprocess.Popen
     stderr_log: Path | None = None
     stdout_log: Path | None = None
+    # The token the child checks on every call; None for a child started without one.
+    token: str | None = field(default=None, repr=False)
     # Set by the parent right before it stops this child on purpose (a pipeline
     # switch replaced it, or the session closed). A request that still reaches
     # the handle afterwards is then answered as a replacement, not as a crash:
@@ -319,6 +332,8 @@ class ChildHandle:
                     ("grpc.max_receive_message_length", -1),
                 ],
             )
+            if self.token:
+                self._channel = authorized_channel(self._channel, self.token)
         return cuvis_ai_pb2_grpc.RunRuntimeStub(self._channel)
 
     def terminate(self, grace_s: float = 5.0) -> int | None:
@@ -435,10 +450,12 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
 
         endpoint_dir = Path(tempfile.mkdtemp(prefix="cuvis_runtime_endpoint_"))
         endpoint_file = endpoint_dir / "endpoint.txt"
+        token = secrets.token_urlsafe(32)
         env = self._build_child_env(
             venv_path=venv_path,
             declared_paths=declared_paths,
             request_gpu=request_gpu,
+            runtime_token=token,
         )
         # Capture child stdout/stderr to files in the declared scratch
         # dir rather than ``subprocess.PIPE``. With PIPE the parent must
@@ -488,6 +505,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
                     process=process,
                     stderr_log=stderr_path,
                     stdout_log=stdout_path,
+                    token=token,
                 )
                 self._wait_for_health(handle)
             except SpawnError:
@@ -504,6 +522,7 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         venv_path: Path,
         declared_paths: DeclaredPaths,
         request_gpu: bool,
+        runtime_token: str | None = None,
     ) -> dict[str, str]:
         """Build the curated env handed to the child process.
 
@@ -518,6 +537,9 @@ class LocalChildRuntimeSpawner(ChildRuntimeSpawner):
         shadowing the composed venv's packages.
         """
         env = {k: v for k, v in os.environ.items() if not _is_denied(k)}
+        env.pop(RUNTIME_TOKEN_ENV, None)
+        if runtime_token:
+            env[RUNTIME_TOKEN_ENV] = runtime_token
 
         # When GPU is not requested, drop CUDA_* so the child does not
         # inherit an explicit device selection. NOTE: popping these vars

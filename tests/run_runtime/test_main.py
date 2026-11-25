@@ -8,6 +8,7 @@ bound and no real signal handler is installed.
 
 from __future__ import annotations
 
+import os
 import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -147,3 +148,43 @@ def test_install_signal_handlers_sets_event(monkeypatch):
     # Invoking a registered handler sets the shutdown event.
     registered[signal.SIGINT](signal.SIGINT, None)
     assert event.is_set()
+
+
+def _record_server_kwargs(monkeypatch, server: MagicMock) -> dict:
+    seen: dict = {}
+
+    def factory(*args, **kwargs):
+        seen.update(kwargs)
+        return server
+
+    monkeypatch.setattr(main_mod.grpc, "server", factory)
+    return seen
+
+
+def test_main_checks_the_token_the_parent_hands_over(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV, TokenInterceptor
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.setenv(RUNTIME_TOKEN_ENV, "child-token")
+
+    rc = main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")])
+
+    assert rc == 0
+    (interceptor,) = seen["interceptors"]
+    assert isinstance(interceptor, TokenInterceptor)
+    # Plugin code runs in this process; it does not get to read the token.
+    assert RUNTIME_TOKEN_ENV not in os.environ
+
+
+def test_main_started_by_hand_without_a_token_checks_nothing(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.delenv(RUNTIME_TOKEN_ENV, raising=False)
+
+    rc = main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")])
+
+    assert rc == 0
+    assert not seen.get("interceptors")

@@ -1,0 +1,311 @@
+"""Shared-secret token on the gRPC servers: the interceptor, the client side and the server rules."""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from concurrent import futures
+from unittest.mock import MagicMock
+
+import grpc
+import pytest
+from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
+from google.protobuf.message_factory import GetMessageClass
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+
+from cuvis_ai_core.utils import grpc_auth as auth
+from cuvis_ai_core.grpc import production_server as production_server_mod
+from cuvis_ai_core.utils.grpc_auth import (
+    TokenInterceptor,
+    authorized_channel,
+    call_metadata,
+)
+from cuvis_ai_core.grpc.health import HealthService
+from cuvis_ai_core.grpc.production_server import ProductionServer
+from cuvis_ai_core.grpc.service import CuvisAIService
+from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+
+TOKEN = "s3cret-token-value"
+
+_CUVIS = cuvis_ai_pb2.DESCRIPTOR.services_by_name["CuvisAIService"]
+_RUNTIME = cuvis_ai_pb2.DESCRIPTOR.services_by_name["RunRuntime"]
+
+
+def _start(add_servicers) -> tuple[grpc.Server, str]:
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=4),
+        interceptors=[TokenInterceptor(TOKEN)],
+    )
+    add_servicers(server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    return server, f"127.0.0.1:{port}"
+
+
+@pytest.fixture(scope="module")
+def cuvis_endpoint():
+    def add(server):
+        cuvis_ai_pb2_grpc.add_CuvisAIServiceServicer_to_server(CuvisAIService(), server)
+        health = HealthService()
+        health_pb2_grpc.add_HealthServicer_to_server(health, server)
+        health.set_serving()
+
+    server, endpoint = _start(add)
+    yield endpoint
+    server.stop(grace=None)
+
+
+@pytest.fixture(scope="module")
+def runtime_endpoint():
+    def add(server):
+        servicer = RunRuntimeServicer(shutdown_event=threading.Event())
+        cuvis_ai_pb2_grpc.add_RunRuntimeServicer_to_server(servicer, server)
+
+    server, endpoint = _start(add)
+    yield endpoint
+    server.stop(grace=None)
+
+
+def _call(channel: grpc.Channel, service, method, metadata=None) -> grpc.StatusCode:
+    """Call ``method`` with an empty request through a generic stub; return the status."""
+    request_cls = GetMessageClass(method.input_type)
+    path = f"/{service.full_name}/{method.name}"
+    serialize = request_cls.SerializeToString
+    kwargs = {"metadata": metadata, "timeout": 10}
+    try:
+        if method.client_streaming and method.server_streaming:
+            list(
+                channel.stream_stream(path, serialize, bytes)(
+                    iter([request_cls()]), **kwargs
+                )
+            )
+        elif method.client_streaming:
+            channel.stream_unary(path, serialize, bytes)(
+                iter([request_cls()]), **kwargs
+            )
+        elif method.server_streaming:
+            list(channel.unary_stream(path, serialize, bytes)(request_cls(), **kwargs))
+        else:
+            channel.unary_unary(path, serialize, bytes)(request_cls(), **kwargs)
+    except grpc.RpcError as exc:
+        return exc.code()
+    return grpc.StatusCode.OK
+
+
+@pytest.mark.parametrize("method", list(_CUVIS.methods), ids=lambda m: m.name)
+def test_every_cuvis_ai_method_refuses_a_call_without_the_token(cuvis_endpoint, method):
+    with grpc.insecure_channel(cuvis_endpoint) as channel:
+        assert _call(channel, _CUVIS, method) == grpc.StatusCode.UNAUTHENTICATED
+
+
+@pytest.mark.parametrize("method", list(_RUNTIME.methods), ids=lambda m: m.name)
+def test_every_runtime_method_refuses_a_call_without_the_token(
+    runtime_endpoint, method
+):
+    with grpc.insecure_channel(runtime_endpoint) as channel:
+        assert _call(channel, _RUNTIME, method) == grpc.StatusCode.UNAUTHENTICATED
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [("authorization", "Bearer wrong-token")],
+        [("authorization", "wrong-token")],
+        [("authorization", f"Bearer {TOKEN}x")],
+        [("authorization", "")],
+        [("x-other", TOKEN)],
+    ],
+    ids=["bearer-wrong", "raw-wrong", "longer", "empty", "other-key"],
+)
+def test_a_wrong_token_is_refused(cuvis_endpoint, metadata):
+    method = _CUVIS.methods_by_name["CreateSession"]
+    with grpc.insecure_channel(cuvis_endpoint) as channel:
+        assert (
+            _call(channel, _CUVIS, method, metadata) == grpc.StatusCode.UNAUTHENTICATED
+        )
+
+
+@pytest.mark.parametrize("value", [f"Bearer {TOKEN}", f"bearer {TOKEN}", TOKEN])
+def test_the_right_token_reaches_the_servicer(cuvis_endpoint, value):
+    with grpc.insecure_channel(cuvis_endpoint) as channel:
+        stub = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
+        metadata = [("authorization", value)]
+        session = stub.CreateSession(
+            cuvis_ai_pb2.CreateSessionRequest(), metadata=metadata
+        )
+        assert session.session_id
+        stub.CloseSession(
+            cuvis_ai_pb2.CloseSessionRequest(session_id=session.session_id),
+            metadata=metadata,
+        )
+
+
+def test_health_answers_without_a_token(cuvis_endpoint):
+    with grpc.insecure_channel(cuvis_endpoint) as channel:
+        response = health_pb2_grpc.HealthStub(channel).Check(
+            health_pb2.HealthCheckRequest()
+        )
+    assert response.status == health_pb2.HealthCheckResponse.SERVING
+
+
+def test_call_metadata_carries_a_bearer_token():
+    assert call_metadata(TOKEN) == [("authorization", f"Bearer {TOKEN}")]
+
+
+def test_authorized_channel_sends_the_token_on_unary_and_streaming_calls(
+    runtime_endpoint,
+):
+    with grpc.insecure_channel(runtime_endpoint) as raw:
+        channel = authorized_channel(raw, TOKEN)
+        stub = cuvis_ai_pb2_grpc.RunRuntimeStub(channel)
+        response = stub.HealthCheck(cuvis_ai_pb2.HealthCheckRequest(), timeout=10)
+        assert (
+            response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+        )
+        # A server-streaming call passes the check too; what the servicer then answers
+        # for an empty request is its own business.
+        status = _call(channel, _RUNTIME, _RUNTIME.methods_by_name["Train"])
+        assert status != grpc.StatusCode.UNAUTHENTICATED
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_an_empty_token_counts_as_unset(value):
+    assert auth.normalize_token(value) is None
+
+
+def test_token_interceptor_refuses_an_empty_token():
+    with pytest.raises(ValueError):
+        TokenInterceptor("")
+
+
+# ---------------------------------------------------------------------------
+# environment
+# ---------------------------------------------------------------------------
+
+
+def test_pop_token_reads_and_removes_the_variable(monkeypatch):
+    monkeypatch.setenv(auth.TOKEN_ENV, f"  {TOKEN}  ")
+
+    assert auth.pop_token(auth.TOKEN_ENV) == TOKEN
+    assert auth.TOKEN_ENV not in os.environ
+
+
+def test_pop_token_of_an_empty_variable_is_none(monkeypatch):
+    monkeypatch.setenv(auth.TOKEN_ENV, "")
+
+    assert auth.pop_token(auth.TOKEN_ENV) is None
+
+
+# ---------------------------------------------------------------------------
+# ProductionServer
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def recorded_grpc_server(monkeypatch):
+    """A grpc.server stand-in that records its keyword arguments and binds port 4321."""
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "0")
+    fake = MagicMock()
+    fake.add_insecure_port.return_value = 4321
+    fake.add_secure_port.return_value = 4321
+    calls: list[dict] = []
+
+    def factory(*args, **kwargs):
+        calls.append(kwargs)
+        return fake
+
+    monkeypatch.setattr("cuvis_ai_core.grpc.production_server.grpc.server", factory)
+    monkeypatch.setattr(
+        production_server_mod, "load_tls_credentials", lambda cert, key: "credentials"
+    )
+    fake.calls = calls
+    return fake
+
+
+def _started(server: ProductionServer) -> None:
+    try:
+        server.start()
+    finally:
+        server.shutdown()
+
+
+def test_server_with_a_token_installs_the_interceptor(recorded_grpc_server):
+    _started(ProductionServer(port=50551, token=TOKEN))
+
+    (interceptor,) = recorded_grpc_server.calls[0]["interceptors"]
+    assert isinstance(interceptor, TokenInterceptor)
+
+
+def test_server_without_a_token_installs_no_interceptor(recorded_grpc_server):
+    _started(ProductionServer(port=50551))
+
+    assert not recorded_grpc_server.calls[0].get("interceptors")
+
+
+def test_remote_bind_with_token_and_tls_starts(recorded_grpc_server, caplog):
+    server = ProductionServer(
+        port=50551,
+        host="0.0.0.0",
+        token=TOKEN,
+        use_tls=True,
+        tls_cert_path="cert.pem",
+        tls_key_path="key.pem",
+    )
+    with caplog.at_level(logging.WARNING):
+        _started(server)
+
+    recorded_grpc_server.add_secure_port.assert_called_once_with(
+        "0.0.0.0:50551", "credentials"
+    )
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_remote_bind_with_token_but_no_tls_is_refused(recorded_grpc_server):
+    server = ProductionServer(port=50551, host="0.0.0.0", token=TOKEN)
+
+    with pytest.raises(RuntimeError, match="GRPC_USE_TLS"):
+        server.start()
+
+    recorded_grpc_server.add_insecure_port.assert_not_called()
+
+
+def test_remote_bind_with_tls_but_no_token_is_refused(recorded_grpc_server):
+    server = ProductionServer(
+        port=50551,
+        host="0.0.0.0",
+        use_tls=True,
+        tls_cert_path="cert.pem",
+        tls_key_path="key.pem",
+    )
+
+    with pytest.raises(RuntimeError, match="CUVIS_GRPC_TOKEN"):
+        server.start()
+
+    recorded_grpc_server.add_secure_port.assert_not_called()
+
+
+def test_insecure_remote_override_still_starts_without_token_or_tls(
+    recorded_grpc_server, caplog
+):
+    server = ProductionServer(port=50551, host="0.0.0.0", allow_insecure_remote=True)
+    with caplog.at_level(logging.WARNING):
+        _started(server)
+
+    recorded_grpc_server.add_insecure_port.assert_called_once_with("0.0.0.0:50551")
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_server_from_env_takes_the_token_out_of_the_environment(monkeypatch):
+    monkeypatch.setenv("CUVIS_GRPC_TOKEN", TOKEN)
+
+    server = production_server_mod.server_from_env()
+
+    assert server.token == TOKEN
+    assert "CUVIS_GRPC_TOKEN" not in os.environ
+
+
+def test_server_from_env_without_a_token(monkeypatch):
+    monkeypatch.delenv("CUVIS_GRPC_TOKEN", raising=False)
+
+    assert production_server_mod.server_from_env().token is None
