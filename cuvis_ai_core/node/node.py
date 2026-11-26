@@ -348,6 +348,24 @@ class Node(nn.Module, ABC, Serializable):
         """
         return None
 
+    def optimizer_param_groups(self, base_lr: float) -> list[dict[str, Any]] | None:
+        """Learning-rate groups for this node's trainable parameters.
+
+        ``GradientTrainer`` builds one optimizer over every trainable pipeline
+        parameter at the configured learning rate. A node whose recipe trains parts
+        of its weights at other rates (for example a pretrained backbone at a lower
+        rate than a new head, or per-layer decay) returns torch optimizer parameter
+        groups here: dicts with ``"params"`` plus any per-group options such as
+        ``"lr"`` or ``"weight_decay"``; options a group leaves out take the optimizer
+        config's values. ``base_lr`` is the configured learning rate.
+
+        Only trainable parameters (``requires_grad``) are used, and a parameter
+        listed in more than one group stays in the first. Parameters no group lists,
+        of this node or of other nodes, are optimized at the configured rate. The
+        default returns ``None``: no groups.
+        """
+        return None
+
     def prepare_inference(self) -> None:
         """Prepare the node for inference once its device and weights are final.
 

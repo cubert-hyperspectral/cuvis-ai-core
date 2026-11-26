@@ -606,7 +606,7 @@ class GradientTrainer(pl.LightningModule):
         )
 
         params = [p for p in self.pipeline.parameters() if p.requires_grad]
-        optimizer = create_optimizer(self.optimizer_config, params)
+        optimizer = create_optimizer(self.optimizer_config, self._param_groups(params))
 
         scheduler = create_scheduler(
             self.scheduler_config,
@@ -619,6 +619,38 @@ class GradientTrainer(pl.LightningModule):
         monitor = self.scheduler_config.monitor
         wrapped_scheduler = wrap_scheduler_for_lightning(scheduler, monitor)
         return {"optimizer": optimizer, "lr_scheduler": wrapped_scheduler}
+
+    def _param_groups(self, params: list[torch.nn.Parameter]) -> list[Any]:
+        """The optimizer's parameters: the nodes' learning-rate groups, then the rest.
+
+        Asks every node for :meth:`Node.optimizer_param_groups`. Without any group
+        the plain parameter list is returned, so the optimizer is built exactly as
+        before. Otherwise each group keeps its options and only its trainable
+        parameters not claimed by an earlier group; the remaining trainable
+        parameters form a last group at the configured learning rate.
+        """
+        trainable = {id(p) for p in params}
+        claimed: set[int] = set()
+        groups: list[dict[str, Any]] = []
+        for node in self.pipeline.nodes():
+            node_groups = node.optimizer_param_groups(base_lr=self.optimizer_config.lr)
+            for group in node_groups or []:
+                members = group["params"]
+                if isinstance(members, torch.Tensor):
+                    members = [members]
+                members = [
+                    p for p in members if id(p) in trainable and id(p) not in claimed
+                ]
+                if not members:
+                    continue
+                claimed.update(id(p) for p in members)
+                groups.append({**group, "params": members})
+        if not groups:
+            return params
+        rest = [p for p in params if id(p) not in claimed]
+        if rest:
+            groups.append({"params": rest})
+        return groups
 
 
 class StatisticalTrainer:
