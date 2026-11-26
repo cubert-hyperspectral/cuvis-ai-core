@@ -26,6 +26,7 @@ from cuvis_ai_core.training.evaluation import (
     frame_total,
 )
 from cuvis_ai_core.training.callbacks import build_runtime_callbacks
+from cuvis_ai_core.training.ema import EMA_STATE_KEY, copy_into
 from cuvis_ai_core.training.post_fit import (
     CheckpointRestored,
     EmitFn,
@@ -198,6 +199,8 @@ class GradientTrainer(pl.LightningModule):
         not involved and the fitted flags this process set stay. A failure during the
         copy is fatal for the run: the pre-checks make it unreachable for a checkpoint
         this module wrote, and a half-loaded model must never be calibrated or saved.
+        When the run evaluated a weight average (``ema.evaluate == "ema"``), the average
+        saved with the checkpoint replaces the live weights after the copy.
         """
         # LightningModule.trainer raises when no trainer is attached; read the slot.
         trainer = getattr(self, "_trainer", None)
@@ -238,6 +241,7 @@ class GradientTrainer(pl.LightningModule):
                 reason=f"shape mismatch for {', '.join(mismatched[:3])}",
             )
         self.load_state_dict(state, strict=True)
+        self._apply_checkpoint_average(checkpoint, path)
         score = getattr(callback, "best_model_score", None)
         logger.info(
             f"Best checkpoint restored from {path} (epoch {checkpoint.get('epoch')})"
@@ -249,6 +253,33 @@ class GradientTrainer(pl.LightningModule):
             monitor=str(getattr(callback, "monitor", "") or ""),
             score=float(score) if score is not None else None,
         )
+
+    def _apply_checkpoint_average(
+        self, checkpoint: Mapping[str, Any], path: str
+    ) -> bool:
+        """Put the weight average saved with ``checkpoint`` on the module, when it was evaluated.
+
+        A checkpoint of a run with ``ema.evaluate == "ema"`` was chosen by the metrics of
+        its weight average, so the average (not the live weights it also holds) is what
+        the post-fit steps calibrate, evaluate and save. Returns whether it was applied.
+        """
+        state = (checkpoint.get("callbacks") or {}).get(EMA_STATE_KEY)
+        if (
+            not state
+            or state.get("evaluate") != "ema"
+            or int(state.get("updates", 0)) == 0
+        ):
+            return False
+        missing = copy_into(self, state.get("shadow") or {})
+        if missing:
+            logger.warning(
+                f"The weight average in {path} names {len(missing)} tensors the model lacks "
+                f"({', '.join(missing[:3])}); the matching ones were applied."
+            )
+        logger.info(
+            f"Weight average of {path} applied ({state.get('updates')} updates)"
+        )
+        return True
 
     def _build_trainer(self) -> pl.Trainer:
         """Construct a ``pl.Trainer`` from the stored training configuration.

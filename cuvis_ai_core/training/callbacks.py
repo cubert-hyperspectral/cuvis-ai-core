@@ -23,6 +23,7 @@ from loguru import logger
 from pytorch_lightning import Callback, LightningModule, Trainer
 
 from cuvis_ai_core.training.config import CalibrationConfig, TrainingConfig
+from cuvis_ai_core.training.ema import EmaCallback
 from cuvis_ai_core.training.post_fit import EmitFn, PostFitCallback
 
 # Soft cap on the process's share of the device, read when the log callback
@@ -220,7 +221,9 @@ def build_runtime_callbacks(
 
     The memory log is always on: it costs a handful of log lines and is the
     only evidence a run leaves when it dies of memory. The cache release is
-    added only when the trainrun asks for it. The post-fit lifecycle (restore
+    added only when the trainrun asks for it, the weight average
+    (:class:`~cuvis_ai_core.training.ema.EmaCallback`) only when the config
+    has an ``ema`` block. The post-fit lifecycle (restore
     the best checkpoint, calibrate, evaluate) is always on as well; ``emit``
     and ``stop_event`` are the gRPC stream's sink and cancel flag, the CLI
     leaves both unset and gets the log. ``GradientTrainer._build_trainer``
@@ -248,6 +251,11 @@ def build_runtime_callbacks(
     callbacks: list[Callback] = [CudaMemoryLogCallback()]
     if release:
         callbacks.append(CudaCacheReleaseCallback())
+    # Before the post-fit step: its on_train_end restores, calibrates and evaluates, so
+    # the average has to be on the module first (callbacks run in list order).
+    ema = getattr(training_config, "ema", None) if training_config is not None else None
+    if ema is not None:
+        callbacks.append(EmaCallback(ema))
     callbacks.append(
         PostFitCallback(
             emit=emit,
