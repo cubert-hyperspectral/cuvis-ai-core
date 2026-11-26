@@ -24,12 +24,13 @@ from . import orchestrator_bridge
 from .v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
 
 
-def _screens_paths(*fields: str) -> Callable:
+def _screens_paths(*fields: str, read: bool = False) -> Callable:
     """Screen the request's path fields against ``CUVIS_ALLOWED_ROOTS`` before the handler runs.
 
     This runs in the parent, ahead of any filesystem call and of the forward to the child: a
     refused path answers PERMISSION_DENIED, and an absolute path goes on resolved. Without roots
-    the request is untouched. ``path_fields`` on the handler lets a test check that every path
+    the request is untouched. An RPC that only reads (``read``) may also name a file in the
+    server's pipeline library. ``path_fields`` on the handler lets a test check that every path
     field of the API is screened.
     """
 
@@ -42,7 +43,9 @@ def _screens_paths(*fields: str) -> Callable:
                 for name in fields:
                     value = getattr(request, name)
                     if value:
-                        setattr(request, name, confine_path(value, field=name))
+                        setattr(
+                            request, name, confine_path(value, field=name, read=read)
+                        )
             except PathNotAllowedError as exc:
                 context.set_code(grpc.StatusCode.PERMISSION_DENIED)
                 context.set_details(str(exc))
@@ -90,7 +93,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Config resolution and validation
     # ------------------------------------------------------------------
-    @_screens_paths("path")
+    @_screens_paths("path", read=True)
     def ResolveConfig(self, request, context) -> cuvis_ai_pb2.ResolveConfigResponse:
         return self.config_service.resolve_config(request, context)
 
@@ -106,7 +109,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Pipeline construction and training configuration
     # ------------------------------------------------------------------
 
-    @_screens_paths("weights_path")
+    @_screens_paths("weights_path", read=True)
     def LoadPipelineWeights(
         self, request, context
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
@@ -199,7 +202,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
             self.session_manager, request, context
         )
 
-    @_screens_paths("trainrun_path", "weights_path")
+    @_screens_paths("trainrun_path", "weights_path", read=True)
     def RestoreTrainRun(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
         return orchestrator_bridge.forward_restore_train_run(
             self.session_manager, request, context
@@ -213,7 +216,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     ) -> cuvis_ai_pb2.ListAvailablePipelinesResponse:
         return self.discovery_service.list_available_pipelines(request, context)
 
-    @_screens_paths("pipeline_path")
+    @_screens_paths("pipeline_path", read=True)
     def GetPipelineInfo(self, request, context) -> cuvis_ai_pb2.GetPipelineInfoResponse:
         return self.discovery_service.get_pipeline_info(request, context)
 

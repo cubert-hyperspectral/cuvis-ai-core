@@ -1,10 +1,10 @@
-"""Shared-secret token for the gRPC servers.
+"""Shared-secret token and message size cap for the gRPC servers.
 
 The server checks a token when its launcher sets one (``CUVIS_GRPC_TOKEN``), and every child
 runtime checks the per-spawn token its parent hands it (``CUVIS_RUNTIME_TOKEN``). The token
 travels as ``authorization`` metadata, ``Bearer <token>`` or the bare value. gRPC call
 credentials are not used: they are dropped on insecure channels, and a loopback channel is
-insecure.
+insecure. A call without the token is refused before its request is parsed.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ import grpc
 
 TOKEN_ENV = "CUVIS_GRPC_TOKEN"
 RUNTIME_TOKEN_ENV = "CUVIS_RUNTIME_TOKEN"
+MAX_MSG_SIZE_ENV = "GRPC_MAX_MSG_SIZE"
+DEFAULT_MAX_MSG_SIZE = 300 * 1024 * 1024
 
 _METADATA_KEY = "authorization"
 _BEARER = "bearer "
@@ -43,6 +45,11 @@ def pop_token(name: str) -> str | None:
     return normalize_token(os.environ.pop(name, None))
 
 
+def max_message_size() -> int:
+    """The largest message a client may send the server, in bytes (``GRPC_MAX_MSG_SIZE``)."""
+    return int(os.environ.get(MAX_MSG_SIZE_ENV, DEFAULT_MAX_MSG_SIZE))
+
+
 def call_metadata(token: str) -> list[tuple[str, str]]:
     """The metadata a client sends with every call."""
     return [(_METADATA_KEY, f"Bearer {token}")]
@@ -59,22 +66,23 @@ def _presented_token(metadata: Any) -> str | None:
 
 
 def _refusing(handler: grpc.RpcMethodHandler) -> grpc.RpcMethodHandler:
-    """A handler of the same kind as ``handler`` that answers UNAUTHENTICATED."""
+    """A handler that answers UNAUTHENTICATED without reading the request.
 
-    def refuse(_request: Any, context: grpc.ServicerContext) -> Any:
+    It takes the request as a stream it never reads, whatever ``handler`` expects: gRPC reads
+    a unary request in full before calling the handler, so a caller without the token would
+    otherwise make the server receive its whole message first.
+    """
+
+    def refuse(_requests: Any, context: grpc.ServicerContext) -> Any:
         context.abort(grpc.StatusCode.UNAUTHENTICATED, _REFUSAL)
 
     codecs = {
-        "request_deserializer": handler.request_deserializer,
+        "request_deserializer": None,
         "response_serializer": handler.response_serializer,
     }
-    if handler.unary_unary:
-        return grpc.unary_unary_rpc_method_handler(refuse, **codecs)
-    if handler.unary_stream:
-        return grpc.unary_stream_rpc_method_handler(refuse, **codecs)
-    if handler.stream_unary:
-        return grpc.stream_unary_rpc_method_handler(refuse, **codecs)
-    return grpc.stream_stream_rpc_method_handler(refuse, **codecs)
+    if handler.response_streaming:
+        return grpc.stream_stream_rpc_method_handler(refuse, **codecs)
+    return grpc.stream_unary_rpc_method_handler(refuse, **codecs)
 
 
 class TokenInterceptor(grpc.ServerInterceptor):

@@ -13,6 +13,8 @@ import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from cuvis_ai_core.run_runtime import __main__ as main_mod
 
 
@@ -159,6 +161,41 @@ def _record_server_kwargs(monkeypatch, server: MagicMock) -> dict:
 
     monkeypatch.setattr(main_mod.grpc, "server", factory)
     return seen
+
+
+@pytest.mark.parametrize("cap", [None, "1000"])
+def test_main_receives_no_more_than_the_parent_accepts(monkeypatch, tmp_path, cap):
+    from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV, max_message_size
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    if cap is None:
+        monkeypatch.delenv(MAX_MSG_SIZE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(MAX_MSG_SIZE_ENV, cap)
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+
+    options = dict(seen["options"])
+    # The parent forwards a client's message with a resolved path added, hence the margin.
+    assert options["grpc.max_receive_message_length"] == (
+        max_message_size() + main_mod.FORWARD_MARGIN
+    )
+    assert max_message_size() == (300 * 1024 * 1024 if cap is None else 1000)
+    # Inference answers (full frames and score maps) can be large; sending stays open.
+    assert options["grpc.max_send_message_length"] == -1
+
+
+def test_main_keeps_an_unlimited_parent_setting_unlimited(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.setenv(MAX_MSG_SIZE_ENV, "-1")  # gRPC's spelling of "no limit"
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+
+    assert dict(seen["options"])["grpc.max_receive_message_length"] == -1
 
 
 def test_main_checks_the_token_the_parent_hands_over(monkeypatch, tmp_path):

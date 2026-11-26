@@ -9,6 +9,7 @@ from pathlib import Path
 
 import grpc
 import numpy as np
+import yaml
 from loguru import logger
 
 from cuvis_ai_core.grpc.error_handling import get_session_or_error, grpc_handler
@@ -379,8 +380,8 @@ class PluginService:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
             context.set_details(str(exc))
             return cuvis_ai_pb2.LoadPluginResponse(error=str(exc))
-        except ValueError as exc:
-            # A duplicate name or an invalid manifest in the launcher's own folder.
+        except (ValueError, yaml.YAMLError) as exc:
+            # A duplicate name, an invalid manifest or unreadable YAML in the launcher's own folder.
             msg = (
                 f"The server's plugins directory "
                 f"{os.environ.get(PLUGINS_DIR_ENV, '').strip()} is broken: {exc}"

@@ -22,6 +22,7 @@ from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
 from cuvis_ai_core.utils.grpc_auth import (
     TOKEN_ENV,
     TokenInterceptor,
+    max_message_size,
     normalize_token,
     pop_token,
 )
@@ -249,11 +250,12 @@ class ProductionServer:
             return
         if self.allow_insecure_remote:
             self.logger.warning(
-                "Binding %s with %s=1: a machine that reaches port %s may run code "
-                "through this server unless it holds the token, and TLS is %s",
+                "Binding %s with %s=1: a machine that reaches port %s can run code "
+                "through this server %s, and TLS is %s",
                 self.host,
                 _INSECURE_REMOTE_ENV,
                 self.port,
+                "if it holds the token" if self.token else "without any token",
                 "on" if self.use_tls else "off",
             )
             return
@@ -384,7 +386,7 @@ def server_from_env() -> ProductionServer:
     return ProductionServer(
         port=int(os.getenv("GRPC_PORT", "50051")),
         max_workers=int(os.getenv("GRPC_MAX_WORKERS", "10")),
-        max_msg_size=int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024)),  # 300 MB
+        max_msg_size=max_message_size(),
         use_tls=os.getenv("GRPC_USE_TLS", "false").lower() == "true",
         tls_cert_path=os.getenv("GRPC_TLS_CERT_PATH"),
         tls_key_path=os.getenv("GRPC_TLS_KEY_PATH"),

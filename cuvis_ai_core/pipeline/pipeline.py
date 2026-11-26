@@ -17,6 +17,7 @@ from loguru import logger
 from networkx.classes.reportviews import NodeView
 from torch import nn
 from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_core.utils.staged_write import write_staged
 
 from cuvis_ai_core.node.node import Node
 from cuvis_ai_core.pipeline._metadata_warnings import warn_if_metadata_missing
@@ -662,9 +663,14 @@ class CuvisPipeline:
         if metadata:
             config_dict["metadata"].update(metadata.to_dict())
 
+        def write_config(path: Path) -> None:
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+        # Both files are written beside their target and moved into place: a failed save
+        # keeps the previous file, and a link at the target is replaced, not followed.
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+        write_staged(config_path, write_config)
 
         if save_weights:
             state_dict: dict[str, Any] = {}
@@ -677,7 +683,7 @@ class CuvisPipeline:
             }
 
             weights_path = config_path.with_suffix(".pt")
-            torch.save(checkpoint, weights_path)
+            write_staged(weights_path, lambda staging: torch.save(checkpoint, staging))
             logger.info(f"Pipeline saved: Config={config_path}, Weights={weights_path}")
         else:
             logger.info(f"Pipeline saved: Config={config_path} (weights skipped)")

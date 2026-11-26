@@ -5,6 +5,8 @@ is checked and every path behaves as it always did. Set, a client path is refuse
 remote form (a UNC or device path), contains a ``..`` segment, or resolves outside every root.
 Remote forms are refused on the text alone: resolving or even testing such a path makes
 Windows open an SMB session to the named host, which hands it the user's NTLM credentials.
+A read may also land in the server's own pipeline library (``CUVIS_CONFIGS_DIR``); a write
+may not.
 """
 
 from __future__ import annotations
@@ -14,9 +16,31 @@ import re
 from pathlib import Path, PureWindowsPath
 
 ALLOWED_ROOTS_ENV = "CUVIS_ALLOWED_ROOTS"
+CONFIGS_DIR_ENV = "CUVIS_CONFIGS_DIR"
 
-# \\host\share, //host/share, \\?\..., \\.\device and their mixed-slash spellings.
-_REMOTE_PREFIX = re.compile(r"^[\\/]{2}")
+# \\host\share, //host/share, \\?\..., \\.\device, the NT object prefix \??\ (which
+# Windows passes through, so \??\UNC\host\share is a share) and their mixed-slash spellings.
+_REMOTE_PREFIX = re.compile(r"^(?:[\\/]{2}|[\\/]\?\?[\\/])")
+# A URL (http://, s3://, file://): fsspec, which Lightning writes through, opens it remotely.
+# Two letters at least, so a drive such as C:// stays a path.
+_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+://")
+
+# DOS device names, which Windows opens as the device in any folder and with any extension.
+_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"{port}{n}" for port in ("COM", "LPT") for n in [*"123456789", "¹", "²", "³"]}
+)
+
+
+def _names_a_device(raw: str) -> bool:
+    """True when a component of ``raw`` is a device name (Windows drops trailing spaces).
+
+    A colon separates components here too, so ``C:NUL`` and ``CON:`` count.
+    """
+    return any(
+        part.split(".", 1)[0].rstrip(" ").upper() in _DEVICE_NAMES
+        for part in re.split(r"[\\/:]", raw)
+    )
 
 
 class PathNotAllowedError(PermissionError):
@@ -32,6 +56,20 @@ def allowed_roots() -> list[Path] | None:
     return [Path(entry).resolve() for entry in entries]
 
 
+def library_root() -> Path:
+    """The server's own pipeline library: ``CUVIS_CONFIGS_DIR``, else ``./configs``."""
+    env_dir = os.environ.get(CONFIGS_DIR_ENV)
+    return Path(env_dir) if env_dir else Path.cwd() / "configs"
+
+
+def _roots(read: bool) -> list[Path] | None:
+    """The allowed roots and, for a read, the pipeline library; ``None`` without roots."""
+    roots = allowed_roots()
+    if roots is None or not read:
+        return roots
+    return [*roots, library_root().resolve()]
+
+
 def _key(path: Path) -> str:
     return os.path.normcase(str(path))
 
@@ -45,7 +83,12 @@ def _within(path: Path, root: Path) -> bool:
 
 def _check_remote(raw: str, what: str) -> None:
     """Refuse a network or device path on its text, before anything touches it."""
-    if "\x00" in raw or _REMOTE_PREFIX.match(raw):
+    if (
+        "\x00" in raw
+        or _REMOTE_PREFIX.match(raw)
+        or _URL.match(raw)
+        or (os.name == "nt" and _names_a_device(raw))
+    ):
         raise PathNotAllowedError(
             f"{what}: network and device paths are not allowed: {raw!r}"
         )
@@ -56,6 +99,11 @@ def _check_text(raw: str, what: str) -> None:
     _check_remote(raw, what)
     if ".." in re.split(r"[\\/]", raw):
         raise PathNotAllowedError(f"{what}: '..' is not allowed in a path: {raw!r}")
+    if raw.startswith("~"):
+        # expanduser (Lightning applies it to its folders) would turn it into a home directory.
+        raise PathNotAllowedError(
+            f"{what}: a path starting with '~' is not allowed: {raw!r}"
+        )
     if os.name == "nt":
         windows = PureWindowsPath(raw)
         if windows.drive and not windows.root:
@@ -73,15 +121,15 @@ def _contain(path: Path, roots: list[Path], what: str) -> Path:
     return resolved
 
 
-def confine_path(raw: str, *, field: str) -> str:
+def confine_path(raw: str, *, field: str, read: bool = False) -> str:
     """Screen a path a client sent in request field ``field``.
 
     Without roots ``raw`` comes back unchanged. With roots an absolute path comes back
     resolved (callers open that, not the text they got), and a relative one comes back as is:
     it becomes a location only where a resolver joins it to a folder, and that resolver checks
-    the result with :func:`confine_resolved`.
+    the result with :func:`confine_resolved`. ``read`` also allows the pipeline library.
     """
-    roots = allowed_roots()
+    roots = _roots(read)
     if roots is None or not raw:
         return raw
     _check_text(raw, field)
@@ -91,9 +139,12 @@ def confine_path(raw: str, *, field: str) -> str:
     return str(_contain(path, roots, field))
 
 
-def confine_resolved(path: Path, *, what: str) -> Path:
-    """Check a path a resolver built from client input; resolved, or ``path`` without roots."""
-    roots = allowed_roots()
+def confine_resolved(path: Path, *, what: str, read: bool = False) -> Path:
+    """Check a path a resolver built from client input; resolved, or ``path`` without roots.
+
+    ``read`` also allows the pipeline library.
+    """
+    roots = _roots(read)
     if roots is None:
         return path
     _check_remote(str(path), what)

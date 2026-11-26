@@ -23,10 +23,18 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2_grpc
 from loguru import logger
 
 from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
-from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV, TokenInterceptor, pop_token
+from cuvis_ai_core.utils.grpc_auth import (
+    RUNTIME_TOKEN_ENV,
+    TokenInterceptor,
+    max_message_size,
+    pop_token,
+)
 
 _DEFAULT_BIND = "127.0.0.1:0"
 _DEFAULT_MAX_WORKERS = 8
+# The parent forwards a client's request, at most max_message_size() bytes, with a resolved
+# path in place of the one the client sent; this margin covers that growth.
+FORWARD_MARGIN = 1024 * 1024
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,8 +51,10 @@ def main(argv: list[str] | None = None) -> int:
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=args.max_workers),
         options=[
+            # Inference answers (full frames and score maps) can be large.
             ("grpc.max_send_message_length", -1),
-            ("grpc.max_receive_message_length", -1),
+            # No more than the parent accepts, so a local caller cannot make it allocate more.
+            ("grpc.max_receive_message_length", _receive_limit()),
         ],
         interceptors=[TokenInterceptor(token)] if token else [],
     )
@@ -70,6 +80,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Stopping RunRuntime server (grace 5s)")
         server.stop(grace=5.0).wait()
     return 0
+
+
+def _receive_limit() -> int:
+    """The parent's cap plus :data:`FORWARD_MARGIN`; ``-1`` (no limit) when the parent has none."""
+    limit = max_message_size()
+    return -1 if limit < 0 else limit + FORWARD_MARGIN
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

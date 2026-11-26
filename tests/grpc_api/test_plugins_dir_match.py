@@ -180,8 +180,13 @@ def test_without_a_plugins_dir_any_manifest_is_registered(monkeypatch, service):
     assert registered["sam3"]["repo"] == anything["repo"]
 
 
-def test_a_broken_plugins_dir_is_the_servers_problem(plugins_dir, service):
-    (plugins_dir / "dup.yaml").write_text(yaml.safe_dump(GIT), encoding="utf-8")
+@pytest.mark.parametrize(
+    "broken",
+    [yaml.safe_dump(GIT), "name: [unclosed\n"],
+    ids=["duplicate-name", "yaml-syntax-error"],
+)
+def test_a_broken_plugins_dir_is_the_servers_problem(plugins_dir, service, broken):
+    (plugins_dir / "broken.yaml").write_text(broken, encoding="utf-8")
 
     response, context, registered = _load(service, GIT)
 

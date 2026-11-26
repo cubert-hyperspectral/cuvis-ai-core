@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import mmap
-import os
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -16,7 +15,7 @@ import torch
 import yaml
 from loguru import logger
 
-from cuvis_ai_core.utils.path_confinement import confine_resolved
+from cuvis_ai_core.utils.path_confinement import confine_resolved, library_root
 
 from .v1 import cuvis_ai_pb2
 
@@ -535,11 +534,7 @@ def get_server_base_dir() -> Path:
         This defaults to ./configs relative to the current working directory.
         Can be overridden via CUVIS_CONFIGS_DIR environment variable.
     """
-    env_dir = os.environ.get("CUVIS_CONFIGS_DIR")
-    if env_dir:
-        return Path(env_dir)
-
-    return Path.cwd() / "configs"
+    return library_root()
 
 
 def resolve_pipeline_path(config_path: str, base_dir: Path | None = None) -> Path:
@@ -639,9 +634,10 @@ def resolve_pipeline_save_path(
     path = Path(pipeline_path)
     if not path.is_absolute():
         path = base_dir / path
-    # save_to_file writes the weights beside the yaml; a link there must not lead out either.
-    confine_resolved(path.with_suffix(".pt"), what="pipeline_path")
-    return confine_resolved(path, what="pipeline_path")
+    resolved = confine_resolved(path, what="pipeline_path")
+    # save_to_file writes the weights beside the resolved yaml; a link there must not lead out.
+    confine_resolved(resolved.with_suffix(".pt"), what="pipeline_path")
+    return resolved
 
 
 # ------------------------------------------------------------------
@@ -900,14 +896,14 @@ def find_weights_file(path: str, search_paths: list[str]) -> Path:
 
     if path_obj.is_absolute():
         if path_obj.exists():
-            return confine_resolved(path_obj, what="weights_path")
+            return confine_resolved(path_obj, what="weights_path", read=True)
         raise FileNotFoundError(f"Weights file not found: {path_obj}")
 
     for search_dir in search_paths:
         candidate = Path(search_dir) / path_obj
         if candidate.exists():
             logger.debug(f"Found weights in {search_dir}: {path_obj}")
-            return confine_resolved(candidate.resolve(), what="weights_path")
+            return confine_resolved(candidate.resolve(), what="weights_path", read=True)
 
     raise FileNotFoundError(
         f"Weights file '{path}' not found in search paths: {search_paths}"

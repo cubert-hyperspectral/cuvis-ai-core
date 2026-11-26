@@ -180,6 +180,22 @@ def test_child_env_carries_its_own_token_and_never_the_servers(
     assert env["CUVIS_RUNTIME_TOKEN"] == "child-token"
 
 
+def test_child_env_keeps_the_allowed_roots(
+    fake_venv: Path, declared_paths, monkeypatch
+):
+    # The child checks the trainrun files it reads against the same roots as the server.
+    monkeypatch.setenv("CUVIS_ALLOWED_ROOTS", "/data/runs")
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=fake_venv,
+        declared_paths=declared_paths,
+        request_gpu=False,
+        runtime_token="child-token",
+    )
+
+    assert env["CUVIS_ALLOWED_ROOTS"] == "/data/runs"
+
+
 def test_spawn_curates_env_no_secret_passthrough(
     fake_venv: Path, declared_paths, monkeypatch
 ):

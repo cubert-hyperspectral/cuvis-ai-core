@@ -23,13 +23,19 @@ class _Canary:
 
 @pytest.fixture
 def no_temp_files(monkeypatch):
-    """Fail any attempt to write the client bytes to a temporary file."""
+    """Arm it once the test's own files are saved: any temporary file after that fails the test.
+
+    Saving a pipeline writes through a staging file, so the guard waits for the setup.
+    """
 
     def refuse(*args, **kwargs):
         raise AssertionError("client weight bytes must not be written to disk")
 
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", refuse)
-    monkeypatch.setattr(tempfile, "mkstemp", refuse)
+    def arm():
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", refuse)
+        monkeypatch.setattr(tempfile, "mkstemp", refuse)
+
+    return arm
 
 
 @pytest.fixture
@@ -53,6 +59,7 @@ def test_bytes_load_from_memory_and_restore_the_state(session, tmp_path, no_temp
     blob = config_path.with_suffix(".pt").read_bytes()
     expected = node.fitted_mean.clone()
     node.fitted_mean.zero_()
+    no_temp_files()
 
     response = service.load_pipeline_weights(
         cuvis_ai_pb2.LoadPipelineWeightsRequest(

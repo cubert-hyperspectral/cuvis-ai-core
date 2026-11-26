@@ -330,10 +330,11 @@ class SessionManager:
         path, is rejected before anything touches it.
         """
         try:
-            path = confine_path(path, field="search_paths")
+            # Search paths are only read from, so the pipeline library may be one.
+            path = confine_path(path, field="search_paths", read=True)
             resolved = Path(path).resolve()
             if resolved.exists() and resolved.is_dir() and resolved.is_absolute():
-                return str(confine_resolved(resolved, what="search_paths"))
+                return str(confine_resolved(resolved, what="search_paths", read=True))
         except PathNotAllowedError as exc:
             logger.warning(f"Search path rejected: {exc}")
         except Exception as exc:

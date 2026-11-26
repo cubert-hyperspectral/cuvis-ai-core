@@ -6,7 +6,7 @@ import gc
 import queue
 import threading
 from collections.abc import Callable, Iterator
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 import grpc
@@ -37,6 +37,12 @@ from cuvis_ai_core.training.trainers import (
     GradientTrainer,
     StatisticalTrainer,
     TrainingCancelled,
+)
+from cuvis_ai_core.utils.path_confinement import (
+    PathNotAllowedError,
+    allowed_roots,
+    confine_path,
+    confine_resolved,
 )
 from cuvis_ai_schemas.enums import ExecutionStage
 from cuvis_ai_schemas.execution import Context
@@ -110,6 +116,60 @@ def _run_outcome(
             "Gradient training stopped via StopTrain", swallowed_error=training_error
         )
     return TrainingCancelled("Gradient training stopped via StopTrain")
+
+
+def confined_output_dirs(training_config: TrainingConfig) -> TrainingConfig:
+    """``training_config`` with the folders Lightning writes to checked against the roots.
+
+    Covers ``default_root_dir`` and the checkpoint callback's ``dirpath`` and ``filename``.
+    Without ``CUVIS_ALLOWED_ROOTS`` the config comes back unchanged. With roots an absolute
+    folder has to lie inside one and comes back resolved. A relative folder, and a missing
+    ``default_root_dir``, land under the runtime's working directory, which then has to lie
+    inside a root; their text stays as it is, so a saved trainrun keeps them relative. The
+    checkpoint file name has to stay inside its folder. Anything else raises
+    ``PathNotAllowedError``.
+    """
+    if allowed_roots() is None:
+        return training_config
+    update: dict = {
+        "default_root_dir": _confined_output_dir(
+            training_config.default_root_dir, field="training.default_root_dir"
+        )
+    }
+    callbacks = training_config.callbacks
+    if callbacks is not None and callbacks.checkpoint is not None:
+        field = "training.callbacks.checkpoint"
+        dirpath = _confined_output_dir(
+            callbacks.checkpoint.dirpath, field=f"{field}.dirpath"
+        )
+        if callbacks.checkpoint.filename:
+            _check_checkpoint_name(
+                callbacks.checkpoint.filename, folder=dirpath, field=f"{field}.filename"
+            )
+        checkpoint = callbacks.checkpoint.model_copy(update={"dirpath": dirpath})
+        update["callbacks"] = callbacks.model_copy(update={"checkpoint": checkpoint})
+    return training_config.model_copy(update=update)
+
+
+def _confined_output_dir(raw: str | None, *, field: str) -> str | None:
+    """Check one output folder; a relative or missing one lies under the working directory."""
+    checked = confine_path(raw, field=field) if raw else raw
+    if not checked or not Path(checked).is_absolute():
+        confine_resolved(Path.cwd() / (checked or ""), what=field)
+    return checked
+
+
+def _check_checkpoint_name(raw: str, *, folder: str | None, field: str) -> None:
+    """Lightning joins the file name to the checkpoint folder; it must not leave that folder."""
+    if PurePath(raw).is_absolute() or PureWindowsPath(raw).anchor:
+        raise PathNotAllowedError(
+            f"{field}: a checkpoint file name has to stay inside its folder: {raw!r}"
+        )
+    confine_path(raw, field=field)  # '..', network and device forms
+    # A subfolder in the name may already be a link that leads out of the roots.
+    subfolder = PurePath(raw).parent
+    if subfolder != PurePath("."):
+        confine_resolved(Path.cwd() / (folder or "") / subfolder, what=field)
 
 
 def _statistical_only(session: SessionState) -> bool:
@@ -215,6 +275,11 @@ class TrainingService:
                     "base dir to resolve against); send an absolute path or load the "
                     "trainrun via RestoreTrainRun"
                 )
+            if splits is not None and splits.splits_path:
+                # The data module reads this file; with roots set it is a client path.
+                confine_path(
+                    splits.splits_path, field="data.splits.splits_path", read=True
+                )
 
             # The DataModule class named by ``data_config.data_module`` comes from a
             # plugin registered into the session's ``node_registry.data_modules``;
@@ -256,6 +321,12 @@ class TrainingService:
                     context.set_details(
                         "Gradient training requires training config either in request or loaded via RestoreTrainRun"
                     )
+                    return
+                try:
+                    training_config_py = confined_output_dirs(training_config_py)
+                except PathNotAllowedError as exc:
+                    context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                    context.set_details(str(exc))
                     return
 
                 self._capture_experiment_context(
@@ -307,6 +378,9 @@ class TrainingService:
             if is_cuda_out_of_memory(exc):
                 context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
                 context.set_details(f"Training failed: {str(exc)}")
+            elif isinstance(exc, PathNotAllowedError):
+                context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                context.set_details(str(exc))
             elif isinstance(exc, ValueError):
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(str(exc))

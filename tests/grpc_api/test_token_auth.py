@@ -108,6 +108,55 @@ def test_every_runtime_method_refuses_a_call_without_the_token(
 
 
 @pytest.mark.parametrize(
+    ("endpoint", "service", "method_name"),
+    [
+        ("cuvis_endpoint", _CUVIS, "CreateSession"),
+        ("runtime_endpoint", _RUNTIME, "LoadPipelineWeights"),
+    ],
+)
+def test_a_call_without_the_token_is_refused_before_its_request_is_parsed(
+    request, endpoint, service, method_name
+):
+    # Wire type 7 does not exist, so parsing these bytes would fail with INTERNAL.
+    path = f"/{service.full_name}/{method_name}"
+    with grpc.insecure_channel(request.getfixturevalue(endpoint)) as channel:
+        with pytest.raises(grpc.RpcError) as refused:
+            channel.unary_unary(path, None, bytes)(b"\xff\xff\xff", timeout=10)
+
+    assert refused.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+
+def test_a_call_without_the_token_is_refused_before_its_body_is_read():
+    # The server takes 1 KiB at most. Refused without being read, an oversized body gets
+    # UNAUTHENTICATED; read first, it would get RESOURCE_EXHAUSTED, as the call with
+    # the token shows.
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=2),
+        interceptors=[TokenInterceptor(TOKEN)],
+        options=[("grpc.max_receive_message_length", 1024)],
+    )
+    cuvis_ai_pb2_grpc.add_CuvisAIServiceServicer_to_server(CuvisAIService(), server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    path = f"/{_CUVIS.full_name}/CreateSession"
+    codes = []
+    try:
+        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
+            call = channel.unary_unary(path, None, bytes)
+            for metadata in (None, call_metadata(TOKEN)):
+                with pytest.raises(grpc.RpcError) as refused:
+                    call(b"\x00" * 65536, metadata=metadata, timeout=10)
+                codes.append(refused.value.code())
+    finally:
+        server.stop(grace=None)
+
+    assert codes == [
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+    ]
+
+
+@pytest.mark.parametrize(
     "metadata",
     [
         [("authorization", "Bearer wrong-token")],

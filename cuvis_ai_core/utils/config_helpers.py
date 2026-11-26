@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import os
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +151,54 @@ def _refuse_hydra_settings(config_file: Path, overrides: list[str]) -> None:
         )
 
 
+def _guard_hydra_file_source() -> None:
+    """Check every file Hydra's file config source tests or opens against the allowed roots.
+
+    ``compose()`` follows a config's ``defaults:`` list and group overrides (``+data=x``) by
+    joining their names to the config folder, so ``..`` or a link there would read any YAML on
+    the host. Installed once, the guard checks the joined path the way Hydra builds it and
+    raises ``PathNotAllowedError`` before Hydra touches it; while ``CUVIS_ALLOWED_ROOTS`` is
+    unset it checks nothing.
+    """
+    from hydra._internal.sources_registry import SourcesRegistry
+    from hydra.core.plugins import Plugins
+
+    # Hydra's first plugin scan imports its core plugins again, so a FileConfigSource imported
+    # before it is not the class compose() uses; take the one registered for "file" after it.
+    Plugins.instance()
+    FileConfigSource = SourcesRegistry.instance().resolve("file")
+    if getattr(FileConfigSource, "_cuvis_roots_guard", False):
+        return
+
+    def guarded(method, normalize: bool):
+        @functools.wraps(method)
+        def wrapper(self, config_path, *args, **kwargs):
+            if allowed_roots() is not None:
+                name = (
+                    self._normalize_file_name(config_path) if normalize else config_path
+                )
+                confine_resolved(
+                    Path(os.path.join(self.path, name)),
+                    what="config include",
+                    read=True,
+                )
+            return method(self, config_path, *args, **kwargs)
+
+        return wrapper
+
+    # load_config and is_config join the name with ".yaml" added; is_group and list as given.
+    for name, normalize in (
+        ("load_config", True),
+        ("is_config", True),
+        ("is_group", False),
+        ("list", False),
+    ):
+        setattr(
+            FileConfigSource, name, guarded(getattr(FileConfigSource, name), normalize)
+        )
+    FileConfigSource._cuvis_roots_guard = True  # type: ignore[attr-defined]
+
+
 def resolve_config_with_hydra(
     config_type: str,
     config_path: str,
@@ -168,6 +218,7 @@ def resolve_config_with_hydra(
     # Determine the Hydra config root and config name relative to that root.
     config_root = config_file.parent
     config_name = config_file.stem
+    roots = allowed_roots()
 
     for search_dir in search_paths:
         resolved_dir = Path(search_dir).resolve()
@@ -175,14 +226,21 @@ def resolve_config_with_hydra(
             relative = config_file.relative_to(resolved_dir)
         except ValueError:
             continue
+        if roots is not None:
+            # Hydra probes its config folder itself, so a folder above the roots is refused.
+            try:
+                confine_resolved(resolved_dir, what="config root", read=True)
+            except PathNotAllowedError:
+                continue
 
         config_root = resolved_dir
         config_name = relative.with_suffix("").as_posix()
         break
 
     hydra_overrides = overrides if isinstance(overrides, list) else []
-    if allowed_roots() is not None:
+    if roots is not None:
         _refuse_hydra_settings(config_file, hydra_overrides)
+        _guard_hydra_file_source()
 
     with initialize_config_dir(config_dir=str(config_root), version_base="1.3"):
         cfg = compose(config_name=config_name, overrides=hydra_overrides)
@@ -236,14 +294,14 @@ def _find_config_file(path: str, search_paths: list[str]) -> Path:
 
     if path_obj.is_absolute():
         if path_obj.exists():
-            return confine_resolved(path_obj, what="config path")
+            return confine_resolved(path_obj, what="config path", read=True)
         raise FileNotFoundError(f"Config file not found: {path_obj}")
 
     for search_dir in search_paths:
         candidate = Path(search_dir) / path_obj
         if candidate.exists():
             logger.debug(f"Found config in {search_dir}: {path_obj}")
-            return confine_resolved(candidate.resolve(), what="config path")
+            return confine_resolved(candidate.resolve(), what="config path", read=True)
 
     raise FileNotFoundError(
         f"Config file '{path}' not found in search paths: {search_paths}"

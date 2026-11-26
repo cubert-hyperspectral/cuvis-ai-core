@@ -22,6 +22,7 @@ All settings are environment variables of the server process.
 | `GRPC_ALLOW_INSECURE_REMOTE` | unset | `1` starts on a network address without a token or TLS, with a warning. |
 | `CUVIS_ALLOWED_ROOTS` | unset | Folders client paths must stay in, separated by `;` on Windows and `:` elsewhere. |
 | `CUVIS_PLUGINS_DIR` | unset | Folder of plugin manifests. When set, only these plugins can be registered. |
+| `GRPC_MAX_MSG_SIZE` | 300 MB | Largest message, in bytes, the server and its child runtimes accept. |
 
 The server reads `CUVIS_GRPC_TOKEN` once at start and removes it from its environment, so the
 processes it starts later (uv, plugin builds, child runtimes) never see it.
@@ -62,18 +63,32 @@ stub = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
 
 List the folders the launcher works in: its data, its models and its output. A path in a request is
 then refused with `PERMISSION_DENIED` when it is a network or device path (`\\host\share`,
-`//host/share`, `\\?\...`), contains a `..` segment, or resolves outside every root. Network and
-device paths are refused on their text, before any filesystem call, so the server never opens an SMB
-session to a host a client named. Session search paths outside the roots come back in
+`//host/share`, `\\?\...`, `\??\...`, a URL such as `http://...` or `s3://...`, and on Windows a
+device name such as `NUL`, `CON`, `C:NUL` or `COM1.txt`), starts with `~`, contains a `..`
+segment, or resolves outside every root. Network and device paths are refused on their text,
+before any filesystem call, so the server never opens an SMB session to a host a client named
+through these fields; the data paths listed under "Not covered" are the exception. The splits file
+of a training run (`data.splits.splits_path`) is checked the same way before training starts.
+A trainrun's `pipeline:` entry that leads outside the roots is answered as not found, whether or
+not the file exists. Session search paths outside the roots come back in
 `rejected_paths`. Files the server writes next to a requested one (the `.pt` beside a saved
-pipeline, the pipeline and weights beside a saved trainrun) have to lie inside the roots too, and
-`ResolveConfig` refuses Hydra's own settings (`hydra.searchpath` and the like), from overrides or
-from the config file.
+pipeline, the pipeline and weights beside a saved trainrun) have to lie inside the roots too, and so
+do the folders gradient training writes to: the checkpoint folder
+(`training.callbacks.checkpoint.dirpath`) and `default_root_dir`. A relative folder, or a missing
+`default_root_dir`, lands under the runtime's working directory, which then has to lie inside a
+root, and the checkpoint file name (`filename`) has to stay inside its folder, also through a
+subfolder that is a link. Saved pipelines and trainruns are written to a staging file beside the
+target and moved into place, so a link put at the target after the check is replaced, not followed;
+a replaced file keeps its permissions. `ResolveConfig` refuses Hydra's own settings
+(`hydra.searchpath` and the like), from overrides or from the config file, and every file Hydra
+pulls in while composing (a `defaults:` entry, a group override such as `+data=name`) has to lie
+inside the roots as well.
 
 The roots cover the locations a client chooses. The server's own pipeline library
-(`CUVIS_CONFIGS_DIR`), which `ListAvailablePipelines` and `GetPipelineInfo` read, is not
-restricted by them: `GetPipelineInfo` takes only relative names, refuses `..`, and stays inside
-that library.
+(`CUVIS_CONFIGS_DIR`) can be read without being a root: `ResolveConfig`, the session search paths,
+weight lookups, `RestoreTrainRun`, `ListAvailablePipelines` and `GetPipelineInfo` may read from it.
+Writes still need a root, so a client cannot change the library through `SavePipeline` or
+`SaveTrainRun` unless the launcher lists it among the roots.
 
 ### Plugins directory
 
@@ -109,6 +124,10 @@ gets a fresh token from the server and refuses calls without it, so another loca
 the child's port cannot use it. Nothing needs to be configured for this. A child started by hand,
 without `CUVIS_RUNTIME_TOKEN`, checks nothing and logs a warning.
 
+Both servers refuse a call without the token before they read its request, so a caller without
+the token cannot make either process receive or parse a message. A child accepts no larger message
+than the server does (`GRPC_MAX_MSG_SIZE`; `-1`, no limit, applies to both).
+
 ## Checkpoints
 
 Pipeline checkpoints load with `torch.load(weights_only=True)`, whether they come as bytes from a
@@ -123,5 +142,8 @@ unpickled. Lightning checkpoints given to `GradientTrainer.validate` and `test` 
 - Plugins load their own pretrained weights in their own code, and some of them unpickle those files
   in full. The checkpoint loading described above does not apply there.
 - `CUVIS_ALLOWED_ROOTS` covers the path fields of the API, the trainrun file and the pipeline it
-  names. The data paths a trainrun lists (`data_dir`, the files of a split) are not checked.
+  names, and the splits file. The other data paths of a run (`data_dir`, a data module's
+  parameters, the files a split lists) are not checked, network paths included.
 - There are no permissions per call: a token holder can call every RPC.
+- A save checks its target and then writes it. A process that can write inside an allowed folder
+  and swaps a parent folder of the target for a link in between can still redirect the save.
