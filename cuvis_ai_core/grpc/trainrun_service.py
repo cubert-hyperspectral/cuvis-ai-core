@@ -222,9 +222,20 @@ class TrainRunService:
         # trainrun carries an absolute path — parity with the CLI restore path and
         # with the pipeline-reference resolution below.
         if trainrun_config.data is not None:
+            # The splits file is a client path: its text is screened before the resolver
+            # touches it, and the file it resolves to has to lie inside the roots.
+            splits = trainrun_config.data.splits
+            if splits is not None and splits.splits_path:
+                check_not_remote(splits.splits_path, what="data.splits.splits_path")
             resolved_data = _resolve_splits_path_in_config(
                 trainrun_config.data, trainrun_path.parent
             )
+            if resolved_data.splits is not None and resolved_data.splits.splits_path:
+                confine_resolved(
+                    Path(resolved_data.splits.splits_path),
+                    what="data.splits.splits_path",
+                    read=True,
+                )
             if resolved_data is not trainrun_config.data:
                 trainrun_config = trainrun_config.model_copy(
                     update={"data": resolved_data}

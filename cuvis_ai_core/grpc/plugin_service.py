@@ -380,8 +380,9 @@ class PluginService:
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
             context.set_details(str(exc))
             return cuvis_ai_pb2.LoadPluginResponse(error=str(exc))
-        except (ValueError, yaml.YAMLError) as exc:
-            # A duplicate name, an invalid manifest or unreadable YAML in the launcher's own folder.
+        except (ValueError, yaml.YAMLError, FileNotFoundError) as exc:
+            # A duplicate name, an invalid manifest, unreadable YAML or a manifest removed
+            # while the folder was read, all in the launcher's own folder.
             msg = (
                 f"The server's plugins directory "
                 f"{os.environ.get(PLUGINS_DIR_ENV, '').strip()} is broken: {exc}"

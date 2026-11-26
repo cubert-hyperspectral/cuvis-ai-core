@@ -126,7 +126,12 @@ def test_a_call_without_the_token_is_refused_before_its_request_is_parsed(
     assert refused.value.code() == grpc.StatusCode.UNAUTHENTICATED
 
 
-def test_a_call_without_the_token_is_refused_before_its_body_is_read():
+@pytest.mark.parametrize(
+    "path",
+    [f"/{_CUVIS.full_name}/CreateSession", "/grpc.health.v1.Health/Check"],
+    ids=["CreateSession", "Health"],
+)
+def test_a_call_without_the_token_is_refused_before_its_body_is_read(path):
     # The server takes 1 KiB at most. Refused without being read, an oversized body gets
     # UNAUTHENTICATED; read first, it would get RESOURCE_EXHAUSTED, as the call with
     # the token shows.
@@ -136,9 +141,9 @@ def test_a_call_without_the_token_is_refused_before_its_body_is_read():
         options=[("grpc.max_receive_message_length", 1024)],
     )
     cuvis_ai_pb2_grpc.add_CuvisAIServiceServicer_to_server(CuvisAIService(), server)
+    health_pb2_grpc.add_HealthServicer_to_server(HealthService(), server)
     port = server.add_insecure_port("127.0.0.1:0")
     server.start()
-    path = f"/{_CUVIS.full_name}/CreateSession"
     codes = []
     try:
         with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
@@ -190,11 +195,17 @@ def test_the_right_token_reaches_the_servicer(cuvis_endpoint, value):
         )
 
 
-def test_health_answers_without_a_token(cuvis_endpoint):
+def test_health_on_the_main_port_needs_the_token(cuvis_endpoint):
+    # Probes without the token use the health port (GRPC_HEALTH_PORT) instead.
     with grpc.insecure_channel(cuvis_endpoint) as channel:
-        response = health_pb2_grpc.HealthStub(channel).Check(
-            health_pb2.HealthCheckRequest()
+        stub = health_pb2_grpc.HealthStub(channel)
+        with pytest.raises(grpc.RpcError) as refused:
+            stub.Check(health_pb2.HealthCheckRequest(), timeout=10)
+        response = stub.Check(
+            health_pb2.HealthCheckRequest(), metadata=call_metadata(TOKEN), timeout=10
         )
+
+    assert refused.value.code() == grpc.StatusCode.UNAUTHENTICATED
     assert response.status == health_pb2.HealthCheckResponse.SERVING
 
 
@@ -358,3 +369,61 @@ def test_server_from_env_without_a_token(monkeypatch):
     monkeypatch.delenv("CUVIS_GRPC_TOKEN", raising=False)
 
     assert production_server_mod.server_from_env().token is None
+
+
+# Health port (GRPC_HEALTH_PORT)
+# ---------------------------------------------------------------------------
+
+
+def test_no_health_port_unless_one_is_set(recorded_grpc_server):
+    _started(ProductionServer(port=50551, token=TOKEN))
+
+    assert len(recorded_grpc_server.calls) == 1
+    recorded_grpc_server.add_insecure_port.assert_called_once_with("localhost:50551")
+
+
+def test_a_health_port_adds_a_listener_on_the_main_host(recorded_grpc_server):
+    _started(ProductionServer(port=50551, host="127.0.0.1", health_port=50552))
+
+    main, listener = recorded_grpc_server.calls
+    assert listener["maximum_concurrent_rpcs"] == 8
+    assert not listener.get("interceptors")
+    assert [
+        c.args[0] for c in recorded_grpc_server.add_insecure_port.call_args_list
+    ] == [
+        "127.0.0.1:50551",
+        "127.0.0.1:50552",
+    ]
+    # Both servers stop at shutdown (one stand-in plays both).
+    assert recorded_grpc_server.stop.call_count == 2
+
+
+def test_the_health_port_may_not_be_the_main_port(recorded_grpc_server):
+    with pytest.raises(ValueError, match="GRPC_HEALTH_PORT"):
+        ProductionServer(port=50551, health_port=50551).start()
+
+    assert recorded_grpc_server.calls == []
+
+
+def test_a_health_port_that_cannot_bind_stops_the_main_server(recorded_grpc_server):
+    recorded_grpc_server.add_insecure_port.side_effect = [4321, 0]
+    server = ProductionServer(port=50551, health_port=50552)
+
+    with pytest.raises(RuntimeError, match="GRPC_HEALTH_PORT"):
+        server.start()
+
+    recorded_grpc_server.start.assert_not_called()
+    recorded_grpc_server.stop.assert_called()
+    assert server.server is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("50552", 50552), ("", None), (None, None)]
+)
+def test_server_from_env_reads_the_health_port(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("GRPC_HEALTH_PORT", raising=False)
+    else:
+        monkeypatch.setenv("GRPC_HEALTH_PORT", value)
+
+    assert production_server_mod.server_from_env().health_port == expected

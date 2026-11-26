@@ -2,7 +2,8 @@
 
 ``CUVIS_ALLOWED_ROOTS`` lists the folders, separated by ``os.pathsep``. Unset or empty, nothing
 is checked and every path behaves as it always did. Set, a client path is refused when it is a
-remote form (a UNC or device path), contains a ``..`` segment, or resolves outside every root.
+remote form (a UNC or device path, a URL or an fsspec chain such as ``simplecache::``), contains
+a ``..`` segment, or resolves outside every root.
 Remote forms are refused on the text alone: resolving or even testing such a path makes
 Windows open an SMB session to the named host, which hands it the user's NTLM credentials.
 A read may also land in the server's own pipeline library (``CUVIS_CONFIGS_DIR``); a write
@@ -21,9 +22,11 @@ CONFIGS_DIR_ENV = "CUVIS_CONFIGS_DIR"
 # \\host\share, //host/share, \\?\..., \\.\device, the NT object prefix \??\ (which
 # Windows passes through, so \??\UNC\host\share is a share) and their mixed-slash spellings.
 _REMOTE_PREFIX = re.compile(r"^(?:[\\/]{2}|[\\/]\?\?[\\/])")
-# A URL (http://, s3://, file://): fsspec, which Lightning writes through, opens it remotely.
-# Two letters at least, so a drive such as C:// stays a path.
-_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+://")
+# A URL (http://, s3://, file://) anywhere in the text: fsspec, which Lightning writes through,
+# opens it remotely. Two scheme characters at least, so a drive such as C:// stays a path. The
+# lookbehind keeps the search linear; a pattern that starts with the scheme rescans it from
+# every letter, which takes minutes on a path as long as a gRPC message.
+_URL = re.compile(r"(?<=[A-Za-z0-9+.-]{2})://")
 
 # DOS device names, which Windows opens as the device in any folder and with any extension.
 _DEVICE_NAMES = frozenset(
@@ -85,8 +88,9 @@ def _check_remote(raw: str, what: str) -> None:
     """Refuse a network or device path on its text, before anything touches it."""
     if (
         "\x00" in raw
+        or "::" in raw  # an fsspec chain such as simplecache::file:///elsewhere
         or _REMOTE_PREFIX.match(raw)
-        or _URL.match(raw)
+        or _URL.search(raw)
         or (os.name == "nt" and _names_a_device(raw))
     ):
         raise PathNotAllowedError(
@@ -109,6 +113,11 @@ def _check_text(raw: str, what: str) -> None:
         if windows.drive and not windows.root:
             raise PathNotAllowedError(
                 f"{what}: a drive-relative path is not allowed: {raw!r}"
+            )
+        if windows.root and not windows.drive:
+            # Not absolute to Python, yet a join keeps only the drive of the folder.
+            raise PathNotAllowedError(
+                f"{what}: a path from the drive root has to name its drive: {raw!r}"
             )
 
 

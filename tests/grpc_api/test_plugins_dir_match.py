@@ -180,6 +180,23 @@ def test_without_a_plugins_dir_any_manifest_is_registered(monkeypatch, service):
     assert registered["sam3"]["repo"] == anything["repo"]
 
 
+def test_a_manifest_that_vanishes_while_the_folder_is_read_is_the_servers_problem(
+    plugins_dir, service, monkeypatch
+):
+    # The launcher replaced its manifests between the folder listing and the read.
+    from cuvis_ai_core.utils import plugin_resolver
+
+    def vanished(path):
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(plugin_resolver, "load_plugin_manifest", vanished)
+
+    response, context, registered = _load(service, GIT)
+
+    context.set_code.assert_called_with(grpc.StatusCode.FAILED_PRECONDITION)
+    assert "sam3" not in registered
+
+
 @pytest.mark.parametrize(
     "broken",
     [yaml.safe_dump(GIT), "name: [unclosed\n"],

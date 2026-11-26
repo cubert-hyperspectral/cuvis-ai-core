@@ -26,7 +26,7 @@ from cuvis_ai_core.utils.grpc_auth import (
     normalize_token,
     pop_token,
 )
-from cuvis_ai_core.grpc.health import HealthService
+from cuvis_ai_core.grpc.health import HealthService, start_health_listener
 from cuvis_ai_core.grpc.service import CuvisAIService
 from cuvis_ai_core.orchestrator.composer import evict_run_cache, resolve_cache_root
 from cuvis_ai_core.orchestrator.leases import reap_orphans, take_process_snapshot
@@ -45,6 +45,7 @@ _MAINTENANCE_ENV = "CUVIS_RUN_CACHE_MAINTENANCE"
 DEFAULT_BIND_HOST = "localhost"
 _BIND_HOST_ENV = "GRPC_BIND_HOST"
 _INSECURE_REMOTE_ENV = "GRPC_ALLOW_INSECURE_REMOTE"
+_HEALTH_PORT_ENV = "GRPC_HEALTH_PORT"
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -141,8 +142,10 @@ class ProductionServer:
         host: str = DEFAULT_BIND_HOST,
         allow_insecure_remote: bool = False,
         token: str | None = None,
+        health_port: int | None = None,
     ) -> None:
         self.port = port
+        self.health_port = health_port
         self.max_workers = max_workers
         self.max_msg_size = max_msg_size
         self.use_tls = use_tls
@@ -153,6 +156,7 @@ class ProductionServer:
         self.token = normalize_token(token)
 
         self.server: grpc.Server | None = None
+        self.health_server: grpc.Server | None = None
         self.health_service: HealthService | None = None
         # Kept so shutdown() can reach the SessionManager and reap any child
         # runtimes the orchestrator spawned for live sessions.
@@ -185,6 +189,10 @@ class ProductionServer:
 
         self.logger.info("Starting gRPC server")
         self._check_bind_host()
+        if self.health_port and self.health_port == self.port:
+            raise ValueError(
+                f"{_HEALTH_PORT_ENV} has to differ from GRPC_PORT; both are {self.port}"
+            )
 
         grpc_srv_opts = []
         if self.max_msg_size is not None:
@@ -232,12 +240,41 @@ class ProductionServer:
                 "Server listening on %s (port %s, insecure)", address, bound_port
             )
 
+        if self.health_port is not None:
+            self.health_server = self._start_health_listener(
+                self.server, self.health_service, self.health_port
+            )
         self.server.start()
         self.health_service.set_serving()
 
         self.logger.info("Server started successfully")
         self._setup_signal_handlers()
         self._start_maintenance_thread()
+
+    def _start_health_listener(
+        self, main: grpc.Server, health: HealthService, port: int
+    ) -> grpc.Server:
+        """Start the health port for probes without a token; on failure release ``main``.
+
+        It answers NOT_SERVING until the main port runs, binds the main port's host and needs
+        neither token nor TLS: it answers nothing but the status (see ``start_health_listener``).
+        """
+        address = _bind_address(self.host, port)
+        health.set_not_serving()
+        try:
+            listener, bound_port = start_health_listener(health, address)
+        except Exception as exc:
+            main.stop(grace=None)
+            self.server = None
+            raise RuntimeError(
+                f"Failed to start the health port at {address} ({_HEALTH_PORT_ENV})"
+            ) from exc
+        self.logger.info(
+            "Health port listening on %s (port %s, Check only, no token, plaintext)",
+            address,
+            bound_port,
+        )
+        return listener
 
     def _check_bind_host(self) -> None:
         """Refuse a network address unless it has a token and TLS, or the operator opted out.
@@ -353,6 +390,10 @@ class ProductionServer:
         self.logger.info("Waiting for in-flight requests to complete")
         stop_future = self.server.stop(grace=5)
         stop_future.wait(timeout=10)
+        # After the main port, so probes read NOT_SERVING while it drains.
+        if self.health_server is not None:
+            self.health_server.stop(grace=None)
+            self.health_server = None
 
         self.server = None
         self.logger.info("Server shutdown complete")
@@ -393,7 +434,14 @@ def server_from_env() -> ProductionServer:
         host=os.getenv(_BIND_HOST_ENV, DEFAULT_BIND_HOST),
         allow_insecure_remote=os.getenv(_INSECURE_REMOTE_ENV, "").strip() == "1",
         token=pop_token(TOKEN_ENV),
+        health_port=_optional_port(_HEALTH_PORT_ENV),
     )
+
+
+def _optional_port(name: str) -> int | None:
+    """The port in environment variable ``name``; ``None`` when it is unset or empty."""
+    value = os.getenv(name, "").strip()
+    return int(value) if value else None
 
 
 def serve() -> None:  # pragma: no cover

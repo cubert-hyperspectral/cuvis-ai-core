@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import functools
 import os
-from pathlib import Path
+import re
+import threading
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -25,6 +27,7 @@ from cuvis_ai_schemas.training import (
 from cuvis_ai_core.utils.path_confinement import (
     PathNotAllowedError,
     allowed_roots,
+    check_not_remote,
     confine_resolved,
 )
 
@@ -151,24 +154,73 @@ def _refuse_hydra_settings(config_file: Path, overrides: list[str]) -> None:
         )
 
 
-def _guard_hydra_file_source() -> None:
-    """Check every file Hydra's file config source tests or opens against the allowed roots.
+_HYDRA_GUARD_LOCK = threading.Lock()
+
+
+def _guard_hydra_config_sources() -> None:
+    """Keep every config Hydra tests or opens inside the allowed roots or its own package.
 
     ``compose()`` follows a config's ``defaults:`` list and group overrides (``+data=x``) by
-    joining their names to the config folder, so ``..`` or a link there would read any YAML on
-    the host. Installed once, the guard checks the joined path the way Hydra builds it and
-    raises ``PathNotAllowedError`` before Hydra touches it; while ``CUVIS_ALLOWED_ROOTS`` is
-    unset it checks nothing.
+    handing their names to each config source in turn: Hydra's own package
+    (``pkg://hydra.conf``) first, then the config folder. A package source joins the name to
+    its package, so an absolute name or ``..`` would read any YAML on the host; it answers that
+    it holds no such config. The folder source checks the joined path against the roots the
+    way Hydra builds it and raises ``PathNotAllowedError`` before Hydra touches it. Structured
+    configs live in memory. Installed once; while ``CUVIS_ALLOWED_ROOTS`` is unset nothing is
+    checked.
     """
     from hydra._internal.sources_registry import SourcesRegistry
     from hydra.core.plugins import Plugins
 
-    # Hydra's first plugin scan imports its core plugins again, so a FileConfigSource imported
-    # before it is not the class compose() uses; take the one registered for "file" after it.
-    Plugins.instance()
-    FileConfigSource = SourcesRegistry.instance().resolve("file")
-    if getattr(FileConfigSource, "_cuvis_roots_guard", False):
-        return
+    with _HYDRA_GUARD_LOCK:
+        # Hydra's first plugin scan imports its core plugins again, so a source class imported
+        # before it is not the one compose() uses; take the registered classes after it.
+        Plugins.instance()
+        for scheme, source in SourcesRegistry.instance().types.items():
+            if scheme == "structured" or vars(source).get("_cuvis_roots_guard"):
+                continue
+            if scheme == "file":
+                _guard_folder_source(source)
+            else:
+                _guard_package_source(source)
+            source._cuvis_roots_guard = True  # type: ignore[attr-defined]
+
+
+def _leaves_its_package(name: str) -> bool:
+    """Whether a config name points outside the package it is looked up in."""
+    try:
+        check_not_remote(name, what="config include")
+    except PathNotAllowedError:
+        return True
+    return (
+        name.startswith(("/", "\\"))
+        or bool(PureWindowsPath(name).drive)
+        or ".." in re.split(r"[\\/]", name)
+    )
+
+
+def _guard_package_source(source: type) -> None:
+    """A package source looks a name up inside its package only; any other name is not there."""
+
+    def contained(method):
+        @functools.wraps(method)
+        def wrapper(self, config_path, *args, **kwargs):
+            if allowed_roots() is not None and _leaves_its_package(config_path):
+                if method.__name__ == "load_config":
+                    raise PathNotAllowedError(
+                        f"config include: {config_path!r} is not inside {self.path}"
+                    )
+                return [] if method.__name__ == "list" else False
+            return method(self, config_path, *args, **kwargs)
+
+        return wrapper
+
+    for name in ("load_config", "is_config", "is_group", "list"):
+        setattr(source, name, contained(getattr(source, name)))
+
+
+def _guard_folder_source(source: type) -> None:
+    """The folder source checks the path it joins from the name against the roots."""
 
     def guarded(method, normalize: bool):
         @functools.wraps(method)
@@ -193,10 +245,7 @@ def _guard_hydra_file_source() -> None:
         ("is_group", False),
         ("list", False),
     ):
-        setattr(
-            FileConfigSource, name, guarded(getattr(FileConfigSource, name), normalize)
-        )
-    FileConfigSource._cuvis_roots_guard = True  # type: ignore[attr-defined]
+        setattr(source, name, guarded(getattr(source, name), normalize))
 
 
 def resolve_config_with_hydra(
@@ -240,7 +289,7 @@ def resolve_config_with_hydra(
     hydra_overrides = overrides if isinstance(overrides, list) else []
     if roots is not None:
         _refuse_hydra_settings(config_file, hydra_overrides)
-        _guard_hydra_file_source()
+        _guard_hydra_config_sources()
 
     with initialize_config_dir(config_dir=str(config_root), version_base="1.3"):
         cfg = compose(config_name=config_name, overrides=hydra_overrides)

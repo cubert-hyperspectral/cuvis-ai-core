@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -172,6 +173,54 @@ def test_a_plain_relative_path_passes_for_its_resolver_to_check(root):
 def test_a_drive_relative_path_is_refused(root):
     with pytest.raises(PathNotAllowedError):
         confine_path("C:model.pt", field="weights_path")
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="root-relative paths are a Windows form"
+)
+@pytest.mark.parametrize("raw", [r"\elsewhere\model.pt", "/elsewhere/model.pt"])
+def test_a_path_from_the_drive_root_without_a_drive_is_refused(root, raw):
+    # Python calls it relative, yet a join keeps only its drive from the folder.
+    with pytest.raises(PathNotAllowedError, match="drive"):
+        confine_path(raw, field="weights_path")
+
+
+FSSPEC_FORMS = [
+    "simplecache::file:///elsewhere/ckpt",
+    "simplecache::/elsewhere/ckpt",
+    "filecache::s3://bucket/ckpt",
+    "runs/http://fileserver/ckpt",
+]
+
+
+@pytest.mark.parametrize("raw", FSSPEC_FORMS)
+def test_an_fsspec_chain_or_a_url_inside_a_path_is_refused_on_its_text(root, raw):
+    # fsspec, which Lightning writes through, follows 'proto::target' chains and
+    # opens a 'scheme://' wherever it sits.
+    with pytest.raises(PathNotAllowedError, match="network"):
+        confine_path(raw, field="training.default_root_dir")
+    with pytest.raises(PathNotAllowedError, match="network"):
+        check_not_remote(raw, what="trainrun pipeline")
+
+
+def test_a_long_path_is_screened_in_linear_time(root):
+    # A client can send a path as long as a gRPC message. 200,000 characters keep a
+    # quadratic scan busy for half a minute; a linear one needs milliseconds.
+    raw = "a" * 200_000
+
+    started = time.perf_counter()
+    assert confine_path(raw, field="weights_path") == raw
+    check_not_remote(raw, what="trainrun pipeline")
+    assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="drive letters are a Windows form")
+def test_a_drive_spelled_with_a_double_slash_is_not_a_url(root):
+    # 'C://' has one letter before '://', a URL scheme at least two.
+    inside = root / "model.pt"
+    raw = f"{inside.drive}//{inside.relative_to(inside.anchor).as_posix()}"
+
+    assert confine_path(raw, field="weights_path") == str(inside.resolve())
 
 
 DEVICE_NAMES = ["NUL", "con.yaml", "runs/COM1.txt", "Aux .pt", "lpt9", "CONIN$"]
@@ -445,6 +494,71 @@ def test_a_trainrun_outside_the_roots_is_refused(root, tmp_path, mock_experiment
 
     with pytest.raises(PathNotAllowedError):
         TrainRunService.parse_trainrun_yaml(trainrun)
+
+
+def _trainrun_with_splits(directory: Path, experiment: dict, splits_path: str) -> Path:
+    (directory / "pipeline.yaml").write_text("nodes: []\n", encoding="utf-8")
+    data = {**experiment["data"], "splits": {"splits_path": splits_path}}
+    return _write_trainrun(directory, "pipeline.yaml", {**experiment, "data": data})
+
+
+@pytest.mark.parametrize(
+    "splits_path",
+    [
+        "simplecache::splits.json",
+        "//fileserver/share/splits.json",
+        pytest.param(
+            "NUL",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32", reason="DOS device names are a Windows form"
+            ),
+        ),
+    ],
+)
+def test_a_trainrun_splits_file_is_screened_before_it_is_resolved(
+    root, monkeypatch, mock_experiment_dict, splits_path
+):
+    from cuvis_ai_core.grpc import trainrun_service
+
+    resolved: list = []
+    real = trainrun_service._resolve_splits_path_in_config
+    monkeypatch.setattr(
+        trainrun_service,
+        "_resolve_splits_path_in_config",
+        lambda data, base: resolved.append(data) or real(data, base),
+    )
+    trainrun = _trainrun_with_splits(root, mock_experiment_dict, splits_path)
+
+    with pytest.raises(PathNotAllowedError, match="network"):
+        TrainRunService.parse_trainrun_yaml(trainrun)
+    assert resolved == []
+
+
+def test_a_trainrun_splits_file_that_resolves_outside_the_roots_is_refused(
+    root, mock_experiment_dict
+):
+    (root / "runs").mkdir()
+    trainrun = _trainrun_with_splits(
+        root / "runs", mock_experiment_dict, "../../outside/splits.json"
+    )
+
+    with pytest.raises(PathNotAllowedError):
+        TrainRunService.parse_trainrun_yaml(trainrun)
+
+
+def test_a_trainrun_splits_file_may_climb_to_a_folder_inside_the_roots(
+    root, mock_experiment_dict
+):
+    (root / "runs").mkdir()
+    trainrun = _trainrun_with_splits(
+        root / "runs", mock_experiment_dict, "../splits/s.json"
+    )
+
+    config, _ = TrainRunService.parse_trainrun_yaml(trainrun)
+
+    assert (
+        Path(config.data.splits.splits_path) == (root / "splits" / "s.json").resolve()
+    )
 
 
 def test_a_trainrun_whose_pipeline_lies_outside_the_roots_is_not_found(
@@ -787,19 +901,63 @@ def test_a_missing_root_dir_passes_with_the_working_directory_inside_the_roots(
         "/elsewhere/x",
         r"\\fileserver\share\x",
         r"\??\UNC\fileserver\share\x",
+        # Lightning fills the placeholders and joins the result to the folder, so a
+        # placeholder name or fill character can lead out of it too.
+        "{/escaped}",
+        r"{\escaped}",
+        "{epoch:/>6}",
+        "C{epoch::>2}",
+        "{epoch}/model",
+        "{epoch}-{val/loss:.2f}",
+        "runs/{epoch}-{step}",
+        "simplecache::{epoch}",
+        # ':c' turns a number into a character: 47 is '/', 92 is '\'.
+        "{epoch:c}escaped",
+        "{epoch:c}{step:c}x",
     ],
 )
 def test_a_checkpoint_file_name_that_leaves_its_folder_is_refused(
     root, no_remote_filesystem_calls, filename
 ):
-    config = _training_config(checkpoint=str(root / "ckpt"), filename=filename)
+    config = _training_config(
+        default_root_dir=str(root / "runs"),
+        checkpoint=str(root / "ckpt"),
+        filename=filename,
+    )
 
-    with pytest.raises(PathNotAllowedError):
+    with pytest.raises(PathNotAllowedError, match="checkpoint.filename"):
         confined_output_dirs(config)
     assert no_remote_filesystem_calls == []
 
 
-@pytest.mark.parametrize("filename", ["{epoch:02d}", "runs/{epoch}-{step}"])
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="DOS device names are a Windows form"
+)
+@pytest.mark.parametrize("filename", ["NUL", "COM{epoch}", "lpt{step}"])
+def test_a_checkpoint_file_name_that_names_a_device_once_filled_is_refused(
+    root, filename
+):
+    # Without auto_insert_metric_name, 'COM{epoch}' becomes COM1.ckpt, the serial port.
+    config = _training_config(
+        default_root_dir=str(root / "runs"),
+        checkpoint=str(root / "ckpt"),
+        filename=filename,
+    )
+
+    with pytest.raises(PathNotAllowedError, match="device"):
+        confined_output_dirs(config)
+
+
+PLAIN_CHECKPOINT_NAMES = [
+    "{epoch:02d}",
+    "{epoch}-{step}",
+    "model-{val_loss:.3f}",
+    "epoch={epoch}_{step:>4}",
+    "last",
+]
+
+
+@pytest.mark.parametrize("filename", PLAIN_CHECKPOINT_NAMES)
 def test_a_checkpoint_file_name_inside_its_folder_passes_unchanged(root, filename):
     config = _training_config(
         default_root_dir=str(root / "runs"),
@@ -810,6 +968,29 @@ def test_a_checkpoint_file_name_inside_its_folder_passes_unchanged(root, filenam
     confined = confined_output_dirs(config)
 
     assert confined.callbacks.checkpoint.filename == filename
+
+
+@pytest.mark.parametrize("auto_insert", [True, False])
+@pytest.mark.parametrize("filename", PLAIN_CHECKPOINT_NAMES)
+def test_lightning_fills_an_accepted_checkpoint_name_inside_its_folder(
+    root, filename, auto_insert
+):
+    # Ties the allowed names to what Lightning does with them, whatever the values.
+    from pytorch_lightning.callbacks import ModelCheckpoint
+
+    folder = root / "ckpt"
+    callback = ModelCheckpoint(
+        dirpath=str(folder), filename=filename, auto_insert_metric_name=auto_insert
+    )
+    for epoch, step, loss in [(0, 0, 0.0), (7, 12345, float("nan")), (99, 3, -1e-9)]:
+        filled = callback.format_checkpoint_name(
+            {
+                "epoch": torch.tensor(epoch),
+                "step": torch.tensor(step),
+                "val_loss": torch.tensor(loss),
+            }
+        )
+        assert Path(filled).parent == folder, filled
 
 
 def test_a_checkpoint_file_name_through_a_link_out_of_the_roots_is_refused(
@@ -828,7 +1009,10 @@ def test_a_checkpoint_file_name_through_a_link_out_of_the_roots_is_refused(
 
 
 @pytest.mark.parametrize("field", ["default_root_dir", "checkpoint"])
-@pytest.mark.parametrize("raw", ["~/runs", "http://fileserver/runs"])
+@pytest.mark.parametrize(
+    "raw",
+    ["~/runs", "http://fileserver/runs", "simplecache::file:///elsewhere/runs"],
+)
 def test_a_training_folder_lightning_would_expand_or_fetch_is_refused(
     root, monkeypatch, field, raw
 ):
@@ -921,6 +1105,43 @@ def test_training_with_a_splits_file_outside_the_roots_answers_permission_denied
     assert no_remote_filesystem_calls == []
 
 
+def test_training_reads_the_splits_file_at_the_path_the_check_returns(
+    root, monkeypatch
+):
+    from cuvis_ai_schemas.training.data import DataSplitConfig
+
+    from cuvis_ai_core.data import datamodule
+    from tests.grpc_api.test_train_cancellation import _make_session
+
+    (root / "splits.json").write_text("{}", encoding="utf-8")
+    seen: list[str] = []
+
+    def capture(registry, data_config):
+        seen.append(data_config.splits.splits_path)
+        raise RuntimeError("stop after the data module is built")
+
+    monkeypatch.setattr(datamodule, "create_data_module", capture)
+    manager = SessionManager()
+    session_id, service = _make_session(manager)
+    session = manager.get_session(session_id)
+    session.data_config = session.data_config.model_copy(
+        update={"splits": DataSplitConfig(splits_path=f"{root}/./splits.json")}
+    )
+
+    list(
+        service.train(
+            cuvis_ai_pb2.TrainRequest(
+                session_id=session_id,
+                trainer_type=cuvis_ai_pb2.TRAINER_TYPE_STATISTICAL,
+            ),
+            MagicMock(),
+        )
+    )
+    manager.close_session(session_id)
+
+    assert seen == [str((root / "splits.json").resolve())]
+
+
 def test_training_output_dirs_without_roots_are_unchanged(monkeypatch, tmp_path):
     monkeypatch.delenv(ALLOWED_ROOTS_ENV, raising=False)
     config = _training_config(default_root_dir=str(tmp_path), checkpoint="../anywhere")
@@ -935,8 +1156,10 @@ def test_training_output_dirs_without_roots_are_unchanged(monkeypatch, tmp_path)
 def test_a_checkpoint_dir_that_leaves_the_roots_by_its_text_is_refused(
     root, no_remote_filesystem_calls, dirpath
 ):
-    with pytest.raises(PathNotAllowedError):
-        confined_output_dirs(_training_config(checkpoint=dirpath))
+    config = _training_config(default_root_dir=str(root / "runs"), checkpoint=dirpath)
+
+    with pytest.raises(PathNotAllowedError, match="checkpoint.dirpath"):
+        confined_output_dirs(config)
     assert no_remote_filesystem_calls == []
 
 
@@ -1011,6 +1234,46 @@ def test_a_group_override_that_climbs_out_of_the_roots_is_refused(root, outside_
 
     with pytest.raises(PathNotAllowedError):
         _resolve_training(root, "seed: 1\n", ["+extra=../../outside/extra"])
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="a path with a drive is a Windows form; POSIX Hydra reads a leading / as its root",
+)
+@pytest.mark.parametrize("spelling", ["slashes", "backslashes"])
+def test_a_defaults_entry_with_an_absolute_path_is_refused(
+    root, outside_extra, spelling
+):
+    # Hydra asks its own package source (pkg://hydra.conf) before the config folder, and
+    # joining an absolute name to the package gives that absolute path.
+    target = outside_extra.with_suffix("")
+    ref = target.as_posix() if spelling == "slashes" else str(target)
+
+    with pytest.raises(PathNotAllowedError):
+        _resolve_training(root, f"defaults:\n  - {ref}@_global_\n  - _self_\n")
+
+
+@pytest.mark.parametrize(
+    "name", ["../../elsewhere", "/etc", "C:/elsewhere", "a/../../x"]
+)
+def test_hydra_package_sources_do_not_look_outside_their_package(root, name):
+    from hydra._internal.sources_registry import SourcesRegistry
+
+    config_helpers._guard_hydra_config_sources()
+    source = SourcesRegistry.instance().resolve("pkg")("hydra", "pkg://hydra.conf")
+
+    assert not source.is_group(name)
+    assert not source.is_config(name)
+    assert source.list(name, None) == []
+
+
+def test_hydra_package_sources_still_find_their_own_configs(root):
+    from hydra._internal.sources_registry import SourcesRegistry
+
+    config_helpers._guard_hydra_config_sources()
+    source = SourcesRegistry.instance().resolve("pkg")("hydra", "pkg://hydra.conf")
+
+    assert source.is_group("hydra")
 
 
 def test_a_defaults_entry_that_links_out_of_the_roots_is_refused(root, outside_extra):

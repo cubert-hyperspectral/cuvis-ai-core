@@ -24,8 +24,6 @@ DEFAULT_MAX_MSG_SIZE = 300 * 1024 * 1024
 
 _METADATA_KEY = "authorization"
 _BEARER = "bearer "
-# Health stays open: launchers poll it before they hold a channel with the token.
-_OPEN_PREFIXES = ("/grpc.health.v1.Health/",)
 _REFUSAL = "missing or wrong token"
 
 
@@ -86,7 +84,10 @@ def _refusing(handler: grpc.RpcMethodHandler) -> grpc.RpcMethodHandler:
 
 
 class TokenInterceptor(grpc.ServerInterceptor):
-    """Refuse every call that does not carry the token, Health excepted."""
+    """Refuse every call that does not carry the token, the health check included.
+
+    Probes that hold no token use the separate health port (``GRPC_HEALTH_PORT``).
+    """
 
     def __init__(self, token: str) -> None:
         token = normalize_token(token) or ""
@@ -105,9 +106,9 @@ class TokenInterceptor(grpc.ServerInterceptor):
         continuation: Callable[[grpc.HandlerCallDetails], grpc.RpcMethodHandler | None],
         handler_call_details: grpc.HandlerCallDetails,
     ) -> grpc.RpcMethodHandler | None:
-        """Pass an authorized call (or a Health call) on; answer any other one UNAUTHENTICATED."""
+        """Pass an authorized call on; answer any other one UNAUTHENTICATED."""
         handler = continuation(handler_call_details)
-        if handler is None or handler_call_details.method.startswith(_OPEN_PREFIXES):
+        if handler is None:
             return handler
         if self._accepts(handler_call_details.invocation_metadata):
             return handler

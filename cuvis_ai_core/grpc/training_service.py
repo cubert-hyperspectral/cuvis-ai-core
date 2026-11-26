@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import gc
 import queue
+import re
 import threading
 from collections.abc import Callable, Iterator
-from pathlib import Path, PurePath, PureWindowsPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import grpc
@@ -41,6 +42,7 @@ from cuvis_ai_core.training.trainers import (
 from cuvis_ai_core.utils.path_confinement import (
     PathNotAllowedError,
     allowed_roots,
+    check_not_remote,
     confine_path,
     confine_resolved,
 )
@@ -126,8 +128,8 @@ def confined_output_dirs(training_config: TrainingConfig) -> TrainingConfig:
     folder has to lie inside one and comes back resolved. A relative folder, and a missing
     ``default_root_dir``, land under the runtime's working directory, which then has to lie
     inside a root; their text stays as it is, so a saved trainrun keeps them relative. The
-    checkpoint file name has to stay inside its folder. Anything else raises
-    ``PathNotAllowedError``.
+    checkpoint file name has to be one plain name (see ``_check_checkpoint_name``). Anything
+    else raises ``PathNotAllowedError``.
     """
     if allowed_roots() is None:
         return training_config
@@ -144,7 +146,7 @@ def confined_output_dirs(training_config: TrainingConfig) -> TrainingConfig:
         )
         if callbacks.checkpoint.filename:
             _check_checkpoint_name(
-                callbacks.checkpoint.filename, folder=dirpath, field=f"{field}.filename"
+                callbacks.checkpoint.filename, field=f"{field}.filename"
             )
         checkpoint = callbacks.checkpoint.model_copy(update={"dirpath": dirpath})
         update["callbacks"] = callbacks.model_copy(update={"checkpoint": checkpoint})
@@ -159,17 +161,30 @@ def _confined_output_dir(raw: str | None, *, field: str) -> str | None:
     return checked
 
 
-def _check_checkpoint_name(raw: str, *, folder: str | None, field: str) -> None:
-    """Lightning joins the file name to the checkpoint folder; it must not leave that folder."""
-    if PurePath(raw).is_absolute() or PureWindowsPath(raw).anchor:
+# A {metric} or {metric:format} placeholder whose format has no fill character and no 'c'
+# type, which turns a number into any character ('{epoch:c}' is '/' at epoch 47).
+_PLACEHOLDER = (
+    r"\{[A-Za-z0-9_.]+"
+    r"(?::[<>=^]?[+ -]?z?#?0?\d*[,_]?(?:\.\d+)?[bdeEfFgGnoxX%]?)?\}"
+)
+_CHECKPOINT_NAME = re.compile(rf"(?:[A-Za-z0-9_.=+-]|{_PLACEHOLDER})+")
+
+
+def _check_checkpoint_name(raw: str, *, field: str) -> None:
+    """Lightning fills in the name's placeholders and joins it to the folder: one plain name only.
+
+    A slash, backslash or colon, typed or produced by a placeholder's name or fill character,
+    would lead out of the folder ('{/x}' becomes '/x=0.ckpt'), so the name may hold letters,
+    digits, '_.=+-' and placeholders whose format has no fill character, nothing else.
+    """
+    if not _CHECKPOINT_NAME.fullmatch(raw):
         raise PathNotAllowedError(
-            f"{field}: a checkpoint file name has to stay inside its folder: {raw!r}"
+            f"{field}: a checkpoint file name may hold letters, digits, '_.=+-' and "
+            f"{{metric}} or {{metric:format}} placeholders without a fill character or the "
+            f"'c' format: {raw!r}"
         )
-    confine_path(raw, field=field)  # '..', network and device forms
-    # A subfolder in the name may already be a link that leads out of the roots.
-    subfolder = PurePath(raw).parent
-    if subfolder != PurePath("."):
-        confine_resolved(Path.cwd() / (folder or "") / subfolder, what=field)
+    # Filled in without metric names, 'COM{epoch}' names a Windows device such as COM1.
+    check_not_remote(re.sub(_PLACEHOLDER, "1", raw), what=field)
 
 
 def _statistical_only(session: SessionState) -> bool:
@@ -276,10 +291,19 @@ class TrainingService:
                     "trainrun via RestoreTrainRun"
                 )
             if splits is not None and splits.splits_path:
-                # The data module reads this file; with roots set it is a client path.
-                confine_path(
+                # The data module reads this file; with roots set it is a client path, and
+                # the data module gets the resolved path the check returns.
+                confined = confine_path(
                     splits.splits_path, field="data.splits.splits_path", read=True
                 )
+                if confined != splits.splits_path:
+                    data_config_py = data_config_py.model_copy(
+                        update={
+                            "splits": splits.model_copy(
+                                update={"splits_path": confined}
+                            )
+                        }
+                    )
 
             # The DataModule class named by ``data_config.data_module`` comes from a
             # plugin registered into the session's ``node_registry.data_modules``;
