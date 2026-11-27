@@ -66,7 +66,8 @@ List the folders the launcher works in: its data, its models and its output. Kee
 the server account only; a link placed inside one can redirect the server's writes (see "Not
 covered"). A path in a request is then refused with `PERMISSION_DENIED` when it is a network or device path (`\\host\share`,
 `//host/share`, `\\?\...`, `\??\...`, a URL such as `http://...` or `s3://...` anywhere in the
-path, an fsspec chain such as `simplecache::file:///...`, and on Windows a device name such as
+path, an fsspec chain such as `simplecache::file:///...`, a scheme with one colon at the start
+such as `file:/...` or `local:/...` (fsspec drops it), and on Windows a device name such as
 `NUL`, `CON`, `C:NUL` or `COM1.txt`, a colon after the drive (an NTFS stream such as
 `pipeline.yaml:hidden`), or a path from the drive root that does not name its drive,
 such as `\runs`), starts with `~`, contains a `..` segment, or resolves outside every root. Network and device paths are refused on their text,
@@ -81,15 +82,21 @@ pipeline, the pipeline and weights beside a saved trainrun) have to lie inside t
 do the folders gradient training writes to: the checkpoint folder
 (`training.callbacks.checkpoint.dirpath`) and `default_root_dir`. A relative folder, or a missing
 `default_root_dir`, lands under the runtime's working directory, which then has to lie inside a
-root. Lightning fills in the placeholders of the checkpoint file name (`filename`) and joins the
+root. These folders may not hold `$` or `%`: Lightning's TensorBoard logger expands variables
+in them after the check. Lightning fills in the placeholders of the checkpoint file name
+(`filename`) and joins the
 result to the folder, so the name has to be one plain name: letters, digits, `_.=+-` and
-`{metric}` or `{metric:format}` placeholders whose format has no fill character and no `c` type
-(which turns a number into any character). A name with a folder in it, such as `{epoch}/model`, is
+`{metric}` or `{metric:format}` placeholders whose format has no fill character and no `c`, `x`
+or `X` type (`c` turns a number into any character, and hex digits are letters that can spell a
+device name such as `COM1`). A name with a folder in it, such as `{epoch}/model`, is
 refused. Saved pipelines and trainruns are written to a staging file beside the target and moved
 into place, so a link put at the target after the check is replaced, not followed. The save writes
-into the staging file it created and never opens it again by name; on POSIX, when another account
-swaps that name for a link or another file during the save, the save fails and the target stays
-as it was. On POSIX only the owner can read the staging file. A replaced file keeps its group, its
+into the staging file it created and never opens it again by name, so its content never reaches
+another file. On POSIX the save checks just before the move that the staging name still names the
+file it wrote: a swap made before that check fails the save and leaves the target as it was. A swap
+in the instant between the check and the move puts the other account's file at the target, and the
+save still reports success; an account that can swap the staging file can also replace the target
+directly. On POSIX only the owner can read the staging file. A replaced file keeps its group, its
 mode and, on Linux, its access ACL. It keeps its owner when the server runs as root; under any other account that account
 becomes its owner. When the owner, the group or the ACL cannot be carried over, only its owner can
 read it. A new file stays readable by its owner only. On Windows see "Not covered". `ResolveConfig` refuses Hydra's own settings (`hydra.searchpath` and
@@ -149,9 +156,15 @@ can take a call calls `Check` there, with the token.
 The server runs each pipeline in a child process that listens on its own loopback port. Every child
 gets a fresh token from the server and refuses calls without it, so another local process that finds
 the child's port cannot use it. Nothing needs to be configured for this. A child started by hand,
-without `CUVIS_RUNTIME_TOKEN`, checks nothing and logs a warning. A child trains on one GPU: when
-Lightning's multi-GPU launcher starts a copy of it for another GPU (`LOCAL_RANK` set and not `0`),
-that copy has no token and exits without serving.
+without `CUVIS_RUNTIME_TOKEN`, checks nothing and logs a warning.
+
+Gradient training through the server runs on one device. An unset or `auto` `devices` becomes `1`,
+and a training config that asks for more than one device (`devices` above 1, `-1`, or several
+indices such as `0,1`) answers `INVALID_ARGUMENT` before the fit starts: Lightning would start the
+child's command once more per extra device, and the run would die. Multi-GPU training through the
+server needs a worker mode the runtime does not have yet. A saved trainrun keeps the `devices` the
+client set. A copy of a child started with `LOCAL_RANK` set and not `0` has no token and exits
+without serving.
 
 Both servers refuse a call without the token before they read its request, so a caller without
 the token cannot make either process receive or parse a message. A child accepts no larger message

@@ -27,6 +27,10 @@ _REMOTE_PREFIX = re.compile(r"^(?:[\\/]{2}|[\\/]\?\?[\\/])")
 # lookbehind keeps the search linear; a pattern that starts with the scheme rescans it from
 # every letter, which takes minutes on a path as long as a gRPC message.
 _URL = re.compile(r"(?<=[A-Za-z0-9+.-]{2})://")
+# A scheme with one colon at the start (file:/elsewhere, local:/elsewhere): fsspec's local file
+# system drops it, so the text reads as relative here and names another folder there. Two
+# characters at least, so a drive such as C: stays a path.
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:")
 
 # DOS device names, which Windows opens as the device in any folder and with any extension.
 _DEVICE_NAMES = frozenset(
@@ -102,6 +106,7 @@ def _check_remote(raw: str, what: str) -> None:
         "\x00" in raw
         or "::" in raw  # an fsspec chain such as simplecache::file:///elsewhere
         or _REMOTE_PREFIX.match(raw)
+        or _SCHEME.match(raw)
         or _URL.search(raw)
         or (os.name == "nt" and (_names_a_device(raw) or _names_a_stream(raw)))
     ):

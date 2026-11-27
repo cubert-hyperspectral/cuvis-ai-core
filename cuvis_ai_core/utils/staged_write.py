@@ -34,7 +34,10 @@ def write_staged(target: Path, write: Callable[[BinaryIO], None]) -> None:
     writing through it, so a link put there after the path was checked does
     not redirect the write. The save writes into the file it created and never
     opens the staging name again, so a link another account swaps in for the
-    staging file receives nothing; on POSIX the move is then refused. On POSIX
+    staging file receives nothing. On POSIX a swap made before the last check
+    refuses the move; one made in the instant between that check and the move
+    puts the other account's file at ``target``, which an account that can swap
+    the staging file could also do by replacing ``target`` itself. On POSIX
     only the owner can read the file while it is written. The saved file then
     gets the group, the access ACL (on Linux) and the mode of the regular file
     it replaces, and its owner when root saves it; any other account that
@@ -80,8 +83,10 @@ def _require_staging_name(staging: Path, fd: int, target: Path) -> None:
     """Refuse the move when ``staging`` no longer names the file open at ``fd`` (POSIX).
 
     Another account that can write the folder may have put a link or another file in its
-    place. Windows refuses to delete or rename a file this process holds open, and its file
-    ids from a name and from a descriptor need not match, so it is not checked there.
+    place. The check and the move are two steps, so a swap between them goes unseen (see
+    ``write_staged``). Windows refuses to delete or rename a file this process holds open,
+    and its file ids from a name and from a descriptor need not match, so it is not checked
+    there.
     """
     if sys.platform == "win32":
         return

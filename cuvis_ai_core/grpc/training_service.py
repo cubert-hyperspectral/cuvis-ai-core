@@ -154,18 +154,27 @@ def confined_output_dirs(training_config: TrainingConfig) -> TrainingConfig:
 
 
 def _confined_output_dir(raw: str | None, *, field: str) -> str | None:
-    """Check one output folder; a relative or missing one lies under the working directory."""
+    """Check one output folder; a relative or missing one lies under the working directory.
+
+    The folder may hold no '$' or '%': Lightning's TensorBoard logger expands variables in its
+    folder after this check, so '$HOME/runs' would land in the home folder.
+    """
+    if raw and ("$" in raw or "%" in raw):
+        raise PathNotAllowedError(
+            f"{field}: '$' and '%' are not allowed in a training folder: {raw!r}"
+        )
     checked = confine_path(raw, field=field) if raw else raw
     if not checked or not Path(checked).is_absolute():
         confine_resolved(Path.cwd() / (checked or ""), what=field)
     return checked
 
 
-# A {metric} or {metric:format} placeholder whose format has no fill character and no 'c'
-# type, which turns a number into any character ('{epoch:c}' is '/' at epoch 47).
+# A {metric} or {metric:format} placeholder whose format has no fill character, no 'c' type,
+# which turns a number into any character ('{epoch:c}' is '/' at epoch 47), and no 'x' or 'X'
+# type, whose letters can spell a device ('{epoch:X}OM1' is COM1 at epoch 12).
 _PLACEHOLDER = (
     r"\{[A-Za-z0-9_.]+"
-    r"(?::[<>=^]?[+ -]?z?#?0?\d*[,_]?(?:\.\d+)?[bdeEfFgGnoxX%]?)?\}"
+    r"(?::[<>=^]?[+ -]?z?#?0?\d*[,_]?(?:\.\d+)?[bdeEfFgGno%]?)?\}"
 )
 _CHECKPOINT_NAME = re.compile(rf"(?:[A-Za-z0-9_.=+-]|{_PLACEHOLDER})+")
 
@@ -175,16 +184,53 @@ def _check_checkpoint_name(raw: str, *, field: str) -> None:
 
     A slash, backslash or colon, typed or produced by a placeholder's name or fill character,
     would lead out of the folder ('{/x}' becomes '/x=0.ckpt'), so the name may hold letters,
-    digits, '_.=+-' and placeholders whose format has no fill character, nothing else.
+    digits, '_.=+-' and placeholders whose format has no fill character, nothing else. A
+    placeholder renders digits only (no hex letters), so filling each with '1' shows whether
+    the name can become a Windows device.
     """
     if not _CHECKPOINT_NAME.fullmatch(raw):
         raise PathNotAllowedError(
             f"{field}: a checkpoint file name may hold letters, digits, '_.=+-' and "
             f"{{metric}} or {{metric:format}} placeholders without a fill character or the "
-            f"'c' format: {raw!r}"
+            f"'c', 'x' or 'X' format: {raw!r}"
         )
     # Filled in without metric names, 'COM{epoch}' names a Windows device such as COM1.
     check_not_remote(re.sub(_PLACEHOLDER, "1", raw), what=field)
+
+
+def on_one_device(training_config: TrainingConfig) -> TrainingConfig:
+    """``training_config`` for a fit inside a runtime, which trains on one device.
+
+    Lightning trains on several devices by starting the runtime's command once more per
+    extra device, and that copy serves nothing (see ``run_runtime.__main__``), so the run
+    would die. An unset or "auto" ``devices`` becomes 1. One device by count (1, "1") or by
+    index ("0,") passes unchanged; more than one, or all of them (-1), raises ValueError.
+    A value Lightning cannot read passes too, for Lightning to refuse.
+    """
+    devices = training_config.devices
+    if devices is None or devices == "auto":
+        return training_config.model_copy(update={"devices": 1})
+    count = _device_count(devices)
+    if count is not None and (count == -1 or count > 1):
+        raise ValueError(
+            f"training.devices={devices!r} asks for more than one device; training through "
+            "the server runs on one device: leave devices unset, or set 1 or one index such "
+            "as '0,'"
+        )
+    return training_config
+
+
+def _device_count(devices: int | str) -> int | None:
+    """How many devices Lightning starts for ``devices``; None for text it cannot read."""
+    if isinstance(devices, int):
+        return devices
+    text = devices.strip()
+    if "," in text:
+        return sum(1 for index in text.split(",") if index.strip())
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def _statistical_only(session: SessionState) -> bool:
@@ -352,11 +398,14 @@ class TrainingService:
                     context.set_code(grpc.StatusCode.PERMISSION_DENIED)
                     context.set_details(str(exc))
                     return
+                # One device for this fit only: the session, and a trainrun saved from
+                # it, keep the devices the client set.
+                fit_config = on_one_device(training_config_py)
 
                 self._capture_experiment_context(
                     session, data_config_py, training_config_py
                 )
-                inner = self._train_gradient(session, datamodule, training_config_py)
+                inner = self._train_gradient(session, datamodule, fit_config)
 
             elif request.trainer_type == cuvis_ai_pb2.TRAINER_TYPE_CALIBRATION:
                 # The post-fit steps alone, on weights the session already holds.

@@ -190,6 +190,10 @@ FSSPEC_FORMS = [
     "simplecache::/elsewhere/ckpt",
     "filecache::s3://bucket/ckpt",
     "runs/http://fileserver/ckpt",
+    # fsspec's local file system drops a leading 'file:' or 'local:', one colon or two slashes.
+    "file:/elsewhere/ckpt",
+    "local:/elsewhere/ckpt",
+    "file:runs/ckpt",
 ]
 
 
@@ -962,6 +966,22 @@ def test_a_checkpoint_file_name_that_names_a_device_once_filled_is_refused(
         confined_output_dirs(config)
 
 
+@pytest.mark.parametrize(
+    "filename", ["{epoch:X}OM1", "{epoch:x}on", "{epoch:X}UX", "{step:02x}"]
+)
+def test_a_hex_placeholder_is_refused(root, filename):
+    # Hex digits are letters: '{epoch:X}OM1' passes a check that fills in '1', then
+    # becomes COM1 at epoch 12, and '{epoch:X}UX' becomes AUX at epoch 10.
+    config = _training_config(
+        default_root_dir=str(root / "runs"),
+        checkpoint=str(root / "ckpt"),
+        filename=filename,
+    )
+
+    with pytest.raises(PathNotAllowedError, match="checkpoint.filename"):
+        confined_output_dirs(config)
+
+
 PLAIN_CHECKPOINT_NAMES = [
     "{epoch:02d}",
     "{epoch}-{step}",
@@ -1025,7 +1045,17 @@ def test_a_checkpoint_file_name_through_a_link_out_of_the_roots_is_refused(
 @pytest.mark.parametrize("field", ["default_root_dir", "checkpoint"])
 @pytest.mark.parametrize(
     "raw",
-    ["~/runs", "http://fileserver/runs", "simplecache::file:///elsewhere/runs"],
+    [
+        "~/runs",
+        "http://fileserver/runs",
+        "simplecache::file:///elsewhere/runs",
+        "file:/elsewhere/runs",
+        # TensorBoard's logger expands variables in its folder.
+        "$HOME/runs",
+        "${HOME}/runs",
+        "runs/$USER",
+        "%USERPROFILE%/runs",
+    ],
 )
 def test_a_training_folder_lightning_would_expand_or_fetch_is_refused(
     root, monkeypatch, field, raw
