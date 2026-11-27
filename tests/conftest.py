@@ -65,6 +65,24 @@ def _isolated_run_cache(tmp_path_factory):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _message_cap_restored(monkeypatch):
+    """Give every test ``GRPC_MAX_MSG_SIZE`` back as it found it.
+
+    ``ProductionServer.start()`` writes the variable for its child runtimes, or removes it
+    for a server without a cap. ``setenv`` records the variable as it was, set or not, and
+    its undo restores that.
+    """
+    import os
+
+    from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV
+
+    found = os.environ.get(MAX_MSG_SIZE_ENV)
+    monkeypatch.setenv(MAX_MSG_SIZE_ENV, found or "")
+    if found is None:
+        monkeypatch.delenv(MAX_MSG_SIZE_ENV)
+
+
 @pytest.fixture(scope="session")
 def test_data_path():
     """Path to test data directory.

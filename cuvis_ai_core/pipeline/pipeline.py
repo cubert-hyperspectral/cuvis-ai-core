@@ -663,9 +663,14 @@ class CuvisPipeline:
         if metadata:
             config_dict["metadata"].update(metadata.to_dict())
 
-        def write_config(path: Path) -> None:
-            with open(path, "w", encoding="utf-8") as f:
-                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+        def write_config(staging: BinaryIO) -> None:
+            yaml.dump(
+                config_dict,
+                staging,
+                default_flow_style=False,
+                sort_keys=False,
+                encoding="utf-8",
+            )
 
         # Both files are written beside their target and moved into place: a failed save
         # keeps the previous file, and a link at the target is replaced, not followed.

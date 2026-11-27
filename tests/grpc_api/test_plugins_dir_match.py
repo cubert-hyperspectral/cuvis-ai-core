@@ -151,6 +151,18 @@ def test_a_git_manifest_under_a_local_plugins_name_is_refused(plugins_dir, servi
     assert "local_plug" not in registered
 
 
+def test_a_local_manifest_under_a_git_plugins_name_is_refused(plugins_dir, service):
+    local_src = (plugins_dir.parent / "local_src").resolve()
+
+    response, context, registered = _load(
+        service,
+        {"name": "sam3", "path": str(local_src), "capabilities": GIT["capabilities"]},
+    )
+
+    assert _refused(context)
+    assert "sam3" not in registered
+
+
 def test_the_registered_manifest_is_the_one_on_disk(plugins_dir, service):
     sent = {**GIT, "capabilities": [{"class_name": "evil.module.Payload"}]}
 

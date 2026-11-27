@@ -62,11 +62,13 @@ stub = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
 
 ### Allowed roots
 
-List the folders the launcher works in: its data, its models and its output. A path in a request is
-then refused with `PERMISSION_DENIED` when it is a network or device path (`\\host\share`,
+List the folders the launcher works in: its data, its models and its output. Keep them writable by
+the server account only; a link placed inside one can redirect the server's writes (see "Not
+covered"). A path in a request is then refused with `PERMISSION_DENIED` when it is a network or device path (`\\host\share`,
 `//host/share`, `\\?\...`, `\??\...`, a URL such as `http://...` or `s3://...` anywhere in the
 path, an fsspec chain such as `simplecache::file:///...`, and on Windows a device name such as
-`NUL`, `CON`, `C:NUL` or `COM1.txt`, or a path from the drive root that does not name its drive,
+`NUL`, `CON`, `C:NUL` or `COM1.txt`, a colon after the drive (an NTFS stream such as
+`pipeline.yaml:hidden`), or a path from the drive root that does not name its drive,
 such as `\runs`), starts with `~`, contains a `..` segment, or resolves outside every root. Network and device paths are refused on their text,
 before any filesystem call, so the server never opens an SMB session to a host a client named
 through these fields; the data paths listed under "Not covered" are the exception. The splits file
@@ -84,9 +86,13 @@ result to the folder, so the name has to be one plain name: letters, digits, `_.
 `{metric}` or `{metric:format}` placeholders whose format has no fill character and no `c` type
 (which turns a number into any character). A name with a folder in it, such as `{epoch}/model`, is
 refused. Saved pipelines and trainruns are written to a staging file beside the target and moved
-into place, so a link put at the target after the check is replaced, not followed. On POSIX only
-the owner can read the staging file; a replaced file keeps its mode and a new one stays readable by
-its owner only. On Windows see "Not covered". `ResolveConfig` refuses Hydra's own settings (`hydra.searchpath` and
+into place, so a link put at the target after the check is replaced, not followed. The save writes
+into the staging file it created and never opens it again by name; on POSIX, when another account
+swaps that name for a link or another file during the save, the save fails and the target stays
+as it was. On POSIX only the owner can read the staging file. A replaced file keeps its group, its
+mode and, on Linux, its access ACL. It keeps its owner when the server runs as root; under any other account that account
+becomes its owner. When the owner, the group or the ACL cannot be carried over, only its owner can
+read it. A new file stays readable by its owner only. On Windows see "Not covered". `ResolveConfig` refuses Hydra's own settings (`hydra.searchpath` and
 the like), from overrides or from the config file, and every file Hydra pulls in while composing (a
 `defaults:` entry, a group override such as `+data=name`) has to lie inside the roots as well,
 whichever config source Hydra asks: Hydra's own package source does not look outside its package.
@@ -143,11 +149,15 @@ can take a call calls `Check` there, with the token.
 The server runs each pipeline in a child process that listens on its own loopback port. Every child
 gets a fresh token from the server and refuses calls without it, so another local process that finds
 the child's port cannot use it. Nothing needs to be configured for this. A child started by hand,
-without `CUVIS_RUNTIME_TOKEN`, checks nothing and logs a warning.
+without `CUVIS_RUNTIME_TOKEN`, checks nothing and logs a warning. A child trains on one GPU: when
+Lightning's multi-GPU launcher starts a copy of it for another GPU (`LOCAL_RANK` set and not `0`),
+that copy has no token and exits without serving.
 
 Both servers refuse a call without the token before they read its request, so a caller without
 the token cannot make either process receive or parse a message. A child accepts no larger message
-than the server does (`GRPC_MAX_MSG_SIZE`; `-1`, no limit, applies to both).
+than the server does (`GRPC_MAX_MSG_SIZE`; `-1`, no limit, applies to both). A server started from
+Python with its own `max_msg_size` passes that value on to its children; one without a cap passes
+none, and its children use the default.
 
 ## Checkpoints
 
@@ -166,9 +176,12 @@ unpickled. Lightning checkpoints given to `GradientTrainer.validate` and `test` 
   names, and the splits file. The other data paths of a run (`data_dir`, a data module's
   parameters, the files a split lists) are not checked, network paths included.
 - There are no permissions per call: a token holder can call every RPC.
-- A save checks its target and then writes it, and a read checks its file and then opens it. A
-  process that can write inside an allowed folder and swaps a parent folder for a link in between
-  can still redirect the save or the read.
+- Links inside an allowed folder. A save checks its target and then writes it, and a read checks its
+  file and then opens it. A process that can write inside an allowed folder can still send the
+  server's writes or reads outside the roots through a link: by swapping a parent folder for one in
+  between, or by placing one where gradient training writes (a `lightning_logs` folder under
+  `default_root_dir`, a file in the checkpoint folder). Keep every
+  allowed folder writable by the server account only.
 - On Windows a save gets the permissions its folder passes on, while it is written and after: a file
   that was given tighter permissions than its folder loses them when it is saved again. Keep files
   that need tighter permissions in a folder that has them.

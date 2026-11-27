@@ -417,6 +417,26 @@ def test_a_health_port_that_cannot_bind_stops_the_main_server(recorded_grpc_serv
     assert server.server is None
 
 
+def test_shutdown_stops_the_health_port_after_the_main_port(monkeypatch):
+    # Probes read NOT_SERVING while the main port drains, so the health port stops last.
+    monkeypatch.setenv("CUVIS_RUN_CACHE_MAINTENANCE", "0")
+    stopped: list[str] = []
+    main, listener = MagicMock(), MagicMock()
+    main.add_insecure_port.return_value = 4321
+    listener.add_insecure_port.return_value = 4322
+    main.stop.side_effect = lambda **kwargs: stopped.append("main") or MagicMock()
+    listener.stop.side_effect = lambda **kwargs: stopped.append("health")
+    servers = iter([main, listener])
+    monkeypatch.setattr(
+        "cuvis_ai_core.grpc.production_server.grpc.server",
+        lambda *args, **kwargs: next(servers),
+    )
+
+    _started(ProductionServer(port=50551, health_port=50552))
+
+    assert stopped == ["main", "health"]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"), [("50552", 50552), ("", None), (None, None)]
 )

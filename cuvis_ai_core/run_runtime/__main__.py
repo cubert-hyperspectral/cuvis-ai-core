@@ -39,6 +39,15 @@ FORWARD_MARGIN = 1024 * 1024
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    # Lightning's DDP launcher starts this module again for each extra GPU, with LOCAL_RANK
+    # set and without the token the first runtime removed: such a copy must not serve.
+    rank = os.environ.get("LOCAL_RANK")
+    if rank not in (None, "0"):
+        logger.error(
+            f"LOCAL_RANK={rank}: started again by a multi-GPU training, which a runtime "
+            "does not support; not serving"
+        )
+        return 1
     # Read before any plugin code is imported, and removed so that code cannot read it.
     token = pop_token(RUNTIME_TOKEN_ENV)
     if token is None:

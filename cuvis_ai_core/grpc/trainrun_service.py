@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import BinaryIO
 
 import grpc
 import torch
@@ -81,7 +82,13 @@ class TrainRunService:
 
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
-            write_staged(sibling_pipeline_path, session.pipeline_config.save_to_file)
+            pipeline_dict = session.pipeline_config.to_dict()
+            write_staged(
+                sibling_pipeline_path,
+                lambda staging: yaml.safe_dump(
+                    pipeline_dict, staging, sort_keys=False, encoding="utf-8"
+                ),
+            )
             return sibling_name
 
         has_live_pipeline = session.has_live_pipeline
@@ -120,15 +127,15 @@ class TrainRunService:
                 tags={},
             )
 
-        def _write_trainrun(path: Path) -> None:
-            """Dump the trainrun yaml to ``path``."""
-            with path.open("w", encoding="utf-8") as f:
-                yaml.dump(
-                    trainrun_config.to_dict(),
-                    f,
-                    default_flow_style=False,
-                    sort_keys=False,
-                )
+        def _write_trainrun(staging: BinaryIO) -> None:
+            """Dump the trainrun yaml into ``staging``."""
+            yaml.dump(
+                trainrun_config.to_dict(),
+                staging,
+                default_flow_style=False,
+                sort_keys=False,
+                encoding="utf-8",
+            )
 
         # Staged like the weights below: a save into an existing run folder (a
         # recalibration) never leaves a half-written yaml next to a good one.

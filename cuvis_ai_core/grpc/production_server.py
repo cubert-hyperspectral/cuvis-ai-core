@@ -20,6 +20,7 @@ from grpc_health.v1 import health_pb2_grpc
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
 from cuvis_ai_core.utils.grpc_auth import (
+    MAX_MSG_SIZE_ENV,
     TOKEN_ENV,
     TokenInterceptor,
     max_message_size,
@@ -198,6 +199,13 @@ class ProductionServer:
         if self.max_msg_size is not None:
             grpc_srv_opts.append(("grpc.max_send_message_length", self.max_msg_size))
             grpc_srv_opts.append(("grpc.max_receive_message_length", self.max_msg_size))
+            # Child runtimes size their limit from this variable; they have to take
+            # whatever this server accepts.
+            os.environ[MAX_MSG_SIZE_ENV] = str(self.max_msg_size)
+        else:
+            # No cap of its own: the children take the default, not a cap an earlier
+            # server of this process wrote.
+            os.environ.pop(MAX_MSG_SIZE_ENV, None)
 
         interceptors = [TokenInterceptor(self.token)] if self.token else []
         if not self.token:

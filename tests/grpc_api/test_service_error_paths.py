@@ -555,6 +555,7 @@ class TestTrainRunServiceValidation:
         mock_pipeline = Mock()
         mock_pipeline.nodes.return_value = [mock_node]
         mock_pipeline.name = "test"
+        mock_pipeline.serialize.return_value.to_dict.return_value = {"nodes": []}
         session.pipeline = mock_pipeline
 
         # Set trainrun_config directly to skip pipeline config construction
@@ -1453,6 +1454,7 @@ def test_save_train_run_failed_yaml_write_leaves_the_previous_file(tmp_path):
     mock_pipeline = Mock()
     mock_pipeline.nodes.return_value = []
     mock_pipeline.name = "test"
+    mock_pipeline.serialize.return_value.to_dict.return_value = {"nodes": []}
     session.pipeline = mock_pipeline
     session.trainrun_config = TrainRunConfig(
         name="first",

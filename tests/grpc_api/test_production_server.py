@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 import threading
 from unittest.mock import MagicMock, Mock
@@ -15,6 +16,7 @@ from cuvis_ai_core.grpc.production_server import (
     setup_logging,
 )
 from cuvis_ai_core.grpc.service import CuvisAIService
+from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV, max_message_size
 
 
 def test_load_tls_credentials_missing_files(tmp_path) -> None:
@@ -243,6 +245,33 @@ def test_start_applies_max_msg_size() -> None:
     try:
         server.start()
         assert server.server is not None
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("env_cap", [None, "1000"], ids=["unset", "another cap"])
+def test_start_hands_its_message_cap_to_child_runtimes(monkeypatch, env_cap) -> None:
+    # A child runtime reads GRPC_MAX_MSG_SIZE, so it has to hold the cap the server
+    # enforces, also for a server built in code with a cap of its own.
+    if env_cap is None:
+        monkeypatch.delenv(MAX_MSG_SIZE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(MAX_MSG_SIZE_ENV, env_cap)
+    server = ProductionServer(port=0, max_workers=2, max_msg_size=512 * 1024 * 1024)
+    try:
+        server.start()
+        assert max_message_size() == 512 * 1024 * 1024
+    finally:
+        server.shutdown()
+
+
+def test_start_without_a_cap_leaves_child_runtimes_the_default(monkeypatch) -> None:
+    # A cap an earlier server of this process wrote must not reach this server's children.
+    monkeypatch.setenv(MAX_MSG_SIZE_ENV, "2048")
+    server = ProductionServer(port=0, max_workers=2)
+    try:
+        server.start()
+        assert MAX_MSG_SIZE_ENV not in os.environ
     finally:
         server.shutdown()
 

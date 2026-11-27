@@ -257,6 +257,22 @@ def test_a_device_behind_a_drive_or_a_colon_is_refused_on_its_text(root, ref):
         check_not_remote(ref, what="trainrun pipeline")
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="NTFS alternate data streams are a Windows form"
+)
+@pytest.mark.parametrize(
+    "name", ["pipeline.yaml:hidden", "runs/model.pt:x:$DATA", "runs:x/model.pt"]
+)
+def test_a_colon_after_the_drive_is_refused_on_its_text(root, name):
+    # 'pipeline.yaml:hidden' is a second stream of pipeline.yaml that no listing shows.
+    with pytest.raises(PathNotAllowedError, match="stream"):
+        confine_path(name, field="weights_path")
+    with pytest.raises(PathNotAllowedError, match="stream"):
+        confine_path(str(root / name), field="weights_path")
+    with pytest.raises(PathNotAllowedError, match="stream"):
+        check_not_remote(name, what="trainrun pipeline")
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -738,9 +754,7 @@ def test_save_train_run_names_a_linked_sibling_by_its_own_name(root):
     session.data_config = None
     session.training_config = None
     session.pipeline.name = "run"
-    session.pipeline_config.save_to_file = lambda path: Path(path).write_text(
-        "nodes: []\n", encoding="utf-8"
-    )
+    session.pipeline_config.to_dict.return_value = {"nodes": []}
 
     response = TrainRunService(manager).save_train_run(
         cuvis_ai_pb2.SaveTrainRunRequest(

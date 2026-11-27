@@ -81,6 +81,29 @@ def test_main_bind_failure_returns_1(monkeypatch, tmp_path):
     assert not endpoint_file.exists()
 
 
+def test_main_started_again_for_another_gpu_serves_nothing(monkeypatch, tmp_path):
+    # Lightning's DDP launcher runs `python -m cuvis_ai_core.run_runtime ...` again for each
+    # extra GPU, with LOCAL_RANK set and without the token the first runtime already removed.
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    endpoint_file = tmp_path / "ep.txt"
+
+    rc = main_mod.main(["--endpoint-file", str(endpoint_file)])
+
+    assert rc == 1
+    server.add_insecure_port.assert_not_called()
+    server.start.assert_not_called()
+    assert not endpoint_file.exists()
+
+
+def test_main_on_the_first_gpu_serves(monkeypatch, tmp_path):
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+    server.start.assert_called_once()
+
+
 def test_main_prints_endpoint_when_flag_set(monkeypatch, capsys):
     _patch_main(monkeypatch, chosen_port=23456)
 

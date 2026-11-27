@@ -82,6 +82,7 @@ def test_save_train_run_isolates_weights_save_failure(tmp_path, mock_experiment_
     bad_node.state_dict.side_effect = RuntimeError("state_dict blew up")
     session.pipeline = MagicMock()
     session.pipeline.nodes.return_value = [bad_node]
+    session.pipeline.serialize.return_value.to_dict.return_value = {"nodes": []}
 
     ctx = Mock()
     out = tmp_path / "tr.yaml"

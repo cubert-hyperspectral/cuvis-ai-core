@@ -46,6 +46,18 @@ def _names_a_device(raw: str) -> bool:
     )
 
 
+_DRIVE = re.compile(r"[A-Za-z]:")
+
+
+def _names_a_stream(raw: str) -> bool:
+    """True when ``raw`` has a colon after its drive.
+
+    Windows reads ``pipeline.yaml:hidden`` as a second data stream of ``pipeline.yaml``, which
+    no folder listing shows.
+    """
+    return ":" in (raw[2:] if _DRIVE.match(raw) else raw)
+
+
 class PathNotAllowedError(PermissionError):
     """A client path lies outside ``CUVIS_ALLOWED_ROOTS`` or has a form that is never allowed."""
 
@@ -91,10 +103,10 @@ def _check_remote(raw: str, what: str) -> None:
         or "::" in raw  # an fsspec chain such as simplecache::file:///elsewhere
         or _REMOTE_PREFIX.match(raw)
         or _URL.search(raw)
-        or (os.name == "nt" and _names_a_device(raw))
+        or (os.name == "nt" and (_names_a_device(raw) or _names_a_stream(raw)))
     ):
         raise PathNotAllowedError(
-            f"{what}: network and device paths are not allowed: {raw!r}"
+            f"{what}: network, device and stream paths are not allowed: {raw!r}"
         )
 
 
