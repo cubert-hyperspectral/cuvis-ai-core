@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import functools
+from collections.abc import Callable, Iterable
+
+import grpc
+
+from cuvis_ai_core.utils.path_confinement import PathNotAllowedError, confine_path
 
 from .config_service import ConfigService
 from .discovery_service import DiscoveryService
@@ -17,6 +22,40 @@ from .training_service import TrainingService
 from .trainrun_service import TrainRunService
 from . import orchestrator_bridge
 from .v1 import cuvis_ai_pb2, cuvis_ai_pb2_grpc
+
+
+def _screens_paths(*fields: str, read: bool = False) -> Callable:
+    """Screen the request's path fields against ``CUVIS_ALLOWED_ROOTS`` before the handler runs.
+
+    This runs in the parent, ahead of any filesystem call and of the forward to the child: a
+    refused path answers PERMISSION_DENIED, and an absolute path goes on resolved. Without roots
+    the request is untouched. An RPC that only reads (``read``) may also name a file in the
+    server's pipeline library. ``path_fields`` on the handler lets a test check that every path
+    field of the API is screened.
+    """
+
+    def wrap(method: Callable) -> Callable:
+        response_type = getattr(cuvis_ai_pb2, f"{method.__name__}Response")
+
+        @functools.wraps(method)
+        def handler(self, request, context):
+            try:
+                for name in fields:
+                    value = getattr(request, name)
+                    if value:
+                        setattr(
+                            request, name, confine_path(value, field=name, read=read)
+                        )
+            except PathNotAllowedError as exc:
+                context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+                context.set_details(str(exc))
+                return response_type()
+            return method(self, request, context)
+
+        handler.path_fields = fields  # type: ignore[attr-defined]
+        return handler
+
+    return wrap
 
 
 class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
@@ -54,6 +93,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Config resolution and validation
     # ------------------------------------------------------------------
+    @_screens_paths("path", read=True)
     def ResolveConfig(self, request, context) -> cuvis_ai_pb2.ResolveConfigResponse:
         return self.config_service.resolve_config(request, context)
 
@@ -69,6 +109,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # Pipeline construction and training configuration
     # ------------------------------------------------------------------
 
+    @_screens_paths("weights_path", read=True)
     def LoadPipelineWeights(
         self, request, context
     ) -> cuvis_ai_pb2.LoadPipelineWeightsResponse:
@@ -141,6 +182,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Pipeline Management (Model Deployment)
     # ------------------------------------------------------------------
+    @_screens_paths("pipeline_path")
     def SavePipeline(self, request, context) -> cuvis_ai_pb2.SavePipelineResponse:
         return orchestrator_bridge.forward_save_pipeline(
             self.session_manager, request, context
@@ -154,11 +196,13 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     # ------------------------------------------------------------------
     # Experiment Management (Reproducibility)
     # ------------------------------------------------------------------
+    @_screens_paths("trainrun_path")
     def SaveTrainRun(self, request, context) -> cuvis_ai_pb2.SaveTrainRunResponse:
         return orchestrator_bridge.forward_save_train_run(
             self.session_manager, request, context
         )
 
+    @_screens_paths("trainrun_path", "weights_path", read=True)
     def RestoreTrainRun(self, request, context) -> cuvis_ai_pb2.RestoreTrainRunResponse:
         return orchestrator_bridge.forward_restore_train_run(
             self.session_manager, request, context
@@ -172,6 +216,7 @@ class CuvisAIService(cuvis_ai_pb2_grpc.CuvisAIServiceServicer):
     ) -> cuvis_ai_pb2.ListAvailablePipelinesResponse:
         return self.discovery_service.list_available_pipelines(request, context)
 
+    @_screens_paths("pipeline_path", read=True)
     def GetPipelineInfo(self, request, context) -> cuvis_ai_pb2.GetPipelineInfoResponse:
         return self.discovery_service.get_pipeline_info(request, context)
 

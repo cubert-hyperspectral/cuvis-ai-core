@@ -23,6 +23,11 @@ from cuvis_ai_core.training.config import (
     TrainRunConfig,
 )
 from cuvis_ai_core.utils.node_registry import NodeRegistry
+from cuvis_ai_core.utils.path_confinement import (
+    PathNotAllowedError,
+    confine_path,
+    confine_resolved,
+)
 
 from .helpers import get_server_base_dir
 
@@ -319,11 +324,19 @@ class SessionManager:
         return session.search_paths, rejected_paths
 
     def _validate_search_path(self, path: str) -> str | None:
-        """Validate search path and return resolved path if valid."""
+        """Validate search path and return resolved path if valid.
+
+        With ``CUVIS_ALLOWED_ROOTS`` set, a path outside the roots, or a network or device
+        path, is rejected before anything touches it.
+        """
         try:
+            # Search paths are only read from, so the pipeline library may be one.
+            path = confine_path(path, field="search_paths", read=True)
             resolved = Path(path).resolve()
             if resolved.exists() and resolved.is_dir() and resolved.is_absolute():
-                return str(resolved)
+                return str(confine_resolved(resolved, what="search_paths", read=True))
+        except PathNotAllowedError as exc:
+            logger.warning(f"Search path rejected: {exc}")
         except Exception as exc:
             logger.debug(f"Path validation failed for {path}: {exc}")
         return None

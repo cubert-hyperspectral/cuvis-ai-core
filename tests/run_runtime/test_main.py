@@ -8,9 +8,12 @@ bound and no real signal handler is installed.
 
 from __future__ import annotations
 
+import os
 import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from cuvis_ai_core.run_runtime import __main__ as main_mod
 
@@ -76,6 +79,29 @@ def test_main_bind_failure_returns_1(monkeypatch, tmp_path):
     assert rc == 1
     server.start.assert_not_called()
     assert not endpoint_file.exists()
+
+
+def test_main_started_again_for_another_gpu_serves_nothing(monkeypatch, tmp_path):
+    # Lightning's DDP launcher runs `python -m cuvis_ai_core.run_runtime ...` again for each
+    # extra GPU, with LOCAL_RANK set and without the token the first runtime already removed.
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    endpoint_file = tmp_path / "ep.txt"
+
+    rc = main_mod.main(["--endpoint-file", str(endpoint_file)])
+
+    assert rc == 1
+    server.add_insecure_port.assert_not_called()
+    server.start.assert_not_called()
+    assert not endpoint_file.exists()
+
+
+def test_main_on_the_first_gpu_serves(monkeypatch, tmp_path):
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+    server.start.assert_called_once()
 
 
 def test_main_prints_endpoint_when_flag_set(monkeypatch, capsys):
@@ -147,3 +173,78 @@ def test_install_signal_handlers_sets_event(monkeypatch):
     # Invoking a registered handler sets the shutdown event.
     registered[signal.SIGINT](signal.SIGINT, None)
     assert event.is_set()
+
+
+def _record_server_kwargs(monkeypatch, server: MagicMock) -> dict:
+    seen: dict = {}
+
+    def factory(*args, **kwargs):
+        seen.update(kwargs)
+        return server
+
+    monkeypatch.setattr(main_mod.grpc, "server", factory)
+    return seen
+
+
+@pytest.mark.parametrize("cap", [None, "1000"])
+def test_main_receives_no_more_than_the_parent_accepts(monkeypatch, tmp_path, cap):
+    from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV, max_message_size
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    if cap is None:
+        monkeypatch.delenv(MAX_MSG_SIZE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(MAX_MSG_SIZE_ENV, cap)
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+
+    options = dict(seen["options"])
+    # The parent forwards a client's message with a resolved path added, hence the margin.
+    assert options["grpc.max_receive_message_length"] == (
+        max_message_size() + main_mod.FORWARD_MARGIN
+    )
+    assert max_message_size() == (300 * 1024 * 1024 if cap is None else 1000)
+    # Inference answers (full frames and score maps) can be large; sending stays open.
+    assert options["grpc.max_send_message_length"] == -1
+
+
+def test_main_keeps_an_unlimited_parent_setting_unlimited(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import MAX_MSG_SIZE_ENV
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.setenv(MAX_MSG_SIZE_ENV, "-1")  # gRPC's spelling of "no limit"
+
+    assert main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")]) == 0
+
+    assert dict(seen["options"])["grpc.max_receive_message_length"] == -1
+
+
+def test_main_checks_the_token_the_parent_hands_over(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV, TokenInterceptor
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.setenv(RUNTIME_TOKEN_ENV, "child-token")
+
+    rc = main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")])
+
+    assert rc == 0
+    (interceptor,) = seen["interceptors"]
+    assert isinstance(interceptor, TokenInterceptor)
+    # Plugin code runs in this process; it does not get to read the token.
+    assert RUNTIME_TOKEN_ENV not in os.environ
+
+
+def test_main_started_by_hand_without_a_token_checks_nothing(monkeypatch, tmp_path):
+    from cuvis_ai_core.utils.grpc_auth import RUNTIME_TOKEN_ENV
+
+    server = _patch_main(monkeypatch, chosen_port=12345)
+    seen = _record_server_kwargs(monkeypatch, server)
+    monkeypatch.delenv(RUNTIME_TOKEN_ENV, raising=False)
+
+    rc = main_mod.main(["--endpoint-file", str(tmp_path / "ep.txt")])
+
+    assert rc == 0
+    assert not seen.get("interceptors")

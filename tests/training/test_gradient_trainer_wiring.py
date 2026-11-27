@@ -368,3 +368,18 @@ def test_fit_gives_the_runtime_post_fit_callback_the_trainrun_block():
     callbacks = mock_trainer_cls.call_args.kwargs["callbacks"]
     (post_fit,) = [c for c in callbacks if isinstance(c, PostFitCallback)]
     assert post_fit.calibration is block
+
+
+@pytest.mark.parametrize("method", ["validate", "test"])
+def test_evaluation_loads_a_lightning_checkpoint_with_weights_only(method):
+    """A ckpt_path (restore-trainrun --checkpoint-path) never unpickles arbitrary objects.
+
+    Lightning leaves weights_only to torch's default, which an environment variable can
+    turn off; the trainer asks for it explicitly.
+    """
+    trainer = _trainer(TrainingConfig(max_epochs=1))
+    with patch("cuvis_ai_core.training.trainers.pl.Trainer") as mock_trainer_cls:
+        inst = MagicMock()
+        mock_trainer_cls.return_value = inst
+        getattr(trainer, method)(ckpt_path="epoch01.ckpt")
+    assert getattr(inst, method).call_args.kwargs["weights_only"] is True

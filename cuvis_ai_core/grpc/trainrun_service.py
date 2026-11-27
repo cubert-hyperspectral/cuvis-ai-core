@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from collections.abc import Callable
 from pathlib import Path
+from typing import BinaryIO
 
 import grpc
 import torch
@@ -13,40 +11,33 @@ import yaml
 from loguru import logger
 
 from cuvis_ai_core.training.config import DataConfig, TrainingConfig, TrainRunConfig
+from cuvis_ai_core.utils.path_confinement import (
+    PathNotAllowedError,
+    check_not_remote,
+    confine_resolved,
+)
 from cuvis_ai_core.utils.restore import (
     _resolve_pipeline_reference,
     _resolve_splits_path_in_config,
 )
+from cuvis_ai_core.utils.staged_write import write_staged
 
 from .error_handling import get_session_or_error, grpc_handler
 from .session_manager import SessionManager
 from .v1 import cuvis_ai_pb2
 
 
-def _write_staged(target: Path, write: Callable[[Path], None]) -> None:
-    """Write ``target`` through a unique sibling that is moved into place.
+def _inside_the_roots(candidate: Path) -> bool:
+    """Whether a candidate for a trainrun's pipeline may be looked at (always, without roots).
 
-    A failed write never leaves a truncated or half-written file at ``target``
-    (the previous file stays), and two saves to one path cannot clobber each
-    other's staging file. The staging name keeps the target's suffix, so a
-    writer that picks its format by extension sees the same one.
+    The resolver skips a candidate outside the roots before it tests the file, so the answer
+    for such a reference is 'not found' whether or not the file exists.
     """
-    with tempfile.NamedTemporaryFile(
-        dir=target.parent,
-        prefix=target.name + ".",
-        suffix=".tmp" + target.suffix,
-        delete=False,
-    ) as staging:
-        staging_path = Path(staging.name)
     try:
-        write(staging_path)
-        os.replace(staging_path, target)
-    except BaseException:
-        try:
-            staging_path.unlink(missing_ok=True)
-        except OSError:  # cleanup must not mask the failure
-            pass
-        raise
+        confine_resolved(candidate, what="trainrun pipeline", read=True)
+    except PathNotAllowedError:
+        return False
+    return True
 
 
 class TrainRunService:
@@ -73,19 +64,32 @@ class TrainRunService:
             context.set_details("trainrun_path is required")
             return cuvis_ai_pb2.SaveTrainRunResponse(success=False)
 
-        trainrun_path = Path(request.trainrun_path)
+        trainrun_path = confine_resolved(
+            Path(request.trainrun_path), what="trainrun_path"
+        )
         trainrun_path.parent.mkdir(parents=True, exist_ok=True)
 
         # The trainrun's pipeline is persisted as a reference: the live pipeline
-        # is written to a sibling YAML and the trainrun points at it by name.
-        sibling_pipeline_path = trainrun_path.with_name(
-            f"{trainrun_path.stem}_pipeline.yaml"
+        # is written to a sibling YAML and the trainrun points at it by name. The
+        # name stays the sibling's own even when it links elsewhere, since a
+        # loader looks it up beside the trainrun.
+        sibling_name = f"{trainrun_path.stem}_pipeline.yaml"
+        sibling_pipeline_path = confine_resolved(
+            trainrun_path.with_name(sibling_name), what="trainrun_path"
         )
+        # The weights go beside the pipeline sibling; a link there must not lead out either.
+        confine_resolved(sibling_pipeline_path.with_suffix(".pt"), what="trainrun_path")
 
         def _write_pipeline_sibling() -> str:
             """Write the session's live pipeline beside the trainrun, return its ref name."""
-            _write_staged(sibling_pipeline_path, session.pipeline_config.save_to_file)
-            return sibling_pipeline_path.name
+            pipeline_dict = session.pipeline_config.to_dict()
+            write_staged(
+                sibling_pipeline_path,
+                lambda staging: yaml.safe_dump(
+                    pipeline_dict, staging, sort_keys=False, encoding="utf-8"
+                ),
+            )
+            return sibling_name
 
         has_live_pipeline = session.has_live_pipeline
         if not has_live_pipeline and not (
@@ -123,19 +127,19 @@ class TrainRunService:
                 tags={},
             )
 
-        def _write_trainrun(path: Path) -> None:
-            """Dump the trainrun yaml to ``path``."""
-            with path.open("w", encoding="utf-8") as f:
-                yaml.dump(
-                    trainrun_config.to_dict(),
-                    f,
-                    default_flow_style=False,
-                    sort_keys=False,
-                )
+        def _write_trainrun(staging: BinaryIO) -> None:
+            """Dump the trainrun yaml into ``staging``."""
+            yaml.dump(
+                trainrun_config.to_dict(),
+                staging,
+                default_flow_style=False,
+                sort_keys=False,
+                encoding="utf-8",
+            )
 
         # Staged like the weights below: a save into an existing run folder (a
         # recalibration) never leaves a half-written yaml next to a good one.
-        _write_staged(trainrun_path, _write_trainrun)
+        write_staged(trainrun_path, _write_trainrun)
 
         # Weights only on request. The contract of a failed weights save: the
         # trainrun yaml is written and stays written, ``weights_path`` is empty,
@@ -169,7 +173,7 @@ class TrainRunService:
                 # Written to a unique sibling first and moved into place: a failed
                 # save never leaves a truncated ``<stem>.pt``, and two saves to one
                 # stem cannot clobber each other's staging file.
-                _write_staged(
+                write_staged(
                     weights_path_obj, lambda staging: torch.save(checkpoint, staging)
                 )
                 weights_path = str(weights_path_obj)
@@ -207,6 +211,7 @@ class TrainRunService:
         to learn its plugin set before forwarding the restore request; the child
         rebuilds it against its own ``NodeRegistry`` via :func:`restore_train_run`.
         """
+        trainrun_path = confine_resolved(trainrun_path, what="trainrun_path", read=True)
         if not trainrun_path.exists():
             raise FileNotFoundError(f"Train run file not found: {trainrun_path}")
 
@@ -224,9 +229,20 @@ class TrainRunService:
         # trainrun carries an absolute path — parity with the CLI restore path and
         # with the pipeline-reference resolution below.
         if trainrun_config.data is not None:
+            # The splits file is a client path: its text is screened before the resolver
+            # touches it, and the file it resolves to has to lie inside the roots.
+            splits = trainrun_config.data.splits
+            if splits is not None and splits.splits_path:
+                check_not_remote(splits.splits_path, what="data.splits.splits_path")
             resolved_data = _resolve_splits_path_in_config(
                 trainrun_config.data, trainrun_path.parent
             )
+            if resolved_data.splits is not None and resolved_data.splits.splits_path:
+                confine_resolved(
+                    Path(resolved_data.splits.splits_path),
+                    what="data.splits.splits_path",
+                    read=True,
+                )
             if resolved_data is not trainrun_config.data:
                 trainrun_config = trainrun_config.model_copy(
                     update={"data": resolved_data}
@@ -236,13 +252,24 @@ class TrainRunService:
             # An explicit reference must resolve; a failure surfaces loudly with
             # the tried-paths diagnostic (mirrors the CLI restore path) rather
             # than being masked by the sibling fallback.
-            return trainrun_config, _resolve_pipeline_reference(
-                trainrun_config.pipeline, trainrun_path.parent
+            check_not_remote(trainrun_config.pipeline, what="trainrun pipeline")
+            return trainrun_config, confine_resolved(
+                _resolve_pipeline_reference(
+                    trainrun_config.pipeline,
+                    trainrun_path.parent,
+                    admit=_inside_the_roots,
+                ),
+                what="trainrun pipeline",
+                read=True,
             )
 
         # No explicit reference: fall back to the ``<name>_pipeline.yaml`` sibling.
-        sibling = trainrun_path.with_stem(f"{trainrun_path.stem}_pipeline").with_suffix(
-            ".yaml"
+        sibling = confine_resolved(
+            trainrun_path.with_stem(f"{trainrun_path.stem}_pipeline").with_suffix(
+                ".yaml"
+            ),
+            what="trainrun pipeline",
+            read=True,
         )
         if sibling.exists():
             return trainrun_config, sibling
@@ -277,7 +304,9 @@ class TrainRunService:
         # Resolve weights override from the request, if any.
         weights_path_from_request: Path | None = None
         if request.HasField("weights_path") and request.weights_path:
-            weights_path_from_request = Path(request.weights_path)
+            weights_path_from_request = confine_resolved(
+                Path(request.weights_path), what="weights_path", read=True
+            )
             if not weights_path_from_request.exists():
                 raise FileNotFoundError(
                     f"Weights file not found: {weights_path_from_request}"

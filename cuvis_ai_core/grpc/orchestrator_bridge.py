@@ -67,6 +67,7 @@ from cuvis_ai_core.orchestrator.composer import ComposerError, schedule_eviction
 from cuvis_ai_core.orchestrator.composer import compose_env as _real_compose_env
 from cuvis_ai_core.orchestrator.runtime_project import RuntimeProjectError
 from cuvis_ai_core.orchestrator.uv_runner import UvRunnerError
+from cuvis_ai_core.utils.path_confinement import PathNotAllowedError
 from cuvis_ai_core.orchestrator.spawner import (
     ChildHandle,
     ChildRuntimeSpawner,
@@ -921,6 +922,10 @@ def forward_restore_train_run(
         trainrun_config, pipeline_config_path = TrainRunService.parse_trainrun_yaml(
             trainrun_path
         )
+    except PathNotAllowedError as exc:
+        context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.RestoreTrainRunResponse()
     except FileNotFoundError as exc:
         context.set_code(grpc.StatusCode.NOT_FOUND)
         context.set_details(str(exc))
@@ -1207,9 +1212,15 @@ def forward_load_pipeline_weights(session_manager, request, context):
     the absolute path; a path the parent cannot resolve is forwarded as sent, so
     the child answers exactly as before.
     """
+    try:
+        forwarded = _with_resolved_weights_path(session_manager, request)
+    except PathNotAllowedError as exc:
+        context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+        context.set_details(str(exc))
+        return cuvis_ai_pb2.LoadPipelineWeightsResponse(success=False)
     return _forward_pipeline_op(
         session_manager,
-        _with_resolved_weights_path(session_manager, request),
+        forwarded,
         context,
         stub_method="LoadPipelineWeights",
         empty_response_factory=cuvis_ai_pb2.LoadPipelineWeightsResponse,

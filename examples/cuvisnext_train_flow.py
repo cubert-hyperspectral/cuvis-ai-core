@@ -43,6 +43,7 @@ Sequence (each step is the GUI contract, not just a smoke test):
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,7 @@ import grpc
 import yaml
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2, cuvis_ai_pb2_grpc
+from cuvis_ai_core.utils.grpc_auth import TOKEN_ENV, authorized_channel
 
 STATUS_NAME = {
     cuvis_ai_pb2.TRAIN_STATUS_UNSPECIFIED: "UNSPECIFIED",
@@ -206,6 +208,10 @@ def main(
     channel = grpc.insecure_channel(
         server, options=[("grpc.max_receive_message_length", 300 * 1024 * 1024)]
     )
+    # A server started with CUVIS_GRPC_TOKEN refuses calls that do not carry it.
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    if token:
+        channel = authorized_channel(channel, token)
     stub = cuvis_ai_pb2_grpc.CuvisAIServiceStub(channel)
 
     click.secho("== 1/2: prepared session + RestoreTrainRun(preset) ==", bold=True)

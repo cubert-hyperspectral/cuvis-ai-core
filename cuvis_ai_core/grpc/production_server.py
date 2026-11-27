@@ -19,7 +19,15 @@ from dotenv import load_dotenv
 from grpc_health.v1 import health_pb2_grpc
 
 from cuvis_ai_core.grpc import cuvis_ai_pb2_grpc
-from cuvis_ai_core.grpc.health import HealthService
+from cuvis_ai_core.utils.grpc_auth import (
+    MAX_MSG_SIZE_ENV,
+    TOKEN_ENV,
+    TokenInterceptor,
+    max_message_size,
+    normalize_token,
+    pop_token,
+)
+from cuvis_ai_core.grpc.health import HealthService, start_health_listener
 from cuvis_ai_core.grpc.service import CuvisAIService
 from cuvis_ai_core.orchestrator.composer import evict_run_cache, resolve_cache_root
 from cuvis_ai_core.orchestrator.leases import reap_orphans, take_process_snapshot
@@ -33,11 +41,12 @@ _MAINTENANCE_INTERVAL_SECONDS = 3600.0
 # operators who want eviction to run only via the explicit CLI).
 _MAINTENANCE_ENV = "CUVIS_RUN_CACHE_MAINTENANCE"
 
-# The server authenticates nobody, so it listens on loopback unless the operator
-# says otherwise in so many words.
+# Any caller that reaches the port can load plugins and weights, so the server listens on
+# loopback unless the operator says otherwise in so many words.
 DEFAULT_BIND_HOST = "localhost"
 _BIND_HOST_ENV = "GRPC_BIND_HOST"
 _INSECURE_REMOTE_ENV = "GRPC_ALLOW_INSECURE_REMOTE"
+_HEALTH_PORT_ENV = "GRPC_HEALTH_PORT"
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -133,8 +142,11 @@ class ProductionServer:
         tls_key_path: str | None = None,
         host: str = DEFAULT_BIND_HOST,
         allow_insecure_remote: bool = False,
+        token: str | None = None,
+        health_port: int | None = None,
     ) -> None:
         self.port = port
+        self.health_port = health_port
         self.max_workers = max_workers
         self.max_msg_size = max_msg_size
         self.use_tls = use_tls
@@ -142,8 +154,10 @@ class ProductionServer:
         self.tls_key_path = tls_key_path
         self.host = host
         self.allow_insecure_remote = allow_insecure_remote
+        self.token = normalize_token(token)
 
         self.server: grpc.Server | None = None
+        self.health_server: grpc.Server | None = None
         self.health_service: HealthService | None = None
         # Kept so shutdown() can reach the SessionManager and reap any child
         # runtimes the orchestrator spawned for live sessions.
@@ -176,15 +190,33 @@ class ProductionServer:
 
         self.logger.info("Starting gRPC server")
         self._check_bind_host()
+        if self.health_port and self.health_port == self.port:
+            raise ValueError(
+                f"{_HEALTH_PORT_ENV} has to differ from GRPC_PORT; both are {self.port}"
+            )
 
         grpc_srv_opts = []
         if self.max_msg_size is not None:
             grpc_srv_opts.append(("grpc.max_send_message_length", self.max_msg_size))
             grpc_srv_opts.append(("grpc.max_receive_message_length", self.max_msg_size))
+            # Child runtimes size their limit from this variable; they have to take
+            # whatever this server accepts.
+            os.environ[MAX_MSG_SIZE_ENV] = str(self.max_msg_size)
+        else:
+            # No cap of its own: the children take the default, not a cap an earlier
+            # server of this process wrote.
+            os.environ.pop(MAX_MSG_SIZE_ENV, None)
 
+        interceptors = [TokenInterceptor(self.token)] if self.token else []
+        if not self.token:
+            self.logger.info(
+                "No %s set: every process on this machine may call the server",
+                TOKEN_ENV,
+            )
         self.server = grpc.server(
             futures.ThreadPoolExecutor(max_workers=self.max_workers),
             options=grpc_srv_opts,
+            interceptors=interceptors,
         )
 
         self.cuvis_service = CuvisAIService()
@@ -216,6 +248,10 @@ class ProductionServer:
                 "Server listening on %s (port %s, insecure)", address, bound_port
             )
 
+        if self.health_port is not None:
+            self.health_server = self._start_health_listener(
+                self.server, self.health_service, self.health_port
+            )
         self.server.start()
         self.health_service.set_serving()
 
@@ -223,28 +259,65 @@ class ProductionServer:
         self._setup_signal_handlers()
         self._start_maintenance_thread()
 
-    def _check_bind_host(self) -> None:
-        """Refuse a non-loopback bind unless the operator opted in explicitly.
+    def _start_health_listener(
+        self, main: grpc.Server, health: HealthService, port: int
+    ) -> grpc.Server:
+        """Start the health port for probes without a token; on failure release ``main``.
 
-        Any caller that reaches the port can load plugins and weights, which runs
-        code under this account, and the server checks no identity yet. So a host
-        other than loopback needs ``GRPC_ALLOW_INSECURE_REMOTE=1``.
+        It answers NOT_SERVING until the main port runs, binds the main port's host and needs
+        neither token nor TLS: it answers nothing but the status (see ``start_health_listener``).
+        """
+        address = _bind_address(self.host, port)
+        health.set_not_serving()
+        try:
+            listener, bound_port = start_health_listener(health, address)
+        except Exception as exc:
+            main.stop(grace=None)
+            self.server = None
+            raise RuntimeError(
+                f"Failed to start the health port at {address} ({_HEALTH_PORT_ENV})"
+            ) from exc
+        self.logger.info(
+            "Health port listening on %s (port %s, Check only, no token, plaintext)",
+            address,
+            bound_port,
+        )
+        return listener
+
+    def _check_bind_host(self) -> None:
+        """Refuse a network address unless it has a token and TLS, or the operator opted out.
+
+        Any caller that reaches the port can load plugins and weights, which runs code under
+        this account. Off loopback the token keeps strangers out and TLS keeps the token from
+        being read off the wire; ``GRPC_ALLOW_INSECURE_REMOTE=1`` starts without them anyway.
         """
         if _is_loopback_host(self.host):
             return
-        if not self.allow_insecure_remote:
-            raise RuntimeError(
-                f"Refusing to bind {self.host}: the server checks no identity, so it "
-                f"listens on loopback only. Set {_INSECURE_REMOTE_ENV}=1 to expose it "
-                "on the network anyway."
+        if self.allow_insecure_remote:
+            self.logger.warning(
+                "Binding %s with %s=1: a machine that reaches port %s can run code "
+                "through this server %s, and TLS is %s",
+                self.host,
+                _INSECURE_REMOTE_ENV,
+                self.port,
+                "if it holds the token" if self.token else "without any token",
+                "on" if self.use_tls else "off",
             )
-        self.logger.warning(
-            "Binding %s with %s=1: any machine that reaches port %s can run code "
-            "through this server",
-            self.host,
-            _INSECURE_REMOTE_ENV,
-            self.port,
-        )
+            return
+        missing = []
+        if not self.token:
+            missing.append(f"a token in {TOKEN_ENV}")
+        if not self.use_tls:
+            missing.append(
+                "TLS (GRPC_USE_TLS=true with GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH)"
+            )
+        if missing:
+            raise RuntimeError(
+                f"Refusing to bind {self.host}: a network address needs "
+                f"{' and '.join(missing)}. Set {_INSECURE_REMOTE_ENV}=1 to expose the "
+                "server without them anyway."
+            )
+        self.logger.info("Binding %s with a token and TLS", self.host)
 
     def _start_maintenance_thread(self) -> None:
         """Kick off the background cache-maintenance loop (post-bind).
@@ -325,6 +398,10 @@ class ProductionServer:
         self.logger.info("Waiting for in-flight requests to complete")
         stop_future = self.server.stop(grace=5)
         stop_future.wait(timeout=10)
+        # After the main port, so probes read NOT_SERVING while it drains.
+        if self.health_server is not None:
+            self.health_server.stop(grace=None)
+            self.health_server = None
 
         self.server = None
         self.logger.info("Server shutdown complete")
@@ -350,17 +427,29 @@ class ProductionServer:
 
 
 def server_from_env() -> ProductionServer:
-    """Build the server from the ``GRPC_*`` environment variables."""
+    """Build the server from the ``GRPC_*`` variables and ``CUVIS_GRPC_TOKEN``.
+
+    The token variable is removed from the environment once read, so the processes the
+    server starts later do not inherit it.
+    """
     return ProductionServer(
         port=int(os.getenv("GRPC_PORT", "50051")),
         max_workers=int(os.getenv("GRPC_MAX_WORKERS", "10")),
-        max_msg_size=int(os.getenv("GRPC_MAX_MSG_SIZE", 300 * 1024 * 1024)),  # 300 MB
+        max_msg_size=max_message_size(),
         use_tls=os.getenv("GRPC_USE_TLS", "false").lower() == "true",
         tls_cert_path=os.getenv("GRPC_TLS_CERT_PATH"),
         tls_key_path=os.getenv("GRPC_TLS_KEY_PATH"),
         host=os.getenv(_BIND_HOST_ENV, DEFAULT_BIND_HOST),
         allow_insecure_remote=os.getenv(_INSECURE_REMOTE_ENV, "").strip() == "1",
+        token=pop_token(TOKEN_ENV),
+        health_port=_optional_port(_HEALTH_PORT_ENV),
     )
+
+
+def _optional_port(name: str) -> int | None:
+    """The port in environment variable ``name``; ``None`` when it is unset or empty."""
+    value = os.getenv(name, "").strip()
+    return int(value) if value else None
 
 
 def serve() -> None:  # pragma: no cover

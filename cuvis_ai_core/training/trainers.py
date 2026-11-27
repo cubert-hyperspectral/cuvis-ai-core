@@ -336,8 +336,13 @@ class GradientTrainer(pl.LightningModule):
         self._ensure_trainer()
 
         self.datamodule.setup(stage="val")
+        # weights_only explicitly: Lightning otherwise leaves it to torch's default,
+        # which TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD can turn off.
         return self.trainer.validate(
-            model=self, datamodule=self.datamodule, ckpt_path=ckpt_path
+            model=self,
+            datamodule=self.datamodule,
+            ckpt_path=ckpt_path,
+            weights_only=True,
         )
 
     def test(self, ckpt_path: str | None = "best") -> Sequence[Mapping[str, float]]:
@@ -378,7 +383,10 @@ class GradientTrainer(pl.LightningModule):
 
         self.datamodule.setup(stage="test")
         return self.trainer.test(
-            model=self, datamodule=self.datamodule, ckpt_path=ckpt_path
+            model=self,
+            datamodule=self.datamodule,
+            ckpt_path=ckpt_path,
+            weights_only=True,
         )
 
     def _collect_losses(

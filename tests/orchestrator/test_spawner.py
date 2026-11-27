@@ -138,6 +138,64 @@ def test_spawn_boots_child_and_health_checks_ok(fake_venv: Path, declared_paths)
     assert handle.process.poll() is not None
 
 
+def test_spawned_child_answers_only_its_parent(fake_venv: Path, declared_paths):
+    """The child checks a per-spawn token; another local process without it is refused."""
+    handle = LocalChildRuntimeSpawner().spawn(
+        fake_venv,
+        cwd=declared_paths.output_dir,
+        declared_paths=declared_paths,
+    )
+    stranger = ChildHandle(endpoint=handle.endpoint, process=handle.process)
+    try:
+        assert handle.token
+        with pytest.raises(grpc.RpcError) as refused:
+            stranger.stub().HealthCheck(cuvis_ai_pb2.HealthCheckRequest(), timeout=5.0)
+        assert refused.value.code() == grpc.StatusCode.UNAUTHENTICATED
+
+        response = handle.stub().HealthCheck(
+            cuvis_ai_pb2.HealthCheckRequest(), timeout=5.0
+        )
+        assert (
+            response.status == cuvis_ai_pb2.HealthCheckResponse.SERVING_STATUS_SERVING
+        )
+    finally:
+        stranger._close_channel()
+        handle.terminate(grace_s=2.0)
+
+
+def test_child_env_carries_its_own_token_and_never_the_servers(
+    fake_venv: Path, declared_paths, monkeypatch
+):
+    monkeypatch.setenv("CUVIS_GRPC_TOKEN", "server-token")
+    monkeypatch.setenv("CUVIS_RUNTIME_TOKEN", "stale-token-from-somewhere")
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=fake_venv,
+        declared_paths=declared_paths,
+        request_gpu=False,
+        runtime_token="child-token",
+    )
+
+    assert "CUVIS_GRPC_TOKEN" not in env
+    assert env["CUVIS_RUNTIME_TOKEN"] == "child-token"
+
+
+def test_child_env_keeps_the_allowed_roots(
+    fake_venv: Path, declared_paths, monkeypatch
+):
+    # The child checks the trainrun files it reads against the same roots as the server.
+    monkeypatch.setenv("CUVIS_ALLOWED_ROOTS", "/data/runs")
+
+    env = LocalChildRuntimeSpawner()._build_child_env(
+        venv_path=fake_venv,
+        declared_paths=declared_paths,
+        request_gpu=False,
+        runtime_token="child-token",
+    )
+
+    assert env["CUVIS_ALLOWED_ROOTS"] == "/data/runs"
+
+
 def test_spawn_curates_env_no_secret_passthrough(
     fake_venv: Path, declared_paths, monkeypatch
 ):

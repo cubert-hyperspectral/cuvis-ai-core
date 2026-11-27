@@ -4,7 +4,8 @@ Launched by :class:`LocalChildRuntimeSpawner` inside a per-pipeline
 composed venv. Binds an ephemeral loopback port, writes the chosen
 endpoint to a file the parent reads, and blocks on
 ``server.wait_for_termination`` until ``StopRun`` sets the shutdown
-event.
+event. Every call has to carry the token the parent put in
+``CUVIS_RUNTIME_TOKEN``; a child started by hand without one checks nothing.
 """
 
 from __future__ import annotations
@@ -22,22 +23,49 @@ from cuvis_ai_schemas.grpc.v1 import cuvis_ai_pb2_grpc
 from loguru import logger
 
 from cuvis_ai_core.run_runtime.service import RunRuntimeServicer
+from cuvis_ai_core.utils.grpc_auth import (
+    RUNTIME_TOKEN_ENV,
+    TokenInterceptor,
+    max_message_size,
+    pop_token,
+)
 
 _DEFAULT_BIND = "127.0.0.1:0"
 _DEFAULT_MAX_WORKERS = 8
+# The parent forwards a client's request, at most max_message_size() bytes, with a resolved
+# path in place of the one the client sent; this margin covers that growth.
+FORWARD_MARGIN = 1024 * 1024
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    # Lightning's DDP launcher starts this module again for each extra GPU, with LOCAL_RANK
+    # set and without the token the first runtime removed: such a copy must not serve.
+    rank = os.environ.get("LOCAL_RANK")
+    if rank not in (None, "0"):
+        logger.error(
+            f"LOCAL_RANK={rank}: started again by a multi-GPU training, which a runtime "
+            "does not support; not serving"
+        )
+        return 1
+    # Read before any plugin code is imported, and removed so that code cannot read it.
+    token = pop_token(RUNTIME_TOKEN_ENV)
+    if token is None:
+        logger.warning(
+            f"No {RUNTIME_TOKEN_ENV} set: every process on this machine may call this runtime"
+        )
     shutdown_event = threading.Event()
     servicer = RunRuntimeServicer(shutdown_event=shutdown_event)
 
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=args.max_workers),
         options=[
+            # Inference answers (full frames and score maps) can be large.
             ("grpc.max_send_message_length", -1),
-            ("grpc.max_receive_message_length", -1),
+            # No more than the parent accepts, so a local caller cannot make it allocate more.
+            ("grpc.max_receive_message_length", _receive_limit()),
         ],
+        interceptors=[TokenInterceptor(token)] if token else [],
     )
     cuvis_ai_pb2_grpc.add_RunRuntimeServicer_to_server(servicer, server)
     chosen_port = server.add_insecure_port(args.bind)
@@ -61,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Stopping RunRuntime server (grace 5s)")
         server.stop(grace=5.0).wait()
     return 0
+
+
+def _receive_limit() -> int:
+    """The parent's cap plus :data:`FORWARD_MARGIN`; ``-1`` (no limit) when the parent has none."""
+    limit = max_message_size()
+    return -1 if limit < 0 else limit + FORWARD_MARGIN
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

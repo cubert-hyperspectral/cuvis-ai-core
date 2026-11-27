@@ -1,5 +1,6 @@
 """Utilities for restoring and running pipelines and trainruns."""
 
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Literal
@@ -62,7 +63,11 @@ def discover_plugins_dirs(
     return candidates
 
 
-def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
+def _resolve_pipeline_reference(
+    reference: str,
+    base_dir: Path | None,
+    admit: Callable[[Path], bool] | None = None,
+) -> Path:
     """Resolve a trainrun's ``pipeline:`` reference to a pipeline YAML on disk.
 
     Resolution order (first hit wins), trying both the literal reference and a
@@ -73,6 +78,9 @@ def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
     3. relative to ``base_dir``'s parent (the ``configs/`` root, since a
        trainrun typically lives in ``configs/trainrun/``),
     4. relative to the current working directory.
+
+    ``admit`` screens each candidate before anything looks at it on disk; a refused one
+    counts as absent.
     """
     roots: list[Path] = []
     if base_dir is not None:
@@ -94,6 +102,8 @@ def _resolve_pipeline_reference(reference: str, base_dir: Path | None) -> Path:
             candidates.extend(root / ref for root in roots)
 
     for candidate in candidates:
+        if admit is not None and not admit(candidate):
+            continue
         if candidate.is_file():
             return candidate.resolve()
 

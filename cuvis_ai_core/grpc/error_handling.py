@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from cuvis_ai_core.training.evaluation import is_cuda_out_of_memory
+from cuvis_ai_core.utils.path_confinement import PathNotAllowedError
 from cuvis_ai_schemas.pipeline.exceptions import PortCompatibilityError
 
 if TYPE_CHECKING:
@@ -83,6 +84,8 @@ def require_pipeline(
 # Ordered from most specific to least specific.  The first matching
 # exception type wins, so ``Exception`` must come last.
 _EXCEPTION_STATUS_MAP: list[tuple[type[Exception], grpc.StatusCode]] = [
+    # A client path outside CUVIS_ALLOWED_ROOTS, or a network or device path while they are set.
+    (PathNotAllowedError, grpc.StatusCode.PERMISSION_DENIED),
     (FileNotFoundError, grpc.StatusCode.NOT_FOUND),
     # A checkpoint that is unreadable or carries anything but tensors and plain
     # containers is the caller's input to fix, not a server fault.
@@ -102,6 +105,7 @@ def grpc_handler(error_prefix: str = "") -> Callable:
     * a GPU out-of-memory error, also behind an error raised from it or while
       handling it (one of the types below included),
       → ``RESOURCE_EXHAUSTED`` (with *error_prefix*)
+    * ``PathNotAllowedError``      → ``PERMISSION_DENIED`` (outside ``CUVIS_ALLOWED_ROOTS``)
     * ``FileNotFoundError``        → ``NOT_FOUND``
     * ``pickle.UnpicklingError``   → ``INVALID_ARGUMENT`` (a refused checkpoint)
     * ``json.JSONDecodeError``     → ``INVALID_ARGUMENT``
